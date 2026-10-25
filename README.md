@@ -80,20 +80,21 @@ Then open a project, press **Add** on the canvas and deploy your first service. 
 
 ## How it works
 
-```
-                 Internet (IPv6 / IPv4)
-                          │
-               ┌──────────▼──────────┐            ┌───────────────────────┐
-               │ keel-proxy (Caddy)  │            │ node 2                │
-               │ TLS, routing, edge  │            │ aven-agent            │
-               └──────────┬──────────┘            │ keel-proxy · services │
-   dashboard / API        │                       └───────────▲───────────┘
- ┌────────────────────────▼────────────┐   mesh (mTLS over    │
- │ aven-server                         │   Tailscale/WireGuard)│
- │ API · scheduler · builds · SQLite ◄─┼──────────────────────┘
- └────────────────────────┬────────────┘
-                          │ Docker
-               your services, databases, volumes
+```mermaid
+flowchart TB
+  users((Internet<br/>IPv6 / IPv4)) --> proxy1
+  subgraph main["First server"]
+    proxy1["keel-proxy (Caddy)<br/>TLS · routing · edge"] --> apps1["your services<br/>databases · volumes"]
+    server["aven-server<br/>API · dashboard · scheduler<br/>builds · SQLite"] -- Docker API --> apps1
+    server -.->|configures| proxy1
+  end
+  subgraph node2["More servers"]
+    agent["aven-agent"] -->|Docker API| apps2["services"]
+    proxy2["keel-proxy"] --> apps2
+  end
+  users --> proxy2
+  agent <-->|"mTLS over Tailscale / WireGuard"| server
+  apps1 <-.->|"private network (mesh)"| apps2
 ```
 
 - `aven-server` is a single Go binary with the dashboard embedded. It keeps its state in SQLite (`/var/lib/keel`), builds images with Docker and Railpack, and runs containers through the Docker API.

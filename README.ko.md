@@ -80,20 +80,21 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
 
 ## 구조
 
-```
-                 인터넷 (IPv6 / IPv4)
-                          │
-               ┌──────────▼──────────┐            ┌───────────────────────┐
-               │ keel-proxy (Caddy)  │            │ 노드 2                │
-               │ TLS, 라우팅, 엣지   │            │ aven-agent            │
-               └──────────┬──────────┘            │ keel-proxy · 서비스   │
-   대시보드 / API         │                       └───────────▲───────────┘
- ┌────────────────────────▼────────────┐   mesh (Tailscale/   │
- │ aven-server                         │   WireGuard 위 mTLS) │
- │ API · 스케줄러 · 빌드 · SQLite ◄────┼──────────────────────┘
- └────────────────────────┬────────────┘
-                          │ Docker
-               서비스, 데이터베이스, 볼륨
+```mermaid
+flowchart TB
+  users((인터넷<br/>IPv6 / IPv4)) --> proxy1
+  subgraph main["첫 서버"]
+    proxy1["keel-proxy (Caddy)<br/>TLS · 라우팅 · 엣지"] --> apps1["서비스<br/>데이터베이스 · 볼륨"]
+    server["aven-server<br/>API · 대시보드 · 스케줄러<br/>빌드 · SQLite"] -- Docker API --> apps1
+    server -.->|설정| proxy1
+  end
+  subgraph node2["추가 서버"]
+    agent["aven-agent"] -->|Docker API| apps2["서비스"]
+    proxy2["keel-proxy"] --> apps2
+  end
+  users --> proxy2
+  agent <-->|"Tailscale / WireGuard 위 mTLS"| server
+  apps1 <-.->|"사설망(mesh)"| apps2
 ```
 
 - `aven-server`는 대시보드가 들어 있는 Go 바이너리 하나입니다. 상태는 SQLite(`/var/lib/keel`)에 두고, Docker와 Railpack으로 이미지를 빌드하고, Docker API로 컨테이너를 돌립니다.
