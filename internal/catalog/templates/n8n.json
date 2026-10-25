@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "key": "n8n",
+  "name": "n8n",
+  "description": "Workflow automation (SQLite on a volume)",
+  "icon": "n8n",
+  "category": "automation",
+  "tags": ["workflow", "automation", "no-code"],
+  "readme": "# n8n\n\nWorkflow automation with its SQLite database on a volume. `N8N_ENCRYPTION_KEY` is generated at deploy time; keep it if you move the data.",
+  "services": [
+    {
+      "name": "n8n",
+      "icon": "n8n",
+      "source": { "image": "n8nio/n8n:1.112.0" },
+      "port": 5678,
+      "healthcheck_path": "/healthz",
+      "volumes": [{ "mount_path": "/home/node/.n8n" }],
+      "domains": [{ "generate": true }],
+      "variables": {
+        "N8N_PORT": "5678",
+        "N8N_HOST": "${{KEEL_PUBLIC_DOMAIN}}",
+        "N8N_PROTOCOL": "https",
+        "WEBHOOK_URL": "https://${{KEEL_PUBLIC_DOMAIN}}/",
+        "N8N_ENCRYPTION_KEY": "${{ secret(32) }}",
+        "GENERIC_TIMEZONE": "UTC"
+      }
+    }
+  ]
+}

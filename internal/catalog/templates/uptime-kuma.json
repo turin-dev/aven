@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "key": "uptime-kuma",
+  "name": "Uptime Kuma",
+  "description": "Self-hosted uptime monitoring",
+  "icon": "uptime-kuma",
+  "category": "monitoring",
+  "tags": ["monitoring", "uptime", "status-page"],
+  "readme": "# Uptime Kuma\n\nSelf-hosted uptime monitoring with its data on a volume. Create the admin account on first visit.",
+  "services": [
+    {
+      "name": "uptime-kuma",
+      "icon": "uptime-kuma",
+      "source": { "image": "louislam/uptime-kuma:1.23.16" },
+      "port": 3001,
+      "healthcheck_timeout_s": 300,
+      "volumes": [{ "mount_path": "/app/data" }],
+      "domains": [{ "generate": true }],
+      "variables": { "UPTIME_KUMA_PORT": "3001" }
+    }
+  ]
+}

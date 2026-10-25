@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "key": "mysql",
+  "name": "MySQL",
+  "description": "MySQL 8.4 with a persistent volume",
+  "icon": "mysql",
+  "category": "databases",
+  "tags": ["database", "sql"],
+  "readme": "# MySQL\n\nMySQL 8.4 with a persistent data volume. A random root password is generated for every environment.\n\nConnect other services with `${{mysql.MYSQL_URL}}`.",
+  "services": [
+    { "name": "mysql", "icon": "mysql", "source": { "database": "mysql" } }
+  ]
+}

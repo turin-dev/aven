@@ -1,0 +1,25 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - /srv/downloads:/usr/share/nginx/html:ro
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.compose-stack-web.rule=Host(`dl.example.com`)
+      - traefik.http.routers.compose-stack-web.entrypoints=web
+      - traefik.http.services.compose-stack-web.loadbalancer.server.port=80
+      - traefik.http.routers.compose-stack-web.service=compose-stack-web
+      - traefik.http.routers.compose-stack-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.compose-stack-websecure.rule=Host(`dl.example.com`)
+      - traefik.http.routers.compose-stack-websecure.entrypoints=websecure
+      - traefik.http.services.compose-stack-websecure.loadbalancer.server.port=80
+      - traefik.http.routers.compose-stack-websecure.service=compose-stack-websecure
+      - traefik.http.routers.compose-stack-websecure.tls.certresolver=letsencrypt
+      - traefik.enable=true
+    networks:
+      - dokploy-network
+      - default
+networks:
+  dokploy-network:
+    external: true

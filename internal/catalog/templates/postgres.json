@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "key": "postgres",
+  "name": "PostgreSQL",
+  "description": "PostgreSQL 17 with a persistent volume",
+  "icon": "postgres",
+  "category": "databases",
+  "tags": ["database", "sql"],
+  "readme": "# PostgreSQL\n\nPostgreSQL 17 (alpine) with a persistent data volume. A random password is generated for every environment.\n\nConnect other services with `${{postgres.DATABASE_URL}}`.",
+  "services": [
+    { "name": "postgres", "icon": "postgres", "source": { "database": "postgres" }, "haTemplateCode": "postgres-ha" }
+  ]
+}

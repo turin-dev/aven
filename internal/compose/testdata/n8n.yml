@@ -1,0 +1,30 @@
+version: "3.8"
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.104.0
+    restart: always
+    environment:
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=${N8N_PORT}
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=https://${N8N_HOST}/
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - N8N_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.private-stack-web.rule=Host(`private-n8n-22d337-203-0-113-10.sslip.io`)
+      - traefik.http.routers.private-stack-web.entrypoints=web
+      - traefik.http.services.private-stack-web.loadbalancer.server.port=5678
+      - traefik.http.routers.private-stack-web.service=private-stack-web
+      - traefik.enable=true
+    networks:
+      - dokploy-network
+      - default
+volumes:
+  n8n_data: null
+networks:
+  dokploy-network:
+    external: true

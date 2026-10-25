@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "key": "mongo-ha",
+  "name": "MongoDB High Availability",
+  "description": "MongoDB replica set with automatic elections",
+  "icon": "mongo",
+  "category": "databases",
+  "tags": [
+    "database",
+    "nosql",
+    "high-availability"
+  ],
+  "readme": "# MongoDB High Availability\n\nCompanion template used to convert an existing MongoDB service (`haTemplateCode` of the `mongo` template). It is not deployed on its own.\n\n- **root**: the existing service is restarted with `--replSet` and initiates the replica set. Its data is kept.\n- **replica**: secondaries that initial-sync from the primary. MongoDB elects a new primary on its own when the primary fails.\n\nThere is no proxy tier: MongoDB drivers discover the primary themselves. After conversion the root's `MONGO_URL` lists every member with `replicaSet=rs0`, so `${{<root>.MONGO_URL}}` keeps working.",
+  "primary": "mongo",
+  "services": [
+    {
+      "name": "mongo",
+      "icon": "mongo",
+      "source": {
+        "database": "mongo"
+      },
+      "clusterRole": "root",
+      "revertsToTemplateCode": "mongo",
+      "haConversionConfig": {
+        "description": "MongoDB replica set. 구성원 과반수가 투표로 새 주 노드를 뽑습니다(노드 전체 수는 홀수).",
+        "replica": {
+          "label": "Secondary",
+          "nodeLabel": "MongoDB",
+          "description": "주 노드에서 복제하는 secondary입니다. 짝수로 골라 투표 수를 홀수로 유지합니다.",
+          "options": [
+            2,
+            4,
+            6
+          ],
+          "defaultValue": 2
+        },
+        "supportedImageMajorVersions": [
+          6,
+          7,
+          8
+        ],
+        "supportedImages": [
+          "mongo",
+          "library/mongo",
+          "docker.io/library/mongo"
+        ]
+      },
+      "clusterWiring": {
+        "peerHostsVariable": "KEEL_HA_PEERS",
+        "peerHostFormat": "{host}:27017",
+        "replicaNodeNameVariable": "KEEL_HA_NODE_NAME"
+      },
+      "variables": {
+        "KEEL_HA_KEYFILE": "${{ secret(64) }}",
+        "KEEL_HA_REPLSET": "rs0"
+      },
+      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$KEEL_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${KEEL_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
+      "private_ports": [
+        27017
+      ]
+    },
+    {
+      "name": "mongo-replica",
+      "icon": "mongo",
+      "source": {
+        "database": "mongo"
+      },
+      "clusterRole": "replica",
+      "variables": {
+        "KEEL_HA_KEYFILE": "${{mongo.KEEL_HA_KEYFILE}}",
+        "KEEL_HA_REPLSET": "${{mongo.KEEL_HA_REPLSET}}",
+        "MONGOUSER": "${{mongo.MONGOUSER}}",
+        "MONGOPASSWORD": "${{mongo.MONGOPASSWORD}}",
+        "MONGOHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "MONGOPORT": "27017",
+        "MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{MONGOHOST}}:${{MONGOPORT}}/?directConnection=true&authSource=admin"
+      },
+      "volumes": [
+        {
+          "mount_path": "/data/db"
+        }
+      ],
+      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$KEEL_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${KEEL_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
+      "port": 27017,
+      "healthcheck_type": "tcp",
+      "healthcheck_timeout_s": 3600,
+      "restart_policy": "always",
+      "private_ports": [
+        27017
+      ]
+    }
+  ]
+}

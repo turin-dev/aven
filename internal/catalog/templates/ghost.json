@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "key": "ghost",
+  "name": "Ghost",
+  "description": "Ghost publishing platform with MySQL",
+  "icon": "ghost",
+  "category": "cms",
+  "tags": ["blog", "cms", "newsletter"],
+  "readme": "# Ghost\n\nGhost publishing platform with MySQL and its content on a volume. Open `/ghost` on the generated domain to create the owner account.",
+  "primary": "ghost",
+  "services": [
+    { "name": "mysql", "icon": "mysql", "source": { "database": "mysql" } },
+    {
+      "name": "ghost",
+      "icon": "ghost",
+      "source": { "image": "ghost:5.130-alpine" },
+      "port": 2368,
+      "healthcheck_timeout_s": 300,
+      "volumes": [{ "mount_path": "/var/lib/ghost/content" }],
+      "domains": [{ "generate": true }],
+      "variables": {
+        "url": "https://${{KEEL_PUBLIC_DOMAIN}}",
+        "database__client": "mysql",
+        "database__connection__host": "${{mysql.MYSQLHOST}}",
+        "database__connection__port": "${{mysql.MYSQLPORT}}",
+        "database__connection__user": "${{mysql.MYSQLUSER}}",
+        "database__connection__password": "${{mysql.MYSQLPASSWORD}}",
+        "database__connection__database": "${{mysql.MYSQLDATABASE}}"
+      }
+    }
+  ]
+}

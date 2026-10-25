@@ -1,0 +1,29 @@
+{
+  "name": "aven-flags",
+  "version": "0.1.0",
+  "description": "Aven feature flags SDK: cached, polled, synchronous flag reads with local rule evaluation",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/turin-dev/aven.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/turin-dev/aven/tree/main/sdk",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "index.ts"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

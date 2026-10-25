@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "key": "mongo",
+  "name": "MongoDB",
+  "description": "MongoDB 8.0 with a persistent volume",
+  "icon": "mongo",
+  "category": "databases",
+  "tags": ["database", "nosql", "document"],
+  "readme": "# MongoDB\n\nMongoDB 8.0 with a persistent data volume and a generated root password.\n\nConnect other services with `${{mongo.MONGO_URL}}`.",
+  "services": [
+    { "name": "mongo", "icon": "mongo", "source": { "database": "mongo" }, "haTemplateCode": "mongo-ha" }
+  ]
+}

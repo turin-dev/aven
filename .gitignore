@@ -1,0 +1,21 @@
+/bin/
+/.tools/
+/web/node_modules/
+/web/out/
+/web/.next/
+/web/tsconfig.tsbuildinfo
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+/aven-agent
+/keel-agent
+
+# Local credentials and runtime state
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+/data/
+/deploy/aven.env
+/deploy/keel.env

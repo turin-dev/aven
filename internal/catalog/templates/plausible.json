@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "key": "plausible",
+  "name": "Plausible",
+  "description": "Plausible Community Edition with PostgreSQL and ClickHouse",
+  "icon": "plausible",
+  "category": "analytics",
+  "tags": ["analytics", "privacy"],
+  "readme": "# Plausible CE\n\nPlausible Community Edition with PostgreSQL for app data and ClickHouse for events. Registration is invite-only after the first account.",
+  "primary": "plausible",
+  "services": [
+    { "name": "postgres", "icon": "postgres", "source": { "database": "postgres" } },
+    {
+      "name": "clickhouse",
+      "icon": "clickhouse",
+      "source": { "image": "clickhouse/clickhouse-server:24.12-alpine" },
+      "port": 8123,
+      "healthcheck_path": "/ping",
+      "healthcheck_timeout_s": 300,
+      "volumes": [{ "mount_path": "/var/lib/clickhouse" }],
+      "variables": { "CLICKHOUSE_SKIP_USER_SETUP": "1" }
+    },
+    {
+      "name": "plausible",
+      "icon": "plausible",
+      "source": { "image": "ghcr.io/plausible/community-edition:v2.1.5" },
+      "port": 8000,
+      "pre_deploy_command": "/entrypoint.sh db createdb && /entrypoint.sh db migrate",
+      "healthcheck_path": "/api/health",
+      "healthcheck_timeout_s": 300,
+      "volumes": [{ "mount_path": "/var/lib/plausible" }],
+      "domains": [{ "generate": true }],
+      "variables": {
+        "BASE_URL": "https://${{KEEL_PUBLIC_DOMAIN}}",
+        "SECRET_KEY_BASE": "${{ secret(64) }}",
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.KEEL_PRIVATE_DOMAIN}}:8123/plausible_events_db",
+        "HTTP_PORT": "8000",
+        "DISABLE_REGISTRATION": "invite_only"
+      }
+    }
+  ]
+}

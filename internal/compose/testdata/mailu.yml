@@ -1,0 +1,147 @@
+networks:
+  mailu_net:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 10.0.20.0/24
+  dokploy-network:
+    external: true
+volumes:
+  mail_certs: null
+  mail_overrides: null
+  mail_data_admin: null
+  mail_data_imap: null
+  mail_data_smtp: null
+  mail_data_antispam: null
+  mail_dkim: null
+  redis_data: null
+  mail_acme_state: null
+services:
+  resolver:
+    image: ghcr.io/mailu/unbound:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      mailu_net:
+        ipv4_address: 10.0.20.254
+  certs:
+    image: neilpang/acme.sh:latest
+    restart: unless-stopped
+    volumes:
+      - mail_certs:/certs
+      - mail_acme_state:/root/.acme.sh
+    env_file:
+      - .env
+    entrypoint: |
+      /bin/sh -c ' set -e; if [ ! -f /certs/cert.pem ]; then
+        acme.sh --issue --dns dns_cf -d "$$DOMAIN" -d "$$HOSTNAMES" --server letsencrypt;
+      fi; acme.sh --install-cert -d "$$DOMAIN" --key-file /certs/key.pem --fullchain-file /certs/cert.pem --reloadcmd "true"; crond -f -l 2 '
+    networks:
+      - mailu_net
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - mailu_net
+  front:
+    image: ghcr.io/mailu/nginx:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_certs:/certs
+      - mail_overrides:/overrides
+    depends_on:
+      - admin
+      - imap
+      - smtp
+      - certs
+    networks:
+      - mailu_net
+      - dokploy-network
+    ports:
+      - 25:25
+      - 465:465
+      - 587:587
+      - 110:110
+      - 995:995
+      - 143:143
+      - 993:993
+  admin:
+    image: ghcr.io/mailu/admin:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_data_admin:/data
+      - mail_dkim:/dkim
+    depends_on:
+      - redis
+    networks:
+      - mailu_net
+  imap:
+    image: ghcr.io/mailu/dovecot:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_data_imap:/mail
+      - mail_certs:/certs
+      - mail_overrides:/overrides
+    depends_on:
+      - admin
+    networks:
+      - mailu_net
+  smtp:
+    image: ghcr.io/mailu/postfix:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_data_smtp:/queue
+      - mail_certs:/certs
+      - mail_overrides:/overrides
+      - mail_dkim:/dkim
+    depends_on:
+      - admin
+    networks:
+      - mailu_net
+  antispam:
+    image: ghcr.io/mailu/rspamd:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_data_antispam:/data
+      - mail_overrides:/overrides
+    depends_on:
+      - admin
+    networks:
+      - mailu_net
+  webmail:
+    image: ghcr.io/mailu/roundcube:${MAILU_VERSION}
+    restart: unless-stopped
+    env_file:
+      - .env
+    dns:
+      - 10.0.20.254
+    volumes:
+      - mail_overrides:/overrides
+    depends_on:
+      - imap
+    networks:
+      - mailu_net

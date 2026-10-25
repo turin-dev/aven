@@ -1,0 +1,61 @@
+name: Release
+
+# Push a tag like v0.1.0 to publish aven_<tag>_linux_<arch>.tar.gz and checksums.txt,
+# the files install-server.sh downloads.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: go test ./...
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          make web
+          make agents clis VERSION="$VERSION"
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o bin/aven-server-linux-$arch ./cmd/aven-server
+          done
+      - name: Package
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            name=aven_${VERSION}_linux_${arch}
+            mkdir -p dist/$name/lib
+            cp bin/aven-server-linux-$arch dist/$name/aven-server
+            cp bin/aven-linux-$arch dist/$name/aven
+            cp bin/aven-agent-linux-amd64 bin/aven-agent-linux-arm64 dist/$name/lib/
+            cp bin/aven-linux-* bin/aven-darwin-* bin/aven-windows-*.exe dist/$name/lib/
+            find dist/$name/lib -type l -delete
+            cp deploy/aven-server.service deploy/aven.env.example LICENSE THIRD_PARTY_NOTICES.md README.md dist/$name/
+            tar -C dist -czf dist/$name.tar.gz $name
+          done
+          cp install-server.sh dist/
+          (cd dist && sha256sum *.tar.gz install-server.sh > checksums.txt)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          gh release create "$VERSION" --title "$VERSION" --generate-notes \
+            dist/*.tar.gz dist/install-server.sh dist/checksums.txt

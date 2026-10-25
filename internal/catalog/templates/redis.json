@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "key": "redis",
+  "name": "Redis",
+  "description": "Redis 7.4 with AOF persistence and a password",
+  "icon": "redis",
+  "category": "databases",
+  "tags": ["database", "cache", "key-value"],
+  "readme": "# Redis\n\nRedis 7.4 with append-only persistence on a volume and a generated password.\n\nConnect other services with `${{redis.REDIS_URL}}`.",
+  "services": [
+    { "name": "redis", "icon": "redis", "source": { "database": "redis" }, "haTemplateCode": "redis-ha" }
+  ]
+}

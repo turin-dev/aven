@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "key": "redis-ha",
+  "name": "Redis High Availability",
+  "description": "Redis replicas with Sentinel failover and HAProxy routing",
+  "icon": "redis",
+  "category": "databases",
+  "tags": [
+    "database",
+    "cache",
+    "high-availability"
+  ],
+  "readme": "# Redis High Availability\n\nCompanion template used to convert an existing Redis service (`haTemplateCode` of the `redis` template). It is not deployed on its own.\n\n- **root**: the existing service becomes the primary (its volume and AOF data are kept).\n- **replica**: Redis replicas. Every data node also runs a Sentinel, so the cluster always has an odd number of voters (3, 5, 7 or 9).\n- **edge**: HAProxy health-checks every node with `INFO replication` and routes to the one reporting `role:master`. Connect with `${{<root>-ha.REDIS_URL}}`.",
+  "primary": "redis",
+  "services": [
+    {
+      "name": "redis",
+      "icon": "redis",
+      "source": {
+        "database": "redis"
+      },
+      "clusterRole": "root",
+      "revertsToTemplateCode": "redis",
+      "haConversionConfig": {
+        "description": "모든 Redis 노드에서 Sentinel이 함께 돌며, 과반수가 주 노드 장애에 동의하면 replica 하나를 승격합니다. AOF 영속성은 항상 켜져 있습니다.",
+        "replica": {
+          "label": "Redis replica",
+          "nodeLabel": "Redis",
+          "description": "주 노드에 붙는 replica입니다. 짝수로 골라 Sentinel 투표 수(노드 전체)를 홀수로 유지합니다.",
+          "options": [
+            2,
+            4,
+            6,
+            8
+          ],
+          "defaultValue": 2
+        },
+        "edge": {
+          "label": "리버스 프록시",
+          "nodeLabel": "HAProxy",
+          "description": "현재 주 노드로 연결을 보내는 HAProxy replica입니다.",
+          "options": [
+            1,
+            2
+          ],
+          "defaultValue": 2
+        },
+        "supportedImageMajorVersions": [
+          7,
+          8
+        ],
+        "pinToMinorVersion": true,
+        "supportedImages": [
+          "redis",
+          "library/redis",
+          "docker.io/library/redis"
+        ]
+      },
+      "clusterWiring": {
+        "primaryHostVariable": "KEEL_HA_PRIMARY",
+        "primaryHostFormat": "{host}",
+        "peerHostsVariable": "KEEL_HA_PEERS",
+        "peerHostFormat": "{host}",
+        "quorumVariable": "KEEL_HA_QUORUM",
+        "replicaNodeNameVariable": "KEEL_HA_NODE_NAME",
+        "dataNodesVariable": "KEEL_HA_NODES",
+        "dataNodeFormat": "{host}:6379"
+      },
+      "start_command": "set -eu\nME=\"$KEEL_PRIVATE_DOMAIN\"\nPW=\"$REDIS_PASSWORD\"\nexport REDISCLI_AUTH=\"$PW\"\nMASTER=\"${KEEL_HA_PRIMARY:-$ME}\"\nCONF=/data/sentinel.conf\nif [ -f \"$CONF\" ]; then\n  m=$(sed -n 's/^sentinel monitor keel \\([^ ]*\\) .*/\\1/p' \"$CONF\" | head -n1)\n  [ -n \"$m\" ] && MASTER=\"$m\"\nfi\nfor p in $(printf '%s' \"${KEEL_HA_PEERS:-}\" | tr ',' ' '); do\n  [ \"$p\" = \"$ME\" ] && continue\n  m=$(timeout 3 redis-cli -h \"$p\" -p 26379 --raw SENTINEL get-master-addr-by-name keel 2>/dev/null | head -n1 || true)\n  if [ -n \"$m\" ]; then MASTER=\"$m\"; break; fi\ndone\necho \"keel-ha: current primary is $MASTER\"\ncat > \"$CONF\" <<SENTINEL\nport 26379\ndir /tmp\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel announce-ip $ME\nrequirepass $PW\nsentinel sentinel-pass $PW\nsentinel monitor keel $MASTER 6379 ${KEEL_HA_QUORUM:-2}\nsentinel auth-pass keel $PW\nsentinel down-after-milliseconds keel 5000\nsentinel failover-timeout keel 30000\nsentinel parallel-syncs keel 1\nSENTINEL\n( while true; do redis-sentinel \"$CONF\" || true; sleep 2; done ) &\nif [ \"$MASTER\" = \"$ME\" ]; then set --; else set -- --replicaof \"$MASTER\" 6379; fi\nexec docker-entrypoint.sh redis-server --requirepass \"$PW\" --masterauth \"$PW\" --appendonly yes --replica-announce-ip \"$ME\" \"$@\"",
+      "private_ports": [
+        6379,
+        26379
+      ]
+    },
+    {
+      "name": "redis-replica",
+      "icon": "redis",
+      "source": {
+        "database": "redis"
+      },
+      "clusterRole": "replica",
+      "variables": {
+        "REDIS_PASSWORD": "${{redis.REDIS_PASSWORD}}",
+        "REDISUSER": "${{redis.REDISUSER}}",
+        "REDISPASSWORD": "${{REDIS_PASSWORD}}",
+        "REDISHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "REDISPORT": "6379",
+        "REDIS_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{REDISHOST}}:${{REDISPORT}}"
+      },
+      "volumes": [
+        {
+          "mount_path": "/data"
+        }
+      ],
+      "start_command": "set -eu\nME=\"$KEEL_PRIVATE_DOMAIN\"\nPW=\"$REDIS_PASSWORD\"\nexport REDISCLI_AUTH=\"$PW\"\nMASTER=\"${KEEL_HA_PRIMARY:-$ME}\"\nCONF=/data/sentinel.conf\nif [ -f \"$CONF\" ]; then\n  m=$(sed -n 's/^sentinel monitor keel \\([^ ]*\\) .*/\\1/p' \"$CONF\" | head -n1)\n  [ -n \"$m\" ] && MASTER=\"$m\"\nfi\nfor p in $(printf '%s' \"${KEEL_HA_PEERS:-}\" | tr ',' ' '); do\n  [ \"$p\" = \"$ME\" ] && continue\n  m=$(timeout 3 redis-cli -h \"$p\" -p 26379 --raw SENTINEL get-master-addr-by-name keel 2>/dev/null | head -n1 || true)\n  if [ -n \"$m\" ]; then MASTER=\"$m\"; break; fi\ndone\necho \"keel-ha: current primary is $MASTER\"\ncat > \"$CONF\" <<SENTINEL\nport 26379\ndir /tmp\nsentinel resolve-hostnames yes\nsentinel announce-hostnames yes\nsentinel announce-ip $ME\nrequirepass $PW\nsentinel sentinel-pass $PW\nsentinel monitor keel $MASTER 6379 ${KEEL_HA_QUORUM:-2}\nsentinel auth-pass keel $PW\nsentinel down-after-milliseconds keel 5000\nsentinel failover-timeout keel 30000\nsentinel parallel-syncs keel 1\nSENTINEL\n( while true; do redis-sentinel \"$CONF\" || true; sleep 2; done ) &\nif [ \"$MASTER\" = \"$ME\" ]; then set --; else set -- --replicaof \"$MASTER\" 6379; fi\nexec docker-entrypoint.sh redis-server --requirepass \"$PW\" --masterauth \"$PW\" --appendonly yes --replica-announce-ip \"$ME\" \"$@\"",
+      "port": 6379,
+      "healthcheck_type": "tcp",
+      "healthcheck_timeout_s": 3600,
+      "restart_policy": "always",
+      "private_ports": [
+        6379,
+        26379
+      ]
+    },
+    {
+      "name": "redis-ha",
+      "icon": "redis",
+      "source": {
+        "image": "haproxy:3.0-alpine"
+      },
+      "clusterRole": "edge",
+      "variables": {
+        "REDISUSER": "${{redis.REDISUSER}}",
+        "REDISPASSWORD": "${{redis.REDISPASSWORD}}",
+        "REDISHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "REDISPORT": "6379",
+        "REDIS_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{REDISHOST}}:${{REDISPORT}}",
+        "REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}"
+      },
+      "start_command": "set -eu\nCFG=/tmp/haproxy.cfg\nPWE=$(printf '%s' \"$REDISPASSWORD\" | sed 's/ /\\\\ /g')\n{\n  printf 'global\\n  maxconn 10000\\n  log stdout format raw local0 notice\\n'\n  printf 'resolvers aven\\n  parse-resolv-conf\\n  hold valid 5s\\n  hold obsolete 5s\\n'\n  printf 'defaults\\n  mode tcp\\n  log global\\n  timeout connect 5s\\n  timeout client 1h\\n  timeout server 1h\\n'\n  printf '  default-server init-addr last,libc,none resolvers aven check inter 1s fall 2 rise 1 on-marked-down shutdown-sessions\\n'\n  printf 'frontend redis\\n  bind :6379\\n  default_backend primary\\n'\n  printf 'backend primary\\n  option tcp-check\\n  tcp-check connect\\n'\n  printf '  tcp-check send AUTH\\\\ %s\\\\r\\\\n\\n  tcp-check expect string +OK\\n' \"$PWE\"\n  printf '  tcp-check send info\\\\ replication\\\\r\\\\n\\n  tcp-check expect string role:master\\n'\n  printf '  tcp-check send QUIT\\\\r\\\\n\\n  tcp-check expect string +OK\\n'\n  i=0\n  for n in $(printf '%s' \"${KEEL_HA_NODES:-}\" | tr ',' ' '); do i=$((i+1)); printf '  server node%s %s\\n' \"$i\" \"$n\"; done\n} > \"$CFG\"\nexec haproxy -W -db -f \"$CFG\"",
+      "port": 6379,
+      "healthcheck_type": "tcp",
+      "restart_policy": "always",
+      "private_ports": [
+        6379
+      ]
+    }
+  ]
+}

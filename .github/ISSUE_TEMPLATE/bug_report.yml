@@ -1,0 +1,39 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report security vulnerabilities here; see SECURITY.md. Remove real credentials, private hostnames and user data from logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in Admin → Owner, in `aven-server` logs (`version=`) or on the aven-server service card.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How aven-server runs
+      options: [install-server.sh / systemd, aven-server container (Aven on Aven), built from source, other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant aven-server, agent or deployment log lines.
+      render: text

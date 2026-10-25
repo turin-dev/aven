@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/turin-dev/aven/security/advisories/new
+    about: Report vulnerabilities privately, not in public issues.
+  - name: Self-hosting guide
+    url: https://github.com/turin-dev/aven/blob/main/docs/self-hosting.md
+    about: Installation, configuration, upgrades and troubleshooting.

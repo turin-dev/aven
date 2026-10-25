@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "key": "minio",
+  "name": "MinIO",
+  "description": "S3-compatible object storage (community build pgsty/minio)",
+  "icon": "minio",
+  "category": "storage",
+  "tags": ["s3", "object-storage"],
+  "readme": "# MinIO\n\nS3-compatible object storage. The API listens on port 9000 (public domain) and the console on 9001 (private network).\n\nThe root password is generated at deploy time (`MINIO_ROOT_PASSWORD`).",
+  "services": [
+    {
+      "name": "minio",
+      "icon": "minio",
+      "source": { "image": "pgsty/minio:RELEASE.2026-08-04T00-00-00Z" },
+      "port": 9000,
+      "start_command": "minio server /data --console-address :9001",
+      "healthcheck_path": "/minio/health/live",
+      "volumes": [{ "mount_path": "/data" }],
+      "domains": [{ "generate": true }],
+      "variables": {
+        "MINIO_ROOT_USER": "keel",
+        "MINIO_ROOT_PASSWORD": "${{ secret(32) }}",
+        "S3_ENDPOINT": "http://${{KEEL_PRIVATE_DOMAIN}}:9000",
+        "S3_PUBLIC_ENDPOINT": "https://${{KEEL_PUBLIC_DOMAIN}}"
+      }
+    }
+  ]
+}

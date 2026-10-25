@@ -1,0 +1,17 @@
+{
+  "name": "aven-sandbox",
+  "version": "0.1.0",
+  "description": "Dependency-free TypeScript client for Aven sandboxes",
+  "license": "AGPL-3.0-only",
+  "repository": "https://github.com/turin-dev/aven/tree/main/sdk/sandbox",
+  "homepage": "https://github.com/turin-dev/aven/tree/main/sdk/sandbox",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "index.ts"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

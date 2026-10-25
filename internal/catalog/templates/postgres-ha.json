@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "key": "postgres-ha",
+  "name": "PostgreSQL High Availability",
+  "description": "PostgreSQL streaming replication with automatic failover and HAProxy routing",
+  "icon": "postgres",
+  "category": "databases",
+  "tags": [
+    "database",
+    "sql",
+    "high-availability"
+  ],
+  "readme": "# PostgreSQL High Availability\n\nCompanion template used to convert an existing PostgreSQL service (`haTemplateCode` of the `postgres` template). It is not deployed on its own.\n\n- **root**: the existing service becomes the primary. Its data, volume and service ID are kept.\n- **replica**: streaming replicas cloned with `pg_basebackup`, spread across Aven nodes.\n- **edge**: HAProxy, the stable private endpoint. Connect with `${{<root>-ha.DATABASE_URL}}`.\n\nThe Aven control plane plays the coordinator role (instead of etcd/Patroni): it watches every node, promotes the most up-to-date replica when the primary is unreachable for 30 seconds and repoints HAProxy and the other replicas.",
+  "primary": "postgres",
+  "services": [
+    {
+      "name": "postgres",
+      "icon": "postgres",
+      "source": {
+        "database": "postgres"
+      },
+      "clusterRole": "root",
+      "revertsToTemplateCode": "postgres",
+      "haConversionConfig": {
+        "description": "PostgreSQL 스트리밍 복제와 자동 failover. Aven 제어부가 주 노드를 감시하고, 주 노드가 30초 동안 응답하지 않으면 가장 최신인 replica를 승격합니다.",
+        "replica": {
+          "label": "Postgres replica",
+          "nodeLabel": "Postgres",
+          "description": "주 노드에서 스트리밍 복제하는 대기 노드입니다. 주 노드가 멈추면 승격됩니다.",
+          "options": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "defaultValue": 2
+        },
+        "edge": {
+          "label": "리버스 프록시",
+          "nodeLabel": "HAProxy",
+          "description": "현재 주 노드로 연결을 보내는 HAProxy replica입니다.",
+          "options": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "defaultValue": 2
+        },
+        "supportedImageMajorVersions": [
+          14,
+          15,
+          16,
+          17,
+          18
+        ],
+        "supportedImages": [
+          "postgres",
+          "library/postgres",
+          "docker.io/library/postgres"
+        ]
+      },
+      "clusterWiring": {
+        "roleVariable": "KEEL_HA_ROLE",
+        "primaryHostVariable": "KEEL_HA_PRIMARY",
+        "primaryHostFormat": "{host}",
+        "rejoinVariable": "KEEL_HA_REJOIN",
+        "replicaNodeNameVariable": "KEEL_HA_NODE_NAME",
+        "dataNodesVariable": "KEEL_HA_NODES",
+        "dataNodeFormat": "{host}:5432",
+        "edgePrimaryOnly": true
+      },
+      "start_command": "set -eu\nexport PGDATA=\"${PGDATA:-/var/lib/postgresql/data/pgdata}\"\nROLE=\"${KEEL_HA_ROLE:-primary}\"\nPRIMARY=\"${KEEL_HA_PRIMARY:-}\"\nasuser() { if command -v su-exec >/dev/null 2>&1; then su-exec postgres \"$@\"; else gosu postgres \"$@\"; fi; }\nPASSFILE=/tmp/keel-ha.pgpass\nprintf '*:*:*:%s:%s\\n' \"$PGUSER\" \"$(printf '%s' \"$PGPASSWORD\" | sed 's/[\\\\:]/\\\\&/g')\" > \"$PASSFILE\"\nchown postgres \"$PASSFILE\"\nchmod 600 \"$PASSFILE\"\nexport PGPASSFILE=\"$PASSFILE\"\nif [ \"$ROLE\" = replica ]; then\n  [ -n \"$PRIMARY\" ] || { echo \"keel-ha: KEEL_HA_PRIMARY is empty\" >&2; exit 1; }\n  if [ -s \"$PGDATA/PG_VERSION\" ] && [ ! -f \"$PGDATA/standby.signal\" ]; then\n    if [ \"${KEEL_HA_REJOIN:-reclone}\" = standby ]; then\n      echo \"keel-ha: rejoining as a standby of $PRIMARY\"\n      asuser touch \"$PGDATA/standby.signal\"\n    else\n      OLD=\"$PGDATA.demoted-$(date +%Y%m%d%H%M%S)\"\n      echo \"keel-ha: this node was a primary; keeping its data in $OLD and cloning $PRIMARY\"\n      mv \"$PGDATA\" \"$OLD\"\n    fi\n  fi\n  if [ ! -s \"$PGDATA/PG_VERSION\" ]; then\n    mkdir -p \"$PGDATA\"\n    chown postgres:postgres \"$PGDATA\"\n    chmod 700 \"$PGDATA\"\n    until asuser pg_basebackup -h \"$PRIMARY\" -p 5432 -U \"$PGUSER\" -D \"$PGDATA\" -X stream -c fast -R -w; do\n      echo \"keel-ha: waiting for primary $PRIMARY\"\n      find \"$PGDATA\" -mindepth 1 -delete 2>/dev/null || true\n      sleep 5\n    done\n  fi\n  exec docker-entrypoint.sh postgres -c hot_standby=on -c wal_keep_size=1GB -c \"primary_conninfo=host=$PRIMARY port=5432 user=$PGUSER passfile=$PASSFILE application_name=$KEEL_SERVICE_NAME\"\nfi\nif [ -s \"$PGDATA/PG_VERSION\" ]; then\n  rm -f \"$PGDATA/standby.signal\"\n  grep -qs '^host replication all all' \"$PGDATA/pg_hba.conf\" || echo 'host replication all all md5' >> \"$PGDATA/pg_hba.conf\"\nfi\nexec docker-entrypoint.sh postgres -c wal_keep_size=1GB",
+      "private_ports": [
+        5432
+      ]
+    },
+    {
+      "name": "postgres-replica",
+      "icon": "postgres",
+      "source": {
+        "database": "postgres"
+      },
+      "clusterRole": "replica",
+      "variables": {
+        "POSTGRES_USER": "${{postgres.POSTGRES_USER}}",
+        "POSTGRES_PASSWORD": "${{postgres.POSTGRES_PASSWORD}}",
+        "POSTGRES_DB": "${{postgres.POSTGRES_DB}}",
+        "PGDATA": "${{postgres.PGDATA}}",
+        "PGUSER": "${{postgres.PGUSER}}",
+        "PGPASSWORD": "${{postgres.PGPASSWORD}}",
+        "PGDATABASE": "${{postgres.PGDATABASE}}",
+        "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "PGPORT": "5432",
+        "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}"
+      },
+      "volumes": [
+        {
+          "mount_path": "/var/lib/postgresql/data"
+        }
+      ],
+      "start_command": "set -eu\nexport PGDATA=\"${PGDATA:-/var/lib/postgresql/data/pgdata}\"\nROLE=\"${KEEL_HA_ROLE:-primary}\"\nPRIMARY=\"${KEEL_HA_PRIMARY:-}\"\nasuser() { if command -v su-exec >/dev/null 2>&1; then su-exec postgres \"$@\"; else gosu postgres \"$@\"; fi; }\nPASSFILE=/tmp/keel-ha.pgpass\nprintf '*:*:*:%s:%s\\n' \"$PGUSER\" \"$(printf '%s' \"$PGPASSWORD\" | sed 's/[\\\\:]/\\\\&/g')\" > \"$PASSFILE\"\nchown postgres \"$PASSFILE\"\nchmod 600 \"$PASSFILE\"\nexport PGPASSFILE=\"$PASSFILE\"\nif [ \"$ROLE\" = replica ]; then\n  [ -n \"$PRIMARY\" ] || { echo \"keel-ha: KEEL_HA_PRIMARY is empty\" >&2; exit 1; }\n  if [ -s \"$PGDATA/PG_VERSION\" ] && [ ! -f \"$PGDATA/standby.signal\" ]; then\n    if [ \"${KEEL_HA_REJOIN:-reclone}\" = standby ]; then\n      echo \"keel-ha: rejoining as a standby of $PRIMARY\"\n      asuser touch \"$PGDATA/standby.signal\"\n    else\n      OLD=\"$PGDATA.demoted-$(date +%Y%m%d%H%M%S)\"\n      echo \"keel-ha: this node was a primary; keeping its data in $OLD and cloning $PRIMARY\"\n      mv \"$PGDATA\" \"$OLD\"\n    fi\n  fi\n  if [ ! -s \"$PGDATA/PG_VERSION\" ]; then\n    mkdir -p \"$PGDATA\"\n    chown postgres:postgres \"$PGDATA\"\n    chmod 700 \"$PGDATA\"\n    until asuser pg_basebackup -h \"$PRIMARY\" -p 5432 -U \"$PGUSER\" -D \"$PGDATA\" -X stream -c fast -R -w; do\n      echo \"keel-ha: waiting for primary $PRIMARY\"\n      find \"$PGDATA\" -mindepth 1 -delete 2>/dev/null || true\n      sleep 5\n    done\n  fi\n  exec docker-entrypoint.sh postgres -c hot_standby=on -c wal_keep_size=1GB -c \"primary_conninfo=host=$PRIMARY port=5432 user=$PGUSER passfile=$PASSFILE application_name=$KEEL_SERVICE_NAME\"\nfi\nif [ -s \"$PGDATA/PG_VERSION\" ]; then\n  rm -f \"$PGDATA/standby.signal\"\n  grep -qs '^host replication all all' \"$PGDATA/pg_hba.conf\" || echo 'host replication all all md5' >> \"$PGDATA/pg_hba.conf\"\nfi\nexec docker-entrypoint.sh postgres -c wal_keep_size=1GB",
+      "port": 5432,
+      "healthcheck_type": "tcp",
+      "healthcheck_timeout_s": 3600,
+      "restart_policy": "always",
+      "private_ports": [
+        5432
+      ]
+    },
+    {
+      "name": "postgres-ha",
+      "icon": "postgres",
+      "source": {
+        "image": "haproxy:3.0-alpine"
+      },
+      "clusterRole": "edge",
+      "variables": {
+        "PGUSER": "${{postgres.PGUSER}}",
+        "PGPASSWORD": "${{postgres.PGPASSWORD}}",
+        "PGDATABASE": "${{postgres.PGDATABASE}}",
+        "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "PGPORT": "5432",
+        "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
+        "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}"
+      },
+      "start_command": "set -eu\nCFG=/tmp/haproxy.cfg\n{\n  printf 'global\\n  maxconn 10000\\n  log stdout format raw local0 notice\\n'\n  printf 'resolvers aven\\n  parse-resolv-conf\\n  hold valid 5s\\n  hold obsolete 5s\\n'\n  printf 'defaults\\n  mode tcp\\n  log global\\n  timeout connect 5s\\n  timeout client 1h\\n  timeout server 1h\\n'\n  printf '  default-server init-addr last,libc,none resolvers aven check inter 2s fall 2 rise 1 on-marked-down shutdown-sessions\\n'\n  printf 'frontend postgres\\n  bind :5432\\n  default_backend primary\\n'\n  printf 'backend primary\\n'\n  i=0\n  for n in $(printf '%s' \"${KEEL_HA_NODES:-}\" | tr ',' ' '); do i=$((i+1)); printf '  server node%s %s\\n' \"$i\" \"$n\"; done\n} > \"$CFG\"\nexec haproxy -W -db -f \"$CFG\"",
+      "port": 5432,
+      "healthcheck_type": "tcp",
+      "restart_policy": "always",
+      "private_ports": [
+        5432
+      ]
+    }
+  ]
+}

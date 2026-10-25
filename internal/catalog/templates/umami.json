@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "key": "umami",
+  "name": "Umami",
+  "description": "Privacy-friendly web analytics with PostgreSQL",
+  "icon": "umami",
+  "category": "analytics",
+  "tags": ["analytics", "privacy"],
+  "readme": "# Umami\n\nPrivacy-friendly web analytics backed by PostgreSQL. The default login is `admin` / `umami`; change it after the first sign-in.",
+  "primary": "umami",
+  "services": [
+    { "name": "postgres", "icon": "postgres", "source": { "database": "postgres" } },
+    {
+      "name": "umami",
+      "icon": "umami",
+      "source": { "image": "ghcr.io/umami-software/umami:postgresql-v2.19.0" },
+      "port": 3000,
+      "healthcheck_path": "/api/heartbeat",
+      "healthcheck_timeout_s": 300,
+      "domains": [{ "generate": true }],
+      "variables": {
+        "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+        "APP_SECRET": "${{ secret(48) }}"
+      }
+    }
+  ]
+}

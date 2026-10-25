@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aven GraphQL API</title>
+  <style>
+    :root { color-scheme: dark; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: #101418; color: #e6edf3; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; }
+    main { max-width: 1400px; margin: auto; }
+    h1 { font: 600 20px/1.3 system-ui, sans-serif; margin: 0 0 6px; }
+    p, .hint { font: 13px/1.5 system-ui, sans-serif; color: #9da7b3; margin: 0 0 14px; }
+    a { color: #7aa7ff; }
+    label { display: block; color: #b8c1cc; margin: 12px 0 6px; font: 13px system-ui, sans-serif; }
+    input, textarea, button, select { font: inherit; border: 1px solid #343c46; border-radius: 6px; background: #171c22; color: inherit; }
+    input, select { width: 100%; padding: 8px 10px; }
+    textarea { width: 100%; padding: 12px; resize: vertical; tab-size: 2; }
+    #query { min-height: 360px; }
+    #variables { min-height: 120px; }
+    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 280px; gap: 16px; }
+    .bar { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+    button { padding: 8px 16px; cursor: pointer; }
+    button.primary { background: #2563eb; border-color: #2563eb; }
+    button.primary:hover { background: #1d4ed8; }
+    button:disabled { opacity: .6; cursor: wait; }
+    pre { min-height: 360px; max-height: 75vh; overflow: auto; margin: 0; padding: 12px; border: 1px solid #343c46; border-radius: 6px; background: #171c22; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #schema { max-height: 75vh; overflow: auto; border: 1px solid #343c46; border-radius: 6px; padding: 8px 10px; background: #171c22; font-size: 12px; }
+    #schema details { margin: 2px 0; }
+    #schema summary { cursor: pointer; color: #e6edf3; }
+    #schema .f { color: #9da7b3; padding-left: 14px; }
+    #schema .t { color: #7ee2b8; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } pre { min-height: 160px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Aven GraphQL API</h1>
+    <p>Railway Public API와 같은 모양의 <code>POST /graphql/v2</code> 엔드포인트입니다. 로그인 세션 또는 API 토큰(<code>Authorization: Bearer …</code>)으로 인증하며 REST API와 같은 권한이 적용됩니다. 입력한 토큰은 저장하지 않고 이 페이지의 요청에만 씁니다. 실행: <kbd>Ctrl</kbd>+<kbd>Enter</kbd></p>
+    <div class="grid">
+      <div>
+        <label for="example">예제</label>
+        <select id="example"></select>
+        <label for="query">쿼리 또는 mutation</label>
+        <textarea id="query" spellcheck="false"></textarea>
+        <label for="variables">변수 (JSON)</label>
+        <textarea id="variables" spellcheck="false">{}</textarea>
+        <label for="token">API 토큰 (선택, 비우면 로그인 세션 사용)</label>
+        <input id="token" type="password" autocomplete="off" placeholder="keel_…">
+        <div class="bar">
+          <button id="run" class="primary" type="button">실행</button>
+          <span class="hint" id="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+      <div>
+        <label for="result">응답</label>
+        <pre id="result" tabindex="0">실행 결과가 여기에 표시됩니다.</pre>
+      </div>
+      <div>
+        <label for="schema">스키마</label>
+        <div id="schema" tabindex="0">스키마를 불러오는 중…</div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const examples = {
+      "프로젝트 목록": `query {
+  projects {
+    edges {
+      node {
+        id
+        name
+        environments { edges { node { id name } } }
+        services { edges { node { id name } } }
+      }
+    }
+  }
+}`,
+      "서비스 인스턴스와 최근 배포": `query instance($serviceId: String!, $environmentId: String!) {
+  serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {
+    status
+    source { image repo }
+    startCommand
+    numReplicas
+    domains { serviceDomains { domain } customDomains { domain status { verified } } }
+    latestDeployment { id status createdAt }
+  }
+}`,
+      "변수 조회": `query variables($projectId: String!, $environmentId: String!, $serviceId: String) {
+  variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId)
+}`,
+      "변수 설정": `mutation variableUpsert($input: VariableUpsertInput!) {
+  variableUpsert(input: $input)
+}`,
+      "배포 목록": `query deployments($input: DeploymentListInput!) {
+  deployments(input: $input, first: 10) {
+    edges { node { id status createdAt meta } }
+  }
+}`,
+      "다시 배포": `mutation redeploy($serviceId: String!, $environmentId: String!) {
+  serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId)
+}`,
+    };
+    const $ = (s) => document.querySelector(s);
+    const select = $("#example");
+    for (const name of Object.keys(examples)) select.add(new Option(name, name));
+    $("#query").value = examples[select.value];
+    select.addEventListener("change", () => { $("#query").value = examples[select.value]; });
+
+    async function post(query, variables) {
+      const headers = { "Content-Type": "application/json" };
+      const token = $("#token").value.trim();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const response = await fetch("/graphql/v2", { method: "POST", headers, body: JSON.stringify({ query, variables }) });
+      return { status: response.status, body: await response.json() };
+    }
+
+    const run = $("#run");
+    async function execute() {
+      let variables;
+      try {
+        variables = JSON.parse($("#variables").value || "{}");
+      } catch (error) {
+        $("#result").textContent = "변수 JSON이 올바르지 않습니다: " + error.message;
+        return;
+      }
+      run.disabled = true;
+      $("#status").textContent = "요청 중…";
+      const started = performance.now();
+      try {
+        const { status, body } = await post($("#query").value, variables);
+        $("#result").textContent = JSON.stringify(body, null, 2);
+        $("#status").textContent = `HTTP ${status} · ${Math.round(performance.now() - started)}ms`;
+        if (status === 200 && !schemaLoaded) loadSchema();
+      } catch (error) {
+        $("#result").textContent = String(error);
+        $("#status").textContent = "";
+      } finally {
+        run.disabled = false;
+      }
+    }
+    run.addEventListener("click", execute);
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); execute(); }
+    });
+
+    const typeName = (t) => t.kind === "NON_NULL" ? typeName(t.ofType) + "!" : t.kind === "LIST" ? "[" + typeName(t.ofType) + "]" : t.name;
+    let schemaLoaded = false;
+    async function loadSchema() {
+      const q = `{ __schema { types { name kind fields { name args { name type { ...T } } type { ...T } } inputFields { name type { ...T } } } } }
+        fragment T on __Type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }`;
+      try {
+        const { status, body } = await post(q, {});
+        if (status !== 200 || !body.data) {
+          $("#schema").textContent = "로그인하거나 API 토큰을 입력한 뒤 실행하면 스키마가 표시됩니다.";
+          return;
+        }
+        schemaLoaded = true;
+        const box = $("#schema");
+        box.textContent = "";
+        const types = body.data.__schema.types.filter((t) => !t.name.startsWith("__") && (t.fields || t.inputFields));
+        types.sort((a, b) => (a.name === "Query" ? -2 : a.name === "Mutation" ? -1 : 0) - (b.name === "Query" ? -2 : b.name === "Mutation" ? -1 : 0) || a.name.localeCompare(b.name));
+        for (const t of types) {
+          const d = document.createElement("details");
+          if (t.name === "Query" || t.name === "Mutation") d.open = true;
+          const s = document.createElement("summary");
+          s.textContent = t.name;
+          d.append(s);
+          for (const f of t.fields || t.inputFields) {
+            const row = document.createElement("div");
+            row.className = "f";
+            const args = (f.args || []).map((a) => `${a.name}: ${typeName(a.type)}`).join(", ");
+            row.append(f.name + (args ? `(${args})` : "") + ": ");
+            const ty = document.createElement("span");
+            ty.className = "t";
+            ty.textContent = typeName(f.type);
+            row.append(ty);
+            d.append(row);
+          }
+          box.append(d);
+        }
+      } catch (error) {
+        $("#schema").textContent = String(error);
+      }
+    }
+    loadSchema();
+  </script>
+</body>
+</html>

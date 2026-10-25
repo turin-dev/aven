@@ -1,0 +1,10 @@
+.git
+bin
+web/node_modules
+web/.next
+web/out
+internal/webui/dist
+sdk/node_modules
+*.db
+*.env
+!deploy/*.env.example

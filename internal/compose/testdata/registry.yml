@@ -1,0 +1,37 @@
+services:
+  registry:
+    image: registry:2
+    restart: unless-stopped
+    environment:
+      REGISTRY_AUTH: htpasswd
+      REGISTRY_AUTH_HTPASSWD_REALM: Registry
+      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+      HTPASSWD: ${REGISTRY_HTPASSWD}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /auth && printf '%s\n' "$$HTPASSWD" > /auth/htpasswd && exec registry serve /etc/docker/registry/config.yml
+    volumes:
+      - registry_data:/var/lib/registry
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.registry-stack-web.rule=Host(`registry.example.com`)
+      - traefik.http.routers.registry-stack-web.entrypoints=web
+      - traefik.http.services.registry-stack-web.loadbalancer.server.port=5000
+      - traefik.http.routers.registry-stack-web.service=registry-stack-web
+      - traefik.http.routers.registry-stack-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.registry-stack-websecure.rule=Host(`registry.example.com`)
+      - traefik.http.routers.registry-stack-websecure.entrypoints=websecure
+      - traefik.http.services.registry-stack-websecure.loadbalancer.server.port=5000
+      - traefik.http.routers.registry-stack-websecure.service=registry-stack-websecure
+      - traefik.http.routers.registry-stack-websecure.tls.certresolver=letsencrypt
+      - traefik.enable=true
+    networks:
+      - dokploy-network
+      - default
+volumes:
+  registry_data: null
+networks:
+  dokploy-network:
+    external: true

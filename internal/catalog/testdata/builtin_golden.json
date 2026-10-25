@@ -1,0 +1,719 @@
+{
+  "ghost": {
+    "name": "Ghost",
+    "description": "Ghost publishing platform with MySQL",
+    "icon": "ghost",
+    "primary": "ghost",
+    "services": [
+      {
+        "name": "mysql",
+        "icon": "mysql",
+        "source_type": "database",
+        "database_kind": "mysql",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "mysql:8.4",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 3306,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "MYSQLDATABASE": "${{MYSQL_DATABASE}}",
+          "MYSQLHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MYSQLPASSWORD": "${{MYSQL_ROOT_PASSWORD}}",
+          "MYSQLPORT": "3306",
+          "MYSQLUSER": "root",
+          "MYSQL_DATABASE": "keel",
+          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+          "MYSQL_ROOT_PASSWORD": "\u003crandom:32\u003e",
+          "MYSQL_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{MYSQLHOST}}:${{MYSQLPORT}}/${{MYSQLDATABASE}}"
+        },
+        "volumes": [
+          "/var/lib/mysql"
+        ],
+        "domains": 0
+      },
+      {
+        "name": "ghost",
+        "icon": "ghost",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "ghost:5.130-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 2368,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 300,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "database__client": "mysql",
+          "database__connection__database": "${{mysql.MYSQLDATABASE}}",
+          "database__connection__host": "${{mysql.MYSQLHOST}}",
+          "database__connection__password": "${{mysql.MYSQLPASSWORD}}",
+          "database__connection__port": "${{mysql.MYSQLPORT}}",
+          "database__connection__user": "${{mysql.MYSQLUSER}}",
+          "url": "https://${{KEEL_PUBLIC_DOMAIN}}"
+        },
+        "volumes": [
+          "/var/lib/ghost/content"
+        ],
+        "domains": 1
+      }
+    ]
+  },
+  "minio": {
+    "name": "MinIO",
+    "description": "S3-compatible object storage (community build pgsty/minio)",
+    "icon": "minio",
+    "primary": "minio",
+    "services": [
+      {
+        "name": "minio",
+        "icon": "minio",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "pgsty/minio:RELEASE.2026-08-04T00-00-00Z",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": "minio server /data --console-address :9001",
+          "pre_deploy_command": null,
+          "port": 9000,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/minio/health/live",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "MINIO_ROOT_PASSWORD": "\u003crandom:32\u003e",
+          "MINIO_ROOT_USER": "keel",
+          "S3_ENDPOINT": "http://${{KEEL_PRIVATE_DOMAIN}}:9000",
+          "S3_PUBLIC_ENDPOINT": "https://${{KEEL_PUBLIC_DOMAIN}}"
+        },
+        "volumes": [
+          "/data"
+        ],
+        "domains": 1
+      }
+    ]
+  },
+  "mongo": {
+    "name": "MongoDB",
+    "description": "MongoDB 8.0 with a persistent volume",
+    "icon": "mongo",
+    "primary": "mongo",
+    "services": [
+      {
+        "name": "mongo",
+        "icon": "mongo",
+        "source_type": "database",
+        "database_kind": "mongo",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "mongo:8.0",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 27017,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "MONGOHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MONGOPASSWORD": "${{MONGO_INITDB_ROOT_PASSWORD}}",
+          "MONGOPORT": "27017",
+          "MONGOUSER": "${{MONGO_INITDB_ROOT_USERNAME}}",
+          "MONGO_INITDB_ROOT_PASSWORD": "\u003crandom:32\u003e",
+          "MONGO_INITDB_ROOT_USERNAME": "mongo",
+          "MONGO_PUBLIC_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+          "MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{MONGOHOST}}:${{MONGOPORT}}"
+        },
+        "volumes": [
+          "/data/db"
+        ],
+        "domains": 0
+      }
+    ]
+  },
+  "mysql": {
+    "name": "MySQL",
+    "description": "MySQL 8.4 with a persistent volume",
+    "icon": "mysql",
+    "primary": "mysql",
+    "services": [
+      {
+        "name": "mysql",
+        "icon": "mysql",
+        "source_type": "database",
+        "database_kind": "mysql",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "mysql:8.4",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 3306,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "MYSQLDATABASE": "${{MYSQL_DATABASE}}",
+          "MYSQLHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MYSQLPASSWORD": "${{MYSQL_ROOT_PASSWORD}}",
+          "MYSQLPORT": "3306",
+          "MYSQLUSER": "root",
+          "MYSQL_DATABASE": "keel",
+          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+          "MYSQL_ROOT_PASSWORD": "\u003crandom:32\u003e",
+          "MYSQL_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{MYSQLHOST}}:${{MYSQLPORT}}/${{MYSQLDATABASE}}"
+        },
+        "volumes": [
+          "/var/lib/mysql"
+        ],
+        "domains": 0
+      }
+    ]
+  },
+  "n8n": {
+    "name": "n8n",
+    "description": "Workflow automation (SQLite on a volume)",
+    "icon": "n8n",
+    "primary": "n8n",
+    "services": [
+      {
+        "name": "n8n",
+        "icon": "n8n",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "n8nio/n8n:1.112.0",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 5678,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/healthz",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "GENERIC_TIMEZONE": "UTC",
+          "N8N_ENCRYPTION_KEY": "\u003crandom:32\u003e",
+          "N8N_HOST": "${{KEEL_PUBLIC_DOMAIN}}",
+          "N8N_PORT": "5678",
+          "N8N_PROTOCOL": "https",
+          "WEBHOOK_URL": "https://${{KEEL_PUBLIC_DOMAIN}}/"
+        },
+        "volumes": [
+          "/home/node/.n8n"
+        ],
+        "domains": 1
+      }
+    ]
+  },
+  "plausible": {
+    "name": "Plausible",
+    "description": "Plausible Community Edition with PostgreSQL and ClickHouse",
+    "icon": "plausible",
+    "primary": "plausible",
+    "services": [
+      {
+        "name": "postgres",
+        "icon": "postgres",
+        "source_type": "database",
+        "database_kind": "postgres",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "postgres:17-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 5432,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
+          "PGDATA": "/var/lib/postgresql/data/pgdata",
+          "PGDATABASE": "${{POSTGRES_DB}}",
+          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
+          "PGPORT": "5432",
+          "PGUSER": "${{POSTGRES_USER}}",
+          "POSTGRES_DB": "keel",
+          "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
+          "POSTGRES_USER": "postgres"
+        },
+        "volumes": [
+          "/var/lib/postgresql/data"
+        ],
+        "domains": 0
+      },
+      {
+        "name": "clickhouse",
+        "icon": "clickhouse",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "clickhouse/clickhouse-server:24.12-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 8123,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/ping",
+          "healthcheck_timeout_s": 300,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "CLICKHOUSE_SKIP_USER_SETUP": "1"
+        },
+        "volumes": [
+          "/var/lib/clickhouse"
+        ],
+        "domains": 0
+      },
+      {
+        "name": "plausible",
+        "icon": "plausible",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "ghcr.io/plausible/community-edition:v2.1.5",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": "/entrypoint.sh db createdb \u0026\u0026 /entrypoint.sh db migrate",
+          "port": 8000,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/api/health",
+          "healthcheck_timeout_s": 300,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "BASE_URL": "https://${{KEEL_PUBLIC_DOMAIN}}",
+          "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.KEEL_PRIVATE_DOMAIN}}:8123/plausible_events_db",
+          "DATABASE_URL": "${{postgres.DATABASE_URL}}",
+          "DISABLE_REGISTRATION": "invite_only",
+          "HTTP_PORT": "8000",
+          "SECRET_KEY_BASE": "\u003crandom:64\u003e"
+        },
+        "volumes": [
+          "/var/lib/plausible"
+        ],
+        "domains": 1
+      }
+    ]
+  },
+  "postgres": {
+    "name": "PostgreSQL",
+    "description": "PostgreSQL 17 with a persistent volume",
+    "icon": "postgres",
+    "primary": "postgres",
+    "services": [
+      {
+        "name": "postgres",
+        "icon": "postgres",
+        "source_type": "database",
+        "database_kind": "postgres",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "postgres:17-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 5432,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
+          "PGDATA": "/var/lib/postgresql/data/pgdata",
+          "PGDATABASE": "${{POSTGRES_DB}}",
+          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
+          "PGPORT": "5432",
+          "PGUSER": "${{POSTGRES_USER}}",
+          "POSTGRES_DB": "keel",
+          "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
+          "POSTGRES_USER": "postgres"
+        },
+        "volumes": [
+          "/var/lib/postgresql/data"
+        ],
+        "domains": 0
+      }
+    ]
+  },
+  "redis": {
+    "name": "Redis",
+    "description": "Redis 7.4 with AOF persistence and a password",
+    "icon": "redis",
+    "primary": "redis",
+    "services": [
+      {
+        "name": "redis",
+        "icon": "redis",
+        "source_type": "database",
+        "database_kind": "redis",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "redis:7.4-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": "docker-entrypoint.sh redis-server --requirepass \"$REDIS_PASSWORD\" --appendonly yes",
+          "pre_deploy_command": null,
+          "port": 6379,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "REDISHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "REDISPASSWORD": "${{REDIS_PASSWORD}}",
+          "REDISPORT": "6379",
+          "REDISUSER": "default",
+          "REDIS_PASSWORD": "\u003crandom:32\u003e",
+          "REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+          "REDIS_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{REDISHOST}}:${{REDISPORT}}"
+        },
+        "volumes": [
+          "/data"
+        ],
+        "domains": 0
+      }
+    ]
+  },
+  "umami": {
+    "name": "Umami",
+    "description": "Privacy-friendly web analytics with PostgreSQL",
+    "icon": "umami",
+    "primary": "umami",
+    "services": [
+      {
+        "name": "postgres",
+        "icon": "postgres",
+        "source_type": "database",
+        "database_kind": "postgres",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "postgres:17-alpine",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 5432,
+          "healthcheck_type": "tcp",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 120,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
+          "PGDATA": "/var/lib/postgresql/data/pgdata",
+          "PGDATABASE": "${{POSTGRES_DB}}",
+          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
+          "PGPORT": "5432",
+          "PGUSER": "${{POSTGRES_USER}}",
+          "POSTGRES_DB": "keel",
+          "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
+          "POSTGRES_USER": "postgres"
+        },
+        "volumes": [
+          "/var/lib/postgresql/data"
+        ],
+        "domains": 0
+      },
+      {
+        "name": "umami",
+        "icon": "umami",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "ghcr.io/umami-software/umami:postgresql-v2.19.0",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 3000,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/api/heartbeat",
+          "healthcheck_timeout_s": 300,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "APP_SECRET": "\u003crandom:48\u003e",
+          "DATABASE_URL": "${{postgres.DATABASE_URL}}"
+        },
+        "volumes": [],
+        "domains": 1
+      }
+    ]
+  },
+  "uptime-kuma": {
+    "name": "Uptime Kuma",
+    "description": "Self-hosted uptime monitoring",
+    "icon": "uptime-kuma",
+    "primary": "uptime-kuma",
+    "services": [
+      {
+        "name": "uptime-kuma",
+        "icon": "uptime-kuma",
+        "source_type": "image",
+        "database_kind": "",
+        "spec": {
+          "repo_url": null,
+          "branch": "main",
+          "root_dir": "/",
+          "image": "louislam/uptime-kuma:1.23.16",
+          "builder": "auto",
+          "dockerfile_path": "Dockerfile",
+          "watch_paths": [],
+          "auto_deploy": false,
+          "start_command": null,
+          "pre_deploy_command": null,
+          "port": 3001,
+          "healthcheck_type": "http",
+          "healthcheck_path": "/",
+          "healthcheck_timeout_s": 300,
+          "restart_policy": "always",
+          "restart_max_retries": 10,
+          "replicas": 1,
+          "cron_schedule": null,
+          "sleep_when_idle": false,
+          "sleep_after_s": 600,
+          "domains": [],
+          "tcp_proxy": null,
+          "wait_for_ci": false,
+          "overlap_seconds": 0,
+          "draining_seconds": null
+        },
+        "variables": {
+          "UPTIME_KUMA_PORT": "3001"
+        },
+        "volumes": [
+          "/app/data"
+        ],
+        "domains": 1
+      }
+    ]
+  }
+}

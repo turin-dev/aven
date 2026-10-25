@@ -1,0 +1,75 @@
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/config/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      - --storage.tsdb.retention.size=5GB
+      - --web.listen-address=100.64.0.1:9090
+      - --enable-feature=promql-experimental-functions
+    volumes:
+      - ../files/prometheus:/etc/prometheus/config:ro
+      - prometheus-data:/prometheus
+  blackbox:
+    image: prom/blackbox-exporter:v0.28.0
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - --config.file=/etc/blackbox/blackbox.yml
+      - --web.listen-address=127.0.0.1:9115
+    volumes:
+      - ../files/blackbox:/etc/blackbox:ro
+  grafana:
+    image: grafana/grafana:13.2.3
+    restart: unless-stopped
+    environment:
+      - GF_SERVER_DOMAIN=dash.example.com
+      - GF_SERVER_ROOT_URL=https://dash.example.com
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD}
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_USERS_DEFAULT_LANGUAGE=ko-KR
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_DATE_FORMATS_DEFAULT_TIMEZONE=Asia/Seoul
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/tailnet.json
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ../files/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../files/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../files/grafana/dashboards:/etc/grafana/dashboards:ro
+    networks:
+      - dokploy-network
+      - default
+    labels:
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.compose-stack-web.rule=Host(`dash.example.com`)
+      - traefik.http.routers.compose-stack-web.entrypoints=web
+      - traefik.http.services.compose-stack-web.loadbalancer.server.port=3000
+      - traefik.http.routers.compose-stack-web.service=compose-stack-web
+      - traefik.http.routers.compose-stack-web.middlewares=redirect-to-https@file
+      - traefik.http.routers.compose-stack-websecure.rule=Host(`dash.example.com`)
+      - traefik.http.routers.compose-stack-websecure.entrypoints=websecure
+      - traefik.http.services.compose-stack-websecure.loadbalancer.server.port=3000
+      - traefik.http.routers.compose-stack-websecure.service=compose-stack-websecure
+      - traefik.http.routers.compose-stack-websecure.tls.certresolver=letsencrypt
+      - traefik.enable=true
+volumes:
+  prometheus-data: null
+  grafana-data: null
+networks:
+  default:
+    driver_opts:
+      com.docker.network.bridge.name: br-dash
+    ipam:
+      config:
+        - subnet: 172.30.250.0/24
+  dokploy-network:
+    external: true

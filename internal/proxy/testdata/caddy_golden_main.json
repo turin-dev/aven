@@ -1,0 +1,1204 @@
+{
+  "admin": {
+    "listen": "unix//run/keel/caddy-admin.sock|0600"
+  },
+  "apps": {
+    "http": {
+      "metrics": {
+        "per_host": true
+      },
+      "servers": {
+        "keel": {
+          "automatic_https": {
+            "skip_certificates": [
+              "*.preview.example.com"
+            ]
+          },
+          "listen": [
+            ":443"
+          ],
+          "logs": {
+            "default_logger_name": "keel"
+          },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=ad5aaa09b0d0866f40832a39dc559d27",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "flush_interval": -1,
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Keel-Client-Ip": [
+                          "{http.request.remote.host}"
+                        ],
+                        "X-Keel-Client-Proto": [
+                          "{http.request.scheme}"
+                        ]
+                      }
+                    }
+                  },
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/keel/edge.sock"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "160.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Keel-Gateway": [
+                          "fake-gateway-secret-for-golden-test"
+                        ]
+                      }
+                    }
+                  },
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/keel/keel-server.sock"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "aven.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=5007f6dab47b7ad9ec5a93a37a917e5f",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-blog-obkawyvj-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "blog.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=6b1f4a78dd4acf50cbb8f6e7a27934a7",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "compose-grafana-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "dash.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=2024416c650d4fb7948fbb8bc85afc34",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-home-a1b2c3d4-1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=784011622cc1bf1cb7bf58611a6bc355",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "compose-mailu-front-1:80"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "mail.example.org"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=be1e7e02f290a2a25360a0465f6a42f5",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "compose-mailu-front-1:80"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/api/v1",
+                            "/api/v1/*"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "body": "not found",
+                          "handler": "static_response",
+                          "status_code": 404
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "mailu-api.example.net"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=4d5e9aa81dcc5bdc407aa7e1b8037f59",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-n8n-e5f6g7h8-1:5678"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "n8n.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=b0263659e9e9ba10cdeb4cd51ecd2a83",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://blog.example.com{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 307
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "old.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=b90ef991c2d5ecdb92eaafe853c44a5f",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "authentication",
+                  "providers": {
+                    "http_basic": {
+                      "accounts": [
+                        {
+                          "password": "JDJhJDEwJGZha2VmYWtlZmFrZWZha2VmYWtlZnVPcTFRM2IyWWM4YjNvMG05aTBsMmI1bjZ4N3o4YTll",
+                          "username": "admin"
+                        }
+                      ],
+                      "hash": {
+                        "algorithm": "bcrypt"
+                      },
+                      "realm": "restricted"
+                    }
+                  }
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-otp-i9j0k1l2-1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "otp.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=969b9610ff3547c15cff192c4e704b8c",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "health_checks": {
+                    "passive": {
+                      "fail_duration": "10s",
+                      "max_fails": 1
+                    }
+                  },
+                  "load_balancing": {
+                    "selection_policy": {
+                      "policy": "round_robin"
+                    },
+                    "try_duration": "5s"
+                  },
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-registry-q7r8s9t0-1:5000"
+                    },
+                    {
+                      "dial": "keel-registry-q7r8s9t0-2:5000"
+                    },
+                    {
+                      "dial": "keel-registry-q7r8s9t0-3:5000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "registry.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=4072d64cd6be1cf72c41c60ed79400f2",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "tracing",
+                  "span": "{http.request.method} {http.request.uri.path}",
+                  "span_attributes": {
+                    "keel.instance_id": "ins_sample-api",
+                    "keel.service": "sample-api"
+                  }
+                },
+                {
+                  "handler": "headers",
+                  "response": {
+                    "set": {
+                      "X-Keel-Trace-Id": [
+                        "{http.vars.trace_id}"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-sample-api-u1v2w3x4-1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "sample-api.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=792172e278f0dd9731ac8a8977500767",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-publicserver-2fq6gefg-1:8080"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/healthz"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "rewrite",
+                          "strip_path_prefix": "/agent.apk"
+                        },
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-publicserver-2fq6gefg-1:8080"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/agent.apk",
+                            "/agent.apk/*"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-publicserver-2fq6gefg-1:8080"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/api",
+                            "/api/*"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-web-vixyswgu-1:3000"
+                            }
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "sample-mcp.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=533992227c97f047604ba88b2c58c5ef",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/keel/wake.sock"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "sleepy.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=869300b832adc7a27823ba076b86fcf4",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "static_response",
+                  "headers": {
+                    "Location": [
+                      "https://example.com{http.request.uri}"
+                    ]
+                  },
+                  "status_code": 308
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "www.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "keel-domain-check=d6762c99753a017770d200ffbfd7a419",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-preview-m3n4o5p6-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "*.preview.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "not found",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ],
+              "terminal": true
+            }
+          ]
+        },
+        "keel-edge-origin": {
+          "automatic_https": {
+            "disable": true
+          },
+          "listen": [
+            "unix//run/keel/edge-origin.sock"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "delete": [
+                        "X-Keel-Client-Ip",
+                        "X-Keel-Client-Proto"
+                      ],
+                      "set": {
+                        "X-Forwarded-For": [
+                          "{http.request.header.X-Keel-Client-Ip}"
+                        ],
+                        "X-Forwarded-Proto": [
+                          "{http.request.header.X-Keel-Client-Proto}"
+                        ]
+                      }
+                    }
+                  },
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-sample-legacy-eomrpz63-1:8080"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "160.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "not found",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ],
+              "terminal": true
+            }
+          ]
+        },
+        "keel-http": {
+          "automatic_https": {
+            "disable": true
+          },
+          "listen": [
+            ":80"
+          ],
+          "logs": {
+            "default_logger_name": "keel"
+          },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "metrics"
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "100.64.0.3"
+                  ],
+                  "path": [
+                    "/metrics"
+                  ],
+                  "remote_ip": {
+                    "ranges": [
+                      "10.0.0.0/8",
+                      "172.16.0.0/12",
+                      "192.168.0.0/16",
+                      "100.64.0.0/10",
+                      "127.0.0.0/8",
+                      "fc00::/7",
+                      "::1/128"
+                    ]
+                  }
+                }
+              ],
+              "terminal": true
+            }
+          ]
+        },
+        "keel-tls-ask": {
+          "automatic_https": {
+            "disable": true
+          },
+          "listen": [
+            "127.0.0.1:5380"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "Host": [
+                          "keel-tls-ask.invalid"
+                        ]
+                      }
+                    }
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/keel/wake.sock"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "on_demand": {
+          "permission": {
+            "endpoint": "http://127.0.0.1:5380/api/internal/tls-ask",
+            "module": "http"
+          }
+        },
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "160.example.com",
+              "aven.example.com",
+              "blog.example.com",
+              "dash.example.com",
+              "example.com",
+              "mail.example.org",
+              "mailu-api.example.net",
+              "n8n.example.com",
+              "old.example.com",
+              "otp.example.com",
+              "registry.example.com",
+              "sample-api.example.com",
+              "sample-mcp.example.com",
+              "sleepy.example.com",
+              "www.example.com"
+            ]
+          },
+          {
+            "issuers": [
+              {
+                "module": "acme"
+              }
+            ],
+            "on_demand": true,
+            "subjects": [
+              "*.preview.example.com"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "access": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "http.log.access.keel"
+        ],
+        "writer": {
+          "output": "stdout"
+        }
+      },
+      "default": {
+        "exclude": [
+          "http.log.access.keel"
+        ]
+      }
+    }
+  }
+}
