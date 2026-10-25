@@ -2,10 +2,13 @@
 
 **내 서버에서, 호스팅 플랫폼처럼 앱을 배포하고 운영하세요.**
 
+[![Release](https://img.shields.io/github/v/release/turin-dev/aven)](https://github.com/turin-dev/aven/releases)
 [![CI](https://github.com/turin-dev/aven/actions/workflows/ci.yml/badge.svg)](https://github.com/turin-dev/aven/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-[English](README.md)
+[빠른 시작](#빠른-시작) · [주요 기능](#주요-기능) · [구조](#구조) · [문서](#문서) · [자주 묻는 질문](#자주-묻는-질문) · [English](README.md)
+
+![Aven 캔버스의 프로젝트: 생성 도메인이 붙은 storefront와 api, worker, PostgreSQL, Redis](docs/images/canvas-ko.png)
 
 Aven은 애플리케이션, 데이터베이스, 백그라운드 작업을 위한 셀프호스트 플랫폼입니다. GitHub 저장소를 연결하거나 Docker 이미지를 고르거나 데이터베이스를 띄우면, Aven이 빌드하고 TLS가 붙은 도메인을 주고 다른 서비스와 사설망으로 이어 준 뒤 계속 살아 있게 관리합니다. 환경마다 캔버스 하나에 모든 것이 보입니다. 호스팅 PaaS와 같은 경험이지만 서버는 내 것입니다.
 
@@ -16,6 +19,12 @@ Aven은 애플리케이션, 데이터베이스, 백그라운드 작업을 위한
 
 > [!NOTE]
 > Aven은 아직 젊고 빠르게 바뀝니다. 릴리스 사이에 인터페이스와 설정이 바뀔 수 있으니, 업그레이드 전에 릴리스 노트를 읽고 데이터 디렉터리를 백업하세요.
+
+## 화면
+
+| 배포 | 변수 | 네트워킹 |
+| --- | --- | --- |
+| ![현재 배포와 배포 기록이 보이는 서비스 패널](docs/images/deployments-ko.png) | ![PostgreSQL과 Redis를 참조하는 서비스 변수](docs/images/variables-ko.png) | ![서비스의 공개·사설 네트워킹 설정](docs/images/networking-ko.png) |
 
 ## 주요 기능
 
@@ -54,7 +63,11 @@ Aven은 애플리케이션, 데이터베이스, 백그라운드 작업을 위한
 
 ## 빠른 시작
 
-systemd와 Docker가 있고 80·443 포트가 비어 있는 Linux 서버(amd64 또는 arm64)와 대시보드용 DNS 이름이 필요합니다.
+필요한 것:
+
+- systemd와 Docker가 있고 80·443 포트가 비어 있는 Linux 서버(amd64 또는 arm64)
+- 대시보드용 DNS 이름(예: `aven.example.com`)과, 생성 도메인을 쓰려면 와일드카드(`*.apps.example.com`)
+- 여러 서버를 쓸 경우 Tailscale이나 WireGuard 같은 사설망으로 서로 닿는 추가 서버(선택)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
@@ -130,6 +143,20 @@ Railway는 Railway Corporation의 상표이며, 여기서는 호환성을 설명
 - [HTTP API](docs/api-v1.md)와 [GraphQL API](docs/graphql.md)
 - [권한과 작업 공간](docs/permissions.md)
 - [Feature flags SDK](sdk/README.md)
+
+## 자주 묻는 질문
+
+**Kubernetes가 필요한가요?** 아니요. Aven은 각 서버의 Docker로 컨테이너를 돌리고 자기 상태는 SQLite에 둡니다. 설치하거나 운영할 클러스터가 없습니다.
+
+**운영 환경에 써도 되나요?** 만든 사람들이 실제 서비스에 쓰고 있지만 아직 젊은 프로젝트입니다. 부족한 부분이 있을 수 있으니 업그레이드 전에 릴리스 노트를 읽어 주세요. DB와 비밀값 암호화 키가 있는 데이터 디렉터리(`/var/lib/keel`)는 꼭 백업하세요.
+
+**GitHub가 꼭 필요한가요?** 아니요. Docker 이미지, Compose 파일, 템플릿, 로컬 디렉터리(`aven up`)로도 배포할 수 있습니다. push 자동 배포와 미리보기 환경에만 GitHub가 필요합니다.
+
+**어떻게 업그레이드하나요?** 설치 스크립트를 다시 실행하거나, Aven이 자기 캔버스에서 스스로 업그레이드하게 하세요([Aven on Aven](docs/selfhost.ko.md)). DB 마이그레이션은 시작할 때 자동으로 실행됩니다.
+
+**Railway나 Dokploy에서 옮겨 올 수 있나요?** Aven은 `railway.json` / `railway.toml`을 읽고 Railway 형태의 GraphQL 질의에 답합니다. `aven import dokploy`는 Dokploy 설치의 서비스, 변수, 도메인, 볼륨을 다시 만듭니다. 데이터는 옮기지 않으니 DB 내용은 평소 쓰는 덤프·복원 도구로 옮기세요.
+
+**왜 AGPL인가요?** 누군가 Aven을 고쳐 호스팅 서비스로 제공할 때 그 개선이 공개되도록 하기 위해서입니다. 내 앱을 위해 Aven을 돌리는 데는 규모와 상관없이 추가 의무가 없습니다. 수정한 Aven을 네트워크로 다른 사람에게 제공할 때만 그 수정 내용을 공개해야 합니다.
 
 ## 기여
 

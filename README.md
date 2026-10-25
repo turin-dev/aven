@@ -2,10 +2,13 @@
 
 **Deploy and run your apps on your own servers, with the experience of a hosted platform.**
 
+[![Release](https://img.shields.io/github/v/release/turin-dev/aven)](https://github.com/turin-dev/aven/releases)
 [![CI](https://github.com/turin-dev/aven/actions/workflows/ci.yml/badge.svg)](https://github.com/turin-dev/aven/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-[한국어](README.ko.md)
+[Quick start](#quick-start) · [Highlights](#highlights) · [How it works](#how-it-works) · [Docs](#documentation) · [FAQ](#faq) · [한국어](README.ko.md)
+
+![A project on the Aven canvas: a storefront and an API with generated domains, a worker, PostgreSQL and Redis](docs/images/canvas-en.png)
 
 Aven is a self-hosted platform for applications, databases and background jobs. Connect a GitHub repository, pick a Docker image or start a database, and Aven builds it, gives it a domain with TLS, wires it to its neighbours over a private network and keeps it running. Everything lives on a canvas per environment, like a hosted PaaS, except that the servers are yours.
 
@@ -16,6 +19,12 @@ One `aven-server` process runs next to Docker on your first server. More servers
 
 > [!NOTE]
 > Aven is young and moves quickly. Interfaces and settings can change between releases, so read the release notes and back up the data directory before upgrading.
+
+## Screenshots
+
+| Deployments | Variables | Networking |
+| --- | --- | --- |
+| ![Service panel with the active deployment and history](docs/images/deployments-en.png) | ![Service variables with references to PostgreSQL and Redis](docs/images/variables-en.png) | ![Public and private networking settings of a service](docs/images/networking-en.png) |
 
 ## Highlights
 
@@ -54,7 +63,11 @@ One `aven-server` process runs next to Docker on your first server. More servers
 
 ## Quick start
 
-You need a Linux server (amd64 or arm64) with systemd, Docker and ports 80 and 443 free, and a DNS name for the dashboard.
+You need:
+
+- a Linux server (amd64 or arm64) with systemd and Docker, ports 80 and 443 free;
+- a DNS name for the dashboard (for example `aven.example.com`) and, for generated service domains, a wildcard (`*.apps.example.com`);
+- optionally more servers for multi-node setups, reachable from each other over a private network such as Tailscale or WireGuard.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
@@ -130,6 +143,20 @@ Railway is a trademark of Railway Corporation and is used here only to describe 
 - [HTTP API](docs/api-v1.md) and [GraphQL API](docs/graphql.md)
 - [Permissions and workspaces](docs/permissions.md)
 - [Feature flags SDK](sdk/README.md)
+
+## FAQ
+
+**Does it need Kubernetes?** No. Aven runs containers with plain Docker on each server and keeps its own state in SQLite. There is no cluster to install or operate.
+
+**Is it production-ready?** It runs real workloads for its authors, but it is young: expect rough edges and read the release notes before upgrading. Back up the data directory (`/var/lib/keel`), which holds the database and the key that encrypts secrets.
+
+**Do I need GitHub?** No. You can deploy Docker images, Compose files, templates and local directories (`aven up`). GitHub is needed for push-to-deploy and preview environments.
+
+**How do I upgrade?** Run the install script again, or let Aven upgrade itself from its own canvas ([Aven on Aven](docs/selfhost.md)). Database migrations run on start.
+
+**Can I move from Railway or Dokploy?** Aven reads `railway.json` / `railway.toml` and answers Railway-shaped GraphQL queries, and `aven import dokploy` recreates a Dokploy installation's services, variables, domains and volumes. Data is not copied: move database contents with your usual dump and restore tools.
+
+**Why AGPL?** So that improvements to a hosted Aven stay open. Running Aven for your own apps, at any scale, has no extra obligations; offering a modified Aven to others over a network means sharing those modifications.
 
 ## Contributing
 
