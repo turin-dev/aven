@@ -2,9 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"io"
+	"mime"
+	"net"
+	"net/mail"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/turin-dev/aven/internal/notify"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -140,5 +147,73 @@ func TestServiceAdminHoldsBlockDeploys(t *testing.T) {
 	}
 	if hs, _ := f.st.ListOwnerHolds(ctx); len(hs) != 0 {
 		t.Fatalf("orphan holds: %+v", hs)
+	}
+}
+
+func TestDeployBlockMailsWorkspaceAdmins(t *testing.T) {
+	f, h := authServer(t)
+	ctx := context.Background()
+	_, bossC := freshAccount(t, f, "block-mail-boss@example.com", store.RoleOwner)
+	wsAdmin, _ := freshAccount(t, f, "block-mail-admin@example.com", store.RoleMember)
+	member, _ := freshAccount(t, f, "block-mail-member@example.com", store.RoleMember)
+	proj, _ := f.st.GetProject(ctx, f.p.ID)
+	for uid, role := range map[string]string{wsAdmin.ID: store.RoleAdmin, member.ID: store.RoleMember} {
+		if err := f.st.SetWorkspaceMember(ctx, proj.WorkspaceID, uid, role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := "/api/services/" + f.web.ID
+	// SMTP가 없어도 차단은 된다.
+	if w := req(h, "POST", base+"/admin/holds", `{"scope":"deploy"}`, bossC); w.Code != 200 || !strings.Contains(w.Body.String(), `"emailed":0`) {
+		t.Fatalf("block without smtp: %d %s", w.Code, w.Body)
+	}
+	if w := req(h, "DELETE", base+"/admin/holds/deploy", "", bossC); w.Code != 200 {
+		t.Fatalf("unblock: %d %s", w.Code, w.Body)
+	}
+	addr, sink := startSMTPSink(t)
+	host, port, _ := net.SplitHostPort(addr)
+	env := map[string]string{"KEEL_SMTP_HOST": host, "KEEL_SMTP_PORT": port, "KEEL_SMTP_FROM": "aven <noreply@example.com>", "KEEL_SMTP_TLS": "none"}
+	m, err := notify.MailerFromEnv(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Notifier = &notify.Notifier{Store: f.st, Mailer: m}
+	f.srv.PublicURL = "https://aven.example.com"
+	w := req(h, "POST", base+"/admin/holds", `{"scope":"deploy","reason":"결제 미납"}`, bossC)
+	if w.Code != 200 {
+		t.Fatalf("block: %d %s", w.Code, w.Body)
+	}
+	sink.mu.Lock()
+	data, rcpt := sink.data, slices.Clone(sink.rcpt)
+	sink.mu.Unlock()
+	// 작업 공간 owner·admin만 받는다(일반 멤버는 받지 않는다).
+	if slices.Contains(rcpt, "<"+member.Email+">") || !slices.Contains(rcpt, "<"+wsAdmin.Email+">") {
+		t.Fatalf("recipients: %v", rcpt)
+	}
+	if n := decodeBody[struct {
+		Emailed int `json:"emailed"`
+	}](t, w).Emailed; n != len(rcpt) {
+		t.Fatalf("emailed %d, rcpt %v", n, rcpt)
+	}
+	msg, err := mail.ReadMessage(strings.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, _ := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+	raw, _ := io.ReadAll(msg.Body)
+	text, _ := base64.StdEncoding.DecodeString(strings.ReplaceAll(string(raw), "\r\n", ""))
+	if !strings.Contains(subject, "서비스 web의 배포가 막혔습니다") {
+		t.Errorf("subject: %q", subject)
+	}
+	for _, want := range []string{"사유: 결제 미납", "https://aven.example.com/?project=" + f.p.ID} {
+		if !strings.Contains(string(text), want) {
+			t.Errorf("body missing %q:\n%s", want, text)
+		}
+	}
+	if w := req(h, "DELETE", base+"/admin/holds/deploy", "", bossC); w.Code != 200 || strings.Contains(w.Body.String(), `"emailed":0`) {
+		t.Fatalf("unblock: %d %s", w.Code, w.Body)
+	}
+	if len(auditKinds(t, f.st, "hold.emailed")) != 2 {
+		t.Fatal("mail not audited")
 	}
 }

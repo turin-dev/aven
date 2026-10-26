@@ -138,6 +138,10 @@ and are written to the audit log.
   the reason on the canvas (`owner_hold` in `GET /api/projects/{pid}`). Release restarts
   the stopped instances unless another hold still applies. Holds are removed with their
   target. Audit: `owner.hold_created` / `owner.hold_released`.
+  Placing or releasing any hold (including the service admin tab's service stop and deploy
+  block) emails the target workspace's owners and admins, one message each, when SMTP is
+  configured. The response carries `emailed` (recipients reached); mail failures are only
+  logged and never fail the hold. Audit: `hold.emailed`.
 - **View as user** (`POST /api/owner/view-as {user_id, minutes}`, default 30, max 120). For
   the duration, the owner's session acts as that user to diagnose permissions. It is
   read-only: writes and WebSocket upgrades (shell, exec) get 403, and owner routes are

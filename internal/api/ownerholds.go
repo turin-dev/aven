@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/turin-dev/aven/internal/notify"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -167,7 +169,8 @@ func (s *Server) placeHold(w http.ResponseWriter, r *http.Request, scope, target
 		msg += " (사유: " + reason + ")"
 	}
 	s.audit(r, kind, targetID, msg)
-	writeJSON(w, 200, map[string]any{"hold": h, "failed": failed})
+	emailed := s.mailHold(r, true, scope, targetID, name, reason)
+	writeJSON(w, 200, map[string]any{"hold": h, "failed": failed, "emailed": emailed})
 }
 
 func (s *Server) releaseOwnerHold(w http.ResponseWriter, r *http.Request) {
@@ -211,5 +214,70 @@ func (s *Server) liftHold(w http.ResponseWriter, r *http.Request, scope, id stri
 	} else {
 		s.audit(r, "owner.hold_released", id, fmt.Sprintf("%s의 정지를 풀고 서비스 %d개를 다시 시작합니다", name, len(restarted)))
 	}
-	writeJSON(w, 200, map[string]any{"restarted": restarted, "failed": failed})
+	emailed := s.mailHold(r, false, scope, id, name, "")
+	writeJSON(w, 200, map[string]any{"restarted": restarted, "failed": failed, "emailed": emailed})
+}
+
+// holdWorkspace는 정지 대상이 속한 작업 공간과 대시보드에서 열 프로젝트다(작업 공간 정지면 프로젝트는 비어 있다).
+func (s *Server) holdWorkspace(ctx context.Context, scope, id string) (wsID, projectID string, err error) {
+	switch scope {
+	case store.HoldWorkspace:
+		return id, "", nil
+	case store.HoldService, store.HoldDeploy:
+		svc, err := s.Store.GetService(ctx, id)
+		if err != nil {
+			return "", "", err
+		}
+		id = svc.ProjectID
+	}
+	p, err := s.Store.GetProject(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	return p.WorkspaceID, p.ID, nil
+}
+
+// mailHold는 정지·배포 차단을 걸거나 푼 것을 대상 작업 공간의 소유자·관리자에게 메일로 알리고, 보낸 사람 수를 돌려준다.
+// 메일은 정지 자체의 성패와 상관없다: SMTP가 없거나 보내지 못해도 로그만 남긴다.
+func (s *Server) mailHold(r *http.Request, placed bool, scope, targetID, target, reason string) int {
+	m := s.mailer()
+	if m == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 60*time.Second)
+	defer cancel()
+	wsID, projectID, err := s.holdWorkspace(ctx, scope, targetID)
+	if err != nil {
+		return 0 // 대상이 지워졌으면 알릴 곳이 없다
+	}
+	members, err := s.Store.ListWorkspaceMembers(ctx, wsID)
+	if err != nil {
+		s.Log.Warn("hold email: members", "err", err)
+		return 0
+	}
+	link := s.publicBase(r) + "/"
+	if projectID != "" {
+		link += "?project=" + projectID
+	}
+	by := ""
+	if p := principalFrom(r); p != nil {
+		by = p.display()
+	}
+	subject, body := notify.HoldEmail(placed, scope == store.HoldDeploy, target, reason, by, link)
+	var sent []string
+	for _, mb := range members {
+		if mb.Disabled || (mb.Role != store.RoleOwner && mb.Role != store.RoleAdmin) || !notify.ValidAddress(mb.Email) {
+			continue
+		}
+		// 한 통씩 보내 받는 사람끼리 주소가 보이지 않게 한다.
+		if err := m.Send(ctx, []string{mb.Email}, subject, body); err != nil {
+			s.Log.Warn("hold email", "to", mb.Email, "err", err)
+			continue
+		}
+		sent = append(sent, mb.Email)
+	}
+	if len(sent) > 0 {
+		s.audit(r, "hold.emailed", targetID, strings.Join(sent, ", ")+"에게 메일 전송: "+subject)
+	}
+	return len(sent)
 }

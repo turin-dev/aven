@@ -194,6 +194,38 @@ func InviteEmail(inviter, link string, expires time.Time) (string, string) {
 	return subject, body
 }
 
+// HoldEmail은 서버 운영자가 정지(또는 배포 차단)를 걸거나 풀었을 때 작업 공간 관리자에게 보내는 메일의 제목과 본문이다.
+// target은 "서비스 web의 배포"처럼 대상을 가리키는 말이고, deploy는 배포 차단(실행 중인 서비스는 그대로)인지다.
+func HoldEmail(placed, deploy bool, target, reason, by, link string) (string, string) {
+	var subject, body string
+	switch {
+	case placed && deploy:
+		subject = "[aven] " + target + "가 막혔습니다"
+		body = target + "가 서버 운영자에 의해 막혔습니다.\n실행 중인 서비스는 그대로 돌지만, 차단이 풀릴 때까지 새 배포(GitHub 푸시 포함)는 시작되지 않습니다.\n"
+	case placed:
+		subject = "[aven] " + target + "가 정지되었습니다"
+		body = target + "가 서버 운영자에 의해 정지되었습니다.\n실행 중이던 서비스를 멈췄고, 정지가 풀릴 때까지 배포·재시작을 할 수 없습니다.\n"
+	case deploy:
+		subject = "[aven] " + target + " 차단이 풀렸습니다"
+		body = target + " 차단이 풀렸습니다. 이제 다시 배포할 수 있습니다.\n"
+	default:
+		subject = "[aven] " + target + "의 정지가 풀렸습니다"
+		body = target + "의 정지가 풀렸습니다. 정지 때 멈춘 서비스를 다시 시작합니다.\n"
+	}
+	body += "\n"
+	if placed && reason != "" {
+		body += "사유: " + reason + "\n"
+	}
+	if by != "" {
+		body += "처리한 사람: " + by + "\n"
+	}
+	if link != "" {
+		body += link + "\n"
+	}
+	body += "\n이 메일은 작업 공간 소유자와 관리자에게 보냅니다. 문의는 서버 운영자에게 하세요.\n"
+	return subject, body
+}
+
 func nonEmpty(a, b string) string {
 	if a != "" {
 		return a
