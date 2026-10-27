@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
   | sudo sh -s -- --public-url https://aven.example.com
 ```
 
-The script verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/keel/aven.env` with a generated admin password, starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `KEEL_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · Setup*.
+The script verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/aven/aven.env` with a generated admin password, starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `AVEN_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · Setup*.
 
 Then open a project, press **Add** on the canvas and deploy your first service. The [self-hosting guide](docs/self-hosting.md) covers DNS, configuration, manual installation, backups, upgrades and adding servers.
 
@@ -166,7 +166,7 @@ Aven cells come from this repository. Competitor cells come from the official pa
 
 Aven continues an earlier project named Keel. This public repository starts at the first Aven release (`755a737`, 2026-10-25) and does not include Keel's history.
 
-Aven keeps Keel's runtime names so existing installations upgrade in place (see [Upgrading from Keel](#upgrading-from-keel)). That is why `KEEL_*` environment variables, `/var/lib/keel`, the `keel-proxy` container, `keel.json` / `keel.toml` config files and the default database name `keel` still appear next to the Aven name.
+New installs use Aven names (`AVEN_*` settings, `/var/lib/aven`, `aven-proxy`, `aven.*` labels). An install that started as Keel keeps working without changes: the old `KEEL_*` names, paths and containers are still read, and private addresses stay on `<service>.<env>.keel.internal`. See [Upgrading from Keel](#upgrading-from-keel).
 
 AI coding agents were used substantially in development. Changes went through human review and testing.
 
@@ -175,7 +175,7 @@ AI coding agents were used substantially in development. Changes went through hu
 **Deploy**
 - Services from GitHub repositories (Dockerfile or [Railpack](https://github.com/railwayapp/railpack), no Dockerfile needed), Docker images, Docker Compose files, templates, single-file functions or a local directory (`aven up`).
 - Push-to-deploy with watch paths, wait-for-CI, commit statuses and pull request preview environments.
-- Environments with variable references (`${{ db.DATABASE_URL }}`), shared and sealed variables, a raw editor and config as code (`railway.json`, `keel.json`).
+- Environments with variable references (`${{ db.DATABASE_URL }}`), shared and sealed variables, a raw editor and config as code (`railway.json`, `aven.json`).
 - Pre-deploy commands, health checks, zero-downtime overlap, rollbacks, cron jobs, app sleeping and image auto-updates.
 
 **Data**
@@ -211,21 +211,21 @@ AI coding agents were used substantially in development. Changes went through hu
 flowchart TB
   users((Internet<br/>IPv6 / IPv4)) --> proxy1
   subgraph main["First server"]
-    proxy1["keel-proxy (Caddy)<br/>TLS · routing · edge"] --> apps1["your services<br/>databases · volumes"]
+    proxy1["aven-proxy (Caddy)<br/>TLS · routing · edge"] --> apps1["your services<br/>databases · volumes"]
     server["aven-server<br/>API · dashboard · scheduler<br/>builds · SQLite"] -- Docker API --> apps1
     server -.->|configures| proxy1
   end
   subgraph node2["More servers"]
     agent["aven-agent"] -->|Docker API| apps2["services"]
-    proxy2["keel-proxy"] --> apps2
+    proxy2["aven-proxy"] --> apps2
   end
   users --> proxy2
   agent <-->|"mTLS over Tailscale / WireGuard"| server
   apps1 <-.->|"private network (mesh)"| apps2
 ```
 
-- `aven-server` is a single Go binary with the dashboard embedded. It keeps its state in SQLite (`/var/lib/keel`), builds images with Docker and Railpack, and runs containers through the Docker API.
-- `keel-proxy` is a Caddy container that Aven configures. It terminates TLS, routes domains to replicas on its own node and serves the edge features.
+- `aven-server` is a single Go binary with the dashboard embedded. It keeps its state in SQLite (`/var/lib/aven`), builds images with Docker and Railpack, and runs containers through the Docker API.
+- `aven-proxy` is a Caddy container that Aven configures (`keel-proxy` on installs that started as Keel). It terminates TLS, routes domains to replicas on its own node and serves the edge features.
 - `aven-agent` runs on additional servers, connects back to the server with a certificate and runs the same Docker operations there. Services on different nodes reach each other through an mTLS mesh on the private addresses you provide.
 
 ## Build from source
@@ -240,8 +240,8 @@ Run a local instance for evaluation:
 
 ```sh
 mkdir -p ./data
-KEEL_ADMIN_PASSWORD='replace-with-a-long-password' \
-KEEL_HTTP_PORT=18080 KEEL_HTTPS_PORT=18443 KEEL_PROXY_BIND=127.0.0.1 \
+AVEN_ADMIN_PASSWORD='replace-with-a-long-password' \
+AVEN_HTTP_PORT=18080 AVEN_HTTPS_PORT=18443 AVEN_PROXY_BIND=127.0.0.1 \
 ./bin/aven-server -listen 127.0.0.1:7070 -data ./data
 ```
 
@@ -249,7 +249,7 @@ Sign in at `http://127.0.0.1:7070` as `admin@local`. The server starts its proxy
 
 ## Upgrading from Keel
 
-Aven is the continuation of Keel and keeps its runtime names, so existing installations upgrade in place: `KEEL_*` settings, `/var/lib/keel`, `/var/lib/keel-agent`, the `keel-agent` unit, `.keel` CLI links and `keel.*` container labels all stay. Copy the environment file to `/etc/keel/aven.env`, install `deploy/aven-server.service` and the `aven-server` binary, stop `keel-server` and enable `aven-server`. Never run both against the same data directory.
+Aven is the continuation of Keel, and an existing Keel installation upgrades in place. Aven reads each `AVEN_*` setting first and falls back to the `KEEL_*` name, with a one-time deprecation warning. It keeps using `/var/lib/keel`, `/etc/keel/aven.env`, a running `keel-proxy`, `keel-<env>` networks and `keel.*` labels when those already exist. Existing sessions and `keel_` API tokens keep working, and private addresses stay on `<service>.<env>.keel.internal`. Containers deployed after the upgrade also answer to `.aven.internal`. To move a systemd install from `keel-server`, install `deploy/aven-server.service` and the `aven-server` binary, stop `keel-server` and enable `aven-server`. Never run both against the same data directory. Upgrade the server first, then the agents on other nodes. The [self-hosting guide](docs/self-hosting.md) lists every old name that is still accepted.
 
 ## Relationship to Railway
 
@@ -276,7 +276,7 @@ Railway is a trademark of its owner and is used here only to describe compatibil
 
 **Does it need Kubernetes?** No. Aven runs containers with plain Docker on each server and keeps its own state in SQLite. There is no cluster to install or operate.
 
-**Is it production-ready?** It runs real workloads for its authors, but it is young: expect rough edges and read the release notes before upgrading. Back up the data directory (`/var/lib/keel`), which holds the database and the key that encrypts secrets. See [Feature stability](#feature-stability) for what the tests in this tree cover.
+**Is it production-ready?** It runs real workloads for its authors, but it is young: expect rough edges and read the release notes before upgrading. Back up the data directory (`/var/lib/aven`, or `/var/lib/keel` on installs that started as Keel), which holds the database and the key that encrypts secrets. See [Feature stability](#feature-stability) for what the tests in this tree cover.
 
 **Do I need GitHub?** No. You can deploy Docker images, Compose files, templates and local directories (`aven up`). GitHub is needed for push-to-deploy and preview environments.
 
