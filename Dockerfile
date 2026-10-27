@@ -2,7 +2,7 @@
 # Aven builds this image itself when the repository is deployed as the self service (AVEN_SELF_SERVICE).
 # A plain `docker build -t aven-server .` works too (bootstrap).
 
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.26.10
 ARG NODE_VERSION=24
 ARG DOCKER_VERSION=29
 ARG RAILPACK_VERSION=v0.42.0

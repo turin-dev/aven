@@ -61,7 +61,7 @@ function CliInner() {
         ) : (
           <>
             <Card
-              title={t("aven CLI 설치")}
+              title={t("Aven CLI 설치")}
               description={
                 <>
                   {t("터미널에서 프로젝트를 만들고, 배포하고, 로그와 변수를 다룹니다.")}

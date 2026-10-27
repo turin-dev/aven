@@ -82,7 +82,7 @@ const COPY: Record<SetupItemID, ItemCopy> = {
   },
   backup_destination: {
     title: t("백업 저장소"),
-    body: t("데이터베이스 서비스의 설정 › DB 백업에서 S3 호환 저장소를 백업 대상으로 추가하세요. aven 자체 DB(사용자, 프로젝트, 설정)는 Owner · DB 백업에서 받아 둘 수 있습니다."),
+    body: t("데이터베이스 서비스의 설정 › DB 백업에서 S3 호환 저장소를 백업 대상으로 추가하세요. Aven 자체 DB(사용자, 프로젝트, 설정)는 Owner · DB 백업에서 받아 둘 수 있습니다."),
     action: () => <Go href="/admin/?section=owner-backups">{t("Owner · DB 백업")}</Go>,
   },
   self_service: {
@@ -156,7 +156,7 @@ export function SetupChecklist() {
     <div className="space-y-8">
       <Card
         title={<span className="flex items-center gap-2"><Rocket className="size-4 text-pink-500" />{t("초기 설정")}</span>}
-        description={t("새로 설치한 aven 서버를 운영할 준비가 됐는지 확인합니다. 항목은 서버 설정을 읽어 자동으로 체크됩니다. 환경 변수를 바꾼 항목은 aven-server를 재시작해야 반영됩니다.")}
+        description={t("새로 설치한 Aven 서버를 운영할 준비가 됐는지 확인합니다. 항목은 서버 설정을 읽어 자동으로 체크됩니다. 환경 변수를 바꾼 항목은 aven-server를 재시작해야 반영됩니다.")}
         action={<Button size="sm" loading={query.isFetching} onClick={() => void query.refetch()}><RefreshCw className="size-3.5" />{t("새로고침")}</Button>}
         footerNote={s ? (s.complete ? t("필수 항목을 모두 마쳤습니다.") : t("필수 항목 {total}개 중 {done}개 완료", { total: s.required, done: s.required_done })) : undefined}
         footer={<a href={SETUP_GUIDE_URL} target="_blank" rel="noreferrer"><Button size="sm"><BookOpen className="size-3.5" />{t("설치 가이드")}</Button></a>}
@@ -215,7 +215,7 @@ export function FirstRunOnboarding({ me }: { me: Me | undefined }) {
       <Dialog
         open={open}
         onClose={close}
-        title={t("aven 초기 설정")}
+        title={t("Aven 초기 설정")}
         footer={
           <>
             <Button loading={dismiss.busy} onClick={async () => { if (await dismiss.set(true)) close(); }}>{t("다시 보지 않기")}</Button>

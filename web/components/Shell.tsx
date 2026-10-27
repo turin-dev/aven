@@ -1204,7 +1204,7 @@ function ShellInner({ children }: { children: ReactNode }) {
                               <div className="dot-grid flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
                                 <div className="text-base font-semibold">{t("서버에 연결할 수 없습니다")}</div>
                                 <div className="max-w-sm text-sm text-gray-600">
-                                  {t("{error}. aven 서버가 실행 중인지 확인한 뒤 다시 시도하세요.", { error: errorMessage(me.error) })}
+                                  {t("{error}. Aven 서버가 실행 중인지 확인한 뒤 다시 시도하세요.", { error: errorMessage(me.error) })}
                                 </div>
                                 <Button size="sm" onClick={() => me.refetch()}>
                                   <RotateCw /> {t("다시 시도")}

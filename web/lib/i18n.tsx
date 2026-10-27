@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, type ReactNode } from "react";
+import { Fragment, isValidElement, type ReactNode } from "react";
 import { EN } from "./i18n/en";
 import { readStorage, writeStorage } from "./legacyStorage";
 
@@ -53,15 +53,28 @@ function lookup(key: string): string {
   return EN[key] ?? EN[ko] ?? ko;
 }
 
+// 번역문의 {count|change|changes}는 count가 1이면 앞, 아니면 뒤 형태를 쓴다(영어 단수·복수). 숫자 자체는 {count}로 따로 적는다.
+// tr()에서 <b>{n}</b>처럼 감싼 값은 children의 숫자를 본다.
+function amount(v: unknown): number {
+  if (isValidElement<{ children?: unknown }>(v)) return amount(v.props.children);
+  return typeof v === "number" || typeof v === "string" ? Number(v) : NaN;
+}
+
+function plural(s: string, vars: Record<string, unknown>): string {
+  return s.replace(/\{(\w+)\|([^|{}]*)\|([^|{}]*)\}/g, (m, k: string, one: string, other: string) =>
+    k in vars ? (amount(vars[k]) === 1 ? one : other) : m,
+  );
+}
+
 /** t("필수 항목 {total}개 중 {done}개 완료", { total, done }): 문자열 번역과 {이름} 치환. */
 export function t(ko: string, vars?: Vars): string {
   const s = lookup(ko);
-  return vars ? s.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : s;
+  return vars ? plural(s, vars).replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : s;
 }
 
 /** tr("{env}에 https:// 주소를 넣으세요", { env: <code>AVEN_PUBLIC_URL</code> }): 문장 안에 JSX가 들어갈 때. */
 export function tr(ko: string, parts: Record<string, ReactNode>): ReactNode {
-  const s = lookup(ko);
+  const s = plural(lookup(ko), parts);
   const out: ReactNode[] = [];
   let last = 0;
   for (const m of s.matchAll(/\{(\w+)\}/g)) {

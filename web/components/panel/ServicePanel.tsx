@@ -33,7 +33,7 @@ const TAB_LABEL: Record<PanelTab, string> = {
   data: t("데이터베이스"),
   bucket: t("버킷"),
   variables: t("변수"),
-  metrics: t("지표"),
+  metrics: t("지표|tab"),
   shell: t("셸"),
   settings: t("설정"),
   admin: t("어드민"),

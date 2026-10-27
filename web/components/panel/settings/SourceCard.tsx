@@ -144,7 +144,7 @@ export function SourceEdit({
   );
 }
 
-const NO_DISCONNECT = t("aven에서는 서비스의 소스 종류를 바꿀 수 없습니다. 다른 소스를 쓰려면 서비스를 새로 만드세요.");
+const NO_DISCONNECT = t("Aven에서는 서비스의 소스 종류를 바꿀 수 없습니다. 다른 소스를 쓰려면 서비스를 새로 만드세요.");
 
 /** Source Image card with the auto-update strip. `onConfigure` toggles the auto update settings below. */
 export function ImageSourceCard({

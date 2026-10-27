@@ -477,7 +477,7 @@ function PREnvironments({ ws }: { ws: Workspace }) {
   return (
     <Card
       title={t("PR 환경")}
-      description={t("GitHub PR이 열리면 aven이 자동으로 환경을 만들고, PR이 닫히면 정리합니다.")}
+      description={t("GitHub PR이 열리면 Aven이 자동으로 환경을 만들고, PR이 닫히면 정리합니다.")}
       action={
         <Button variant="default" onClick={() => setOpen(true)}>
           {enabled ? t("PR 환경 설정") : t("PR 환경 켜기")}

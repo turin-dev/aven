@@ -140,7 +140,7 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
             >
               <div className="text-sm font-semibold">{t("저장소 웹훅 만들기")}</div>
               <p className="text-sm text-gray-500">
-                {t("push, pull request, CI 이벤트를 aven로 보내는 웹훅을 저장소에 만듭니다. 이미 있으면 설정을 맞춥니다.")}
+                {t("push, pull request, CI 이벤트를 Aven으로 보내는 웹훅을 저장소에 만듭니다. 이미 있으면 설정을 맞춥니다.")}
                 {!c.secret_configured && (
                   <span className="text-warn">
                     {" "}

@@ -63,7 +63,7 @@ export function GitHubOnboarding({ me }: { me: Me | undefined }) {
       }
     >
       <div className="space-y-3 text-sm text-gray-600">
-        <p>{t("aven에서는 GitHub 연결이 사람마다 따로입니다. 내 계정을 연결해야 내 저장소 목록을 보고, 비공개 저장소를 배포하고, 커밋에 배포 상태를 표시할 수 있습니다.")}</p>
+        <p>{t("Aven에서는 GitHub 연결이 사람마다 따로입니다. 내 계정을 연결해야 내 저장소 목록을 보고, 비공개 저장소를 배포하고, 커밋에 배포 상태를 표시할 수 있습니다.")}</p>
         <p>{t("내가 만든 프로젝트는 내 GitHub 연결을 씁니다. 다른 사람의 연결은 쓰지 않습니다.")}</p>
         <p className="text-xs text-gray-500">{t("나중에 계정 › GitHub 연결에서 언제든 연결하거나 해제할 수 있습니다.")}</p>
       </div>
