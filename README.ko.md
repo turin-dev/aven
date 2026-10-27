@@ -23,11 +23,7 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 
 ![Aven 캔버스의 프로젝트: 생성 도메인이 붙은 storefront와 api, worker, PostgreSQL, Redis](docs/images/canvas-ko.png)
 
-<!-- DEMO: docs/assets/demo.gif를 넣고 아래 이미지의 주석을 해제하세요. 이 PR에는 바이너리를 넣지 않습니다. -->
-
-데모 영상: `docs/assets/demo.gif` (자리표시자. 저장소에는 아직 파일이 없습니다.)
-
-<!-- ![Aven 데모](docs/assets/demo.gif) -->
+![데모: api 서비스를 열어 변수를 추가하고 배포한 뒤, 빌드 로그가 흐르고 서비스가 다시 Online이 되는 과정 (영어 UI)](docs/assets/demo.gif)
 
 > [!NOTE]
 > Aven은 아직 젊고 빠르게 바뀝니다. 릴리스 사이에 인터페이스와 설정이 바뀔 수 있으니, 업그레이드 전에 릴리스 노트를 읽고 데이터 디렉터리를 백업하세요. 아래 [기능 안정성](#기능-안정성)은 이 트리의 테스트가 어디까지 덮는지를 적습니다. 지원 약속이 아닙니다.

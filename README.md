@@ -23,11 +23,7 @@ Railway, Coolify, and Dokploy are trademarks of their owners. Aven is not affili
 
 ![A project on the Aven canvas: a storefront and an API with generated domains, a worker, PostgreSQL and Redis](docs/images/canvas-en.png)
 
-<!-- DEMO: add docs/assets/demo.gif and uncomment the image below. This PR does not add a binary. -->
-
-Demo recording: `docs/assets/demo.gif` (placeholder — the file is not in the repository yet).
-
-<!-- ![Aven demo](docs/assets/demo.gif) -->
+![Demo: open the api service, add a variable, deploy it, and watch the build log stream until the service is back online](docs/assets/demo.gif)
 
 > [!NOTE]
 > Aven is young and moves quickly. Interfaces and settings can change between releases, so read the release notes and back up the data directory before upgrading. The [stability labels](#feature-stability) below say what the tests in this tree cover. They are not a support commitment.
