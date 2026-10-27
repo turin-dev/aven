@@ -21,7 +21,7 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 - 캔버스, `railway.json`, Railway 형태의 GraphQL API는 Railway 스타일의 작업 흐름을 따릅니다.
 - GitHub push 배포, pull request 미리보기 환경, 클릭 한 번의 Postgres, MySQL, Redis, MongoDB가 포함됩니다.
 
-![데모: api 서비스를 열어 변수를 추가하고 배포한 뒤, 빌드 로그를 따라가 새 배포가 활성화되는 과정 (영어 UI)](docs/assets/demo.gif)
+![데모: api 서비스를 열어 변수를 추가하고 배포한 뒤, 빌드 로그를 따라가 새 배포가 활성화되는 과정](docs/assets/demo-ko.gif)
 
 > [!NOTE]
 > Aven은 아직 젊고 빠르게 바뀝니다. 릴리스 사이에 인터페이스와 설정이 바뀔 수 있으니, 업그레이드 전에 릴리스 노트를 읽고 데이터 디렉터리를 백업하세요. 아래 [기능 안정성](#기능-안정성)은 이 트리의 테스트가 어디까지 덮는지를 적습니다. 지원 약속이 아닙니다.
