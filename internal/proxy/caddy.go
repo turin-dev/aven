@@ -225,9 +225,6 @@ func (c *Caddy) adminURL(path string) string {
 	return "http://aven-proxy-admin" + path
 }
 
-// adminListen은 Caddy 설정의 admin.listen 값이다(컨테이너 안 경로, 0600).
-func adminListen() string { return "unix/" + AdminSocket + "|0600" }
-
 // adminClient는 관리 API용 HTTP 클라이언트다. socket의 호스트 경로를 처음 쓸 때 찾는다.
 func (c *Caddy) adminClient(ctx context.Context) (*http.Client, error) {
 	c.adminMu.Lock()
@@ -758,7 +755,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	}
 	apps["http"] = httpApp
 	cfg := map[string]any{
-		"admin": map[string]any{"listen": adminListen()},
+		"admin": map[string]any{"listen": c.adminListenPath()},
 		"logging": map[string]any{"logs": map[string]any{
 			"default": map[string]any{"exclude": []string{AccessLogger}},
 			"access": map[string]any{

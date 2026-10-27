@@ -19,6 +19,30 @@ func TestAdminNotOnNetwork(t *testing.T) {
 	}
 }
 
+// An upgraded server that reuses a running keel-proxy must keep the admin
+// socket in /run/keel: that container only mounts the wake volume there, and
+// Caddy rejects a /load whose admin.listen it cannot bind (every later route
+// change would then fail and new deployments would get 502).
+func TestBuildLegacyProxyKeepsSocketDir(t *testing.T) {
+	c := New(Config{TLS: TLSOff})
+	c.lay, c.haveNames = legacyNames(), true
+	m, s := buildCfg(t, c, []Route{{Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:3000"}}})
+	admin, _ := m["admin"].(map[string]any)
+	if got, want := admin["listen"], "unix/"+LegacyWakeDir+"/caddy-admin.sock|0600"; got != want {
+		t.Fatalf("admin.listen = %v, want %v", got, want)
+	}
+	if strings.Contains(s, WakeDir+"/") {
+		t.Fatalf("config for a legacy proxy refers to %s: %s", WakeDir, s)
+	}
+
+	c = New(Config{TLS: TLSOff})
+	m, _ = buildCfg(t, c, nil)
+	admin, _ = m["admin"].(map[string]any)
+	if got, want := admin["listen"], "unix/"+WakeDir+"/caddy-admin.sock|0600"; got != want {
+		t.Fatalf("new proxy admin.listen = %v, want %v", got, want)
+	}
+}
+
 func TestBuildAuto(t *testing.T) {
 	c := New(Config{TLS: TLSAuto, ACMEEmail: "me@example.com"})
 	b, err := c.Build([]Route{{Hosts: []string{"b.example.com"}, Upstreams: []string{"keel-b-1:80"}}, {Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:3000"}}})
