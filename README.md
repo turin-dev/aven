@@ -1,12 +1,14 @@
 # Aven: a self-hosted, Railway-style PaaS
 
+English | [한국어](README.ko.md)
+
 **Use it like Railway, but on your own server, with no usage-based pricing.**
 
 [![Release](https://img.shields.io/github/v/release/turin-dev/aven)](https://github.com/turin-dev/aven/releases)
 [![CI](https://github.com/turin-dev/aven/actions/workflows/ci.yml/badge.svg)](https://github.com/turin-dev/aven/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-[Quick start](#quick-start) · [Comparison](#comparison) · [Feature stability](#feature-stability) · [Highlights](#highlights) · [How it works](#how-it-works) · [Docs](#documentation) · [FAQ](#faq) · [한국어](README.ko.md)
+[Quick start](#quick-start) · [Comparison](#comparison) · [Feature stability](#feature-stability) · [Highlights](#highlights) · [How it works](#how-it-works) · [Docs](#documentation) · [FAQ](#faq)
 
 Railway, Coolify, and Dokploy are trademarks of their owners. Aven is not affiliated with them. Those names appear here only to describe what Aven is like and how it compares.
 
