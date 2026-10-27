@@ -21,9 +21,7 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 - 캔버스, `railway.json`, Railway 형태의 GraphQL API는 Railway 스타일의 작업 흐름을 따릅니다.
 - GitHub push 배포, pull request 미리보기 환경, 클릭 한 번의 Postgres, MySQL, Redis, MongoDB가 포함됩니다.
 
-![Aven 캔버스의 프로젝트: 생성 도메인이 붙은 storefront와 api, worker, PostgreSQL, Redis](docs/images/canvas-ko.png)
-
-![데모: api 서비스를 열어 변수를 추가하고 배포한 뒤, 빌드 로그가 흐르고 서비스가 다시 Online이 되는 과정 (영어 UI)](docs/assets/demo.gif)
+![데모: api 서비스를 열어 변수를 추가하고 배포한 뒤, 빌드 로그를 따라가 새 배포가 활성화되는 과정 (영어 UI)](docs/assets/demo.gif)
 
 > [!NOTE]
 > Aven은 아직 젊고 빠르게 바뀝니다. 릴리스 사이에 인터페이스와 설정이 바뀔 수 있으니, 업그레이드 전에 릴리스 노트를 읽고 데이터 디렉터리를 백업하세요. 아래 [기능 안정성](#기능-안정성)은 이 트리의 테스트가 어디까지 덮는지를 적습니다. 지원 약속이 아닙니다.
@@ -49,15 +47,17 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
 
 ## 화면
 
-| 배포 | 변수 | 네트워킹 |
-| --- | --- | --- |
-| ![현재 배포와 배포 기록이 보이는 서비스 패널](docs/images/deployments-ko.png) | ![PostgreSQL과 Redis를 참조하는 서비스 변수](docs/images/variables-ko.png) | ![서비스의 공개·사설 네트워킹 설정](docs/images/networking-ko.png) |
+| 캔버스 | 배포 |
+| --- | --- |
+| ![Aven 캔버스의 프로젝트: 생성 도메인이 붙은 storefront와 api, worker, PostgreSQL, Redis](docs/images/canvas-ko.png) | ![현재 배포와 배포 기록이 보이는 서비스 패널](docs/images/deployments-ko.png) |
+| **변수** | **네트워킹** |
+| ![PostgreSQL과 Redis를 참조하는 서비스 변수](docs/images/variables-ko.png) | ![서비스의 공개·사설 네트워킹 설정](docs/images/networking-ko.png) |
 
 ## 비교
 
 aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아래 공식 페이지에서 가져왔고, 확인 날짜는 2026-10-27입니다. 그 페이지가 사실을 말하지 않으면 칸은 `?`입니다. `?`는 기능이 없다는 뜻이 아닙니다.
 
-| | aven | Railway | Coolify | Dokploy |
+| | Aven | Railway | Coolify | Dokploy |
 | --- | --- | --- | --- | --- |
 | 셀프호스팅 | 예. Linux 호스트에서 `aven-server`, 추가 호스트에서 `aven-agent`. [^aven] | Free부터 Enterprise까지 호스팅 플랜. 셀프호스트 설치 프로그램: ? [^r-price] | 예. 셀프호스팅이 무료 에디션입니다. [^c-price] | 예. Self-Hosted (OSS). [^d-diff] |
 | 요금 | 이 저장소에는 사용량 요금도 유료 기능 게이트도 없습니다. 머신 비용은 직접 냅니다. [^aven] | CPU, 메모리, 볼륨을 초 단위로 과금하고 플랜 요금이 붙습니다. Free 플랜은 월 $0에 사용 크레딧 $1입니다. [^r-price] | 셀프호스팅은 무료이고 현재와 이후 기능을 모두 포함합니다. Cloud는 서버 2대까지 월 $5, 그다음 서버마다 월 $3입니다. [^c-price] | Self-Hosted (OSS)는 무료입니다. Cloud는 서버당 월 $4.50부터입니다. Enterprise는 라이선스(문의)입니다. [^d-diff] |
@@ -67,7 +67,7 @@ aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 | 여러 노드 | 예. 추가 서버는 `aven-agent`로 붙입니다. [^a-nodes] | Railway 플랫폼의 수평 replica(플랜 한도)와 지역. 자기 서버를 붙이는 기능: ? [^r-nodes] | 예. 셀프호스팅은 서버를 무제한으로 연결할 수 있습니다. [^c-price] | 예. OSS 에디션의 멀티 서버 / 원격 서버. [^d-diff] |
 | 미리보기 환경 | 예. pull request 환경. [^a-prev] | 예. PR이 열리면 만들고, 머지하거나 닫으면 지우는 PR 환경. [^r-prev] | 예. pull request와 merge request 미리보기. [^c-prev] | 예. GitHub pull request 미리보기. 기본값은 꺼져 있습니다. [^d-prev] |
 | 관리형 데이터베이스 | 내 서버에서 클릭 한 번으로 Postgres, MySQL, Redis, MongoDB, S3 호환 버킷. [^a-db] | Postgres, MySQL, Redis, MongoDB 템플릿. Railway가 각각 프로비저닝합니다. HA는 켜서 전환합니다. [^r-db] | 내 서버에서 클릭 한 번으로 Postgres, MySQL, MariaDB, MongoDB, Redis, Dragonfly, KeyDB, ClickHouse. SQLite는 experimental. [^c-db] | 내 서버에서 MySQL, PostgreSQL, MongoDB, Redis, MariaDB. [^d-feat] |
-| PITR / 백업 | 백업 저장소로 보내는 Postgres WAL·MySQL binlog PITR, 논리 백업, aven 자체 SQLite 복사본. [^a-pitr] | 볼륨 백업과, 직접 켜는 Postgres·MySQL PITR. [^r-pitr] | 예약 덤프(Postgres는 `pg_dump` / `pg_dumpall`)와 선택적 S3. Postgres 가이드는 PITR을 따로 구성하는 연속 WAL 아카이빙이라고 합니다. [^c-pitr] | 수동·예약 데이터베이스 백업. PITR: ? [^d-feat] |
+| PITR / 백업 | 백업 저장소로 보내는 Postgres WAL·MySQL binlog PITR, 논리 백업, Aven 자체 SQLite 복사본. [^a-pitr] | 볼륨 백업과, 직접 켜는 Postgres·MySQL PITR. [^r-pitr] | 예약 덤프(Postgres는 `pg_dump` / `pg_dumpall`)와 선택적 S3. Postgres 가이드는 PITR을 따로 구성하는 연속 WAL 아카이빙이라고 합니다. [^c-pitr] | 수동·예약 데이터베이스 백업. PITR: ? [^d-feat] |
 | Git push 배포 | GitHub push webhook. 이 트리에는 git receive-pack 서버가 없습니다. [^a-git] | 연결된 브랜치에 push하면 GitHub autodeploy. [^r-git] | GitHub App, GitLab, 또는 저장소 webhook으로 push 배포. [^c-git] | push하면 GitHub autodeploy. GitHub, GitLab, Bitbucket, Gitea용 webhook. [^d-git] |
 | Dockerfile / buildpack / Nixpacks | Dockerfile과 Railpack. `nixpacksPlan` 같은 모르는 `railway.json` 키는 무시합니다. Dokploy의 nixpacks 빌드는 Railpack으로 가져옵니다. [^a-build] | Railpack과 Dockerfile. Nixpacks와 buildpack: ? [^r-build] | Nixpacks, Dockerfile, Docker Compose, static. Buildpack: ? [^c-build] | Nixpacks(기본값), Railpack, Dockerfile, Heroku buildpack, Paketo buildpack, static. [^d-build] |
 | 웹 UI | 예. 내장 대시보드, 영어와 한국어. [^aven] | 예. 프로젝트 캔버스와 서비스 설정. [^r-ui] | 예. 대시보드. [^c-price] | 예. 대시보드. [^d-diff] |
@@ -162,29 +162,13 @@ aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 | AI 어시스턴트 (모델은 직접 연결) | Experimental | 설정과 도구 호출은 [docs/api-v1.md](docs/api-v1.md)에 있습니다. 그 페이지는 한계도 적습니다. 로그를 가리지 않고 모델에 보내고, 서비스 생성은 없습니다. |
 | 웹 대시보드 | Experimental | 영어·한국어 UI 소스와 위 스크린샷이 트리에 있습니다. `web/`에는 컴포넌트 테스트나 end-to-end 테스트가 없습니다. |
 
-<!-- DRAFT: owner to review -->
-
 ## 어떻게 만들어졌나
 
-이 절은 유지보수자가 고치라고 둔 초안입니다. 이 저장소에서 보이는 것과, 유지보수자가 이 초안에 넣으라고 한 한 가지 설명만 적습니다. 틀린 문장은 바꿔 주세요.
+Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소는 첫 Aven 릴리스(`755a737`, 2026-10-25)에서 시작하며 Keel의 기록은 들어 있지 않습니다.
 
-**git 기록이 보여주는 것.** 이 저장소의 `git log`는 커밋이 다섯 개입니다. 첫 커밋 `755a737`(2026-10-25)의 제목은 “Aven: a self-hosted platform for deploying and running applications on your own servers”이고, 본문은 “Initial public release of the source tree.”입니다. 2026-10-25와 2026-10-26의 나머지 커밋은 README를 고치고, SAML 의존성을 올리고, 정지 또는 배포 차단이 바뀔 때 작업 공간 owner에게 메일을 보냅니다. `CHANGELOG` 파일은 없습니다. 이 기록의 커밋 메시지에는 Keel이 나오지 않습니다.
+Aven은 기존 설치를 그 자리에서 올릴 수 있도록 Keel의 런타임 이름을 유지합니다([Keel에서 업그레이드](#keel에서-업그레이드) 참고). 그래서 `KEEL_*` 환경 변수, `/var/lib/keel`, `keel-proxy` 컨테이너, `keel.json` / `keel.toml` 설정 파일, 기본 데이터베이스 이름 `keel`이 Aven이라는 이름 옆에 아직 보입니다.
 
-**트리에 남은 이름으로 보는 Keel.** 문서는 Aven이 Keel이라는 프로젝트를 잇고, 기존 설치를 그 자리에서 올릴 수 있도록 런타임 이름을 유지한다고 합니다. [Keel에서 업그레이드](#keel에서-업그레이드)와 [docs/self-hosting.md](docs/self-hosting.md) 맨 위의 노트를 보세요. 트리에 아직 있는 이름:
-
-- 환경 변수는 `KEEL_*`입니다 (`KEEL_DATA`, `KEEL_PUBLIC_URL`, `KEEL_ADMIN_PASSWORD`, 그리고 셀프 호스팅 가이드에 있는 나머지).
-- 상태는 `/var/lib/keel`에 있습니다. 설치 스크립트는 `/etc/keel/aven.env`를 씁니다 ([`install-server.sh`](install-server.sh)).
-- 프록시 컨테이너는 `keel-proxy`입니다. 아래 업그레이드 절은 `/var/lib/keel-agent`, `keel-agent` 유닛, `.keel` CLI 연결, `keel.*` 컨테이너 라벨도 부릅니다.
-- config as code는 `aven.json`, `railway.json` 옆에서 `keel.json`과 `keel.toml`을 읽습니다 (`internal/config/config.go`).
-- 클릭 한 번 데이터베이스 템플릿의 기본 데이터베이스 이름은 `keel`입니다 (`internal/catalog/catalog.go`).
-
-<!-- TODO(owner): when Keel started, whether a public Keel repository existed, why the name became Aven, and a link to that history if it should be published. This git history does not contain it. -->
-
-**어떻게 썼는지.** 개발에 AI 코딩 에이전트를 상당히 썼습니다. 변경은 사람이 리뷰하고 테스트했습니다.
-
-<!-- TODO(owner): name the agents and the period they were used, what they were allowed to change, and who reviewed. Say what was tested by hand and on which kind of server. The repository does not record those details. -->
-
-<!-- TODO(owner): if the sentence above overstates the review process, replace it. It is the maintainer's account for this draft. No commit message in this repository spells it out. -->
+개발에 AI 코딩 에이전트를 상당히 썼습니다. 변경은 사람이 리뷰하고 테스트했습니다.
 
 ## 주요 기능
 

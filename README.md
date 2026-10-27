@@ -21,9 +21,7 @@ Railway, Coolify, and Dokploy are trademarks of their owners. Aven is not affili
 - The canvas, `railway.json`, and a Railway-shaped GraphQL API follow a Railway-style workflow.
 - GitHub push deploys, pull-request preview environments, and one-click Postgres, MySQL, Redis, and MongoDB are included.
 
-![A project on the Aven canvas: a storefront and an API with generated domains, a worker, PostgreSQL and Redis](docs/images/canvas-en.png)
-
-![Demo: open the api service, add a variable, deploy it, and watch the build log stream until the service is back online](docs/assets/demo.gif)
+![Demo: open the api service, add a variable, deploy it, and follow the build log until the new deployment is active](docs/assets/demo.gif)
 
 > [!NOTE]
 > Aven is young and moves quickly. Interfaces and settings can change between releases, so read the release notes and back up the data directory before upgrading. The [stability labels](#feature-stability) below say what the tests in this tree cover. They are not a support commitment.
@@ -43,21 +41,23 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
   | sudo sh -s -- --public-url https://aven.example.com
 ```
 
-The script verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/keel/aven.env` with a generated admin password, starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `KEEL_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · 초기 설정*.
+The script verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/keel/aven.env` with a generated admin password, starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `KEEL_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · Setup*.
 
 Then open a project, press **Add** on the canvas and deploy your first service. The [self-hosting guide](docs/self-hosting.md) covers DNS, configuration, manual installation, backups, upgrades and adding servers.
 
 ## Screenshots
 
-| Deployments | Variables | Networking |
-| --- | --- | --- |
-| ![Service panel with the active deployment and history](docs/images/deployments-en.png) | ![Service variables with references to PostgreSQL and Redis](docs/images/variables-en.png) | ![Public and private networking settings of a service](docs/images/networking-en.png) |
+| Canvas | Deployments |
+| --- | --- |
+| ![A project on the Aven canvas: a storefront and an API with generated domains, a worker, PostgreSQL and Redis](docs/images/canvas-en.png) | ![Service panel with the active deployment and history](docs/images/deployments-en.png) |
+| **Variables** | **Networking** |
+| ![Service variables with references to PostgreSQL and Redis](docs/images/variables-en.png) | ![Public and private networking settings of a service](docs/images/networking-en.png) |
 
 ## Comparison
 
 Aven cells come from this repository. Competitor cells come from the official pages linked under the table, checked on 2026-10-27. A cell is `?` when those pages did not state the fact. `?` is not a claim that the feature is missing.
 
-| | aven | Railway | Coolify | Dokploy |
+| | Aven | Railway | Coolify | Dokploy |
 | --- | --- | --- | --- | --- |
 | Self-hosted | Yes. `aven-server` on your Linux host; more hosts run `aven-agent`. [^aven] | Hosted plans from Free through Enterprise. A self-host installer: ? [^r-price] | Yes. Self-hosted is the free edition. [^c-price] | Yes. Self-Hosted (OSS). [^d-diff] |
 | Pricing model | No usage fees and no paid-feature gate in this repository. You pay for your own machines. [^aven] | Per-second CPU, memory, and volume usage, plus a plan fee. The Free plan is $0 with $1 of usage credit per month. [^r-price] | Self-hosted is free and includes all current and upcoming features. Cloud is $5/month for two servers, then $3/month per extra server. [^c-price] | Self-Hosted (OSS) is free. Cloud starts at $4.50/month per server. Enterprise is a license (contact). [^d-diff] |
@@ -67,7 +67,7 @@ Aven cells come from this repository. Competitor cells come from the official pa
 | Multi-node | Yes. Additional servers join with `aven-agent`. [^a-nodes] | Horizontal replicas (plan limits) and geographic regions, on Railway's platform. Attaching your own servers: ? [^r-nodes] | Yes. Self-hosted can connect unlimited servers. [^c-price] | Yes. Multi-server / remote servers on the OSS edition. [^d-diff] |
 | Preview environments | Yes. Pull-request environments. [^a-prev] | Yes. PR environments, created when a pull request opens and removed when it merges or closes. [^r-prev] | Yes. Pull-request and merge-request previews. [^c-prev] | Yes. GitHub pull-request previews, off by default. [^d-prev] |
 | Managed databases | One-click Postgres, MySQL, Redis, MongoDB, and an S3-compatible bucket, on your servers. [^a-db] | Postgres, MySQL, Redis, and MongoDB templates. Railway provisions each one. HA is a conversion you turn on. [^r-db] | One-click Postgres, MySQL, MariaDB, MongoDB, Redis, Dragonfly, KeyDB, and ClickHouse, plus SQLite marked experimental, on your servers. [^c-db] | MySQL, PostgreSQL, MongoDB, Redis, and MariaDB, on your servers. [^d-feat] |
-| PITR / backups | Postgres WAL and MySQL binlog PITR to backup storage, logical database backups, and a copy of aven's own SQLite database. [^a-pitr] | Volume backups, and PITR for Postgres and MySQL, which you turn on. [^r-pitr] | Scheduled dumps (Postgres uses `pg_dump` / `pg_dumpall`) with optional S3. The Postgres guide says PITR is continuous WAL archiving you set up separately. [^c-pitr] | Manual and scheduled database backups. PITR: ? [^d-feat] |
+| PITR / backups | Postgres WAL and MySQL binlog PITR to backup storage, logical database backups, and a copy of Aven's own SQLite database. [^a-pitr] | Volume backups, and PITR for Postgres and MySQL, which you turn on. [^r-pitr] | Scheduled dumps (Postgres uses `pg_dump` / `pg_dumpall`) with optional S3. The Postgres guide says PITR is continuous WAL archiving you set up separately. [^c-pitr] | Manual and scheduled database backups. PITR: ? [^d-feat] |
 | Git push deploy | GitHub push webhooks. This tree has no git receive-pack server. [^a-git] | GitHub autodeploy when the connected branch is pushed. [^r-git] | Deploy on push through a GitHub App, GitLab, or a repository webhook. [^c-git] | GitHub autodeploy on push. Webhooks for GitHub, GitLab, Bitbucket, and Gitea. [^d-git] |
 | Dockerfile / buildpack / Nixpacks | Dockerfile and Railpack. Unknown `railway.json` keys such as `nixpacksPlan` are ignored. A Dokploy nixpacks build is imported as Railpack. [^a-build] | Railpack and Dockerfile. Nixpacks and buildpacks: ? [^r-build] | Nixpacks, Dockerfile, Docker Compose, and static. Buildpacks: ? [^c-build] | Nixpacks (the default), Railpack, Dockerfile, Heroku buildpacks, Paketo buildpacks, and static. [^d-build] |
 | Web UI | Yes. Embedded dashboard, English and Korean. [^aven] | Yes. Project canvas and service settings. [^r-ui] | Yes. Dashboard. [^c-price] | Yes. Dashboard. [^d-diff] |
@@ -162,29 +162,13 @@ Aven cells come from this repository. Competitor cells come from the official pa
 | AI assistant (bring your own model) | Experimental | Settings and tool calls are documented in [docs/api-v1.md](docs/api-v1.md). That page lists limits, including logs sent to the model without redaction, and no service creation. |
 | Web dashboard | Experimental | English and Korean UI sources and the screenshots above are in the tree. `web/` has no automated component or end-to-end tests. |
 
-<!-- DRAFT: owner to review -->
-
 ## How this was built
 
-This section is a draft for the maintainer to edit. It only uses what this repository shows, plus one account the maintainer asked to include. Replace anything that is wrong.
+Aven continues an earlier project named Keel. This public repository starts at the first Aven release (`755a737`, 2026-10-25) and does not include Keel's history.
 
-**What the git history shows.** `git log` on this repository has five commits. The first, `755a737` (2026-10-25), is titled “Aven: a self-hosted platform for deploying and running applications on your own servers” and its body says “Initial public release of the source tree.” The other commits, on 2026-10-25 and 2026-10-26, adjust the README, bump a SAML dependency, and email workspace owners when a suspension or deploy block changes. There is no `CHANGELOG` file. No commit message in this history mentions Keel.
+Aven keeps Keel's runtime names so existing installations upgrade in place (see [Upgrading from Keel](#upgrading-from-keel)). That is why `KEEL_*` environment variables, `/var/lib/keel`, the `keel-proxy` container, `keel.json` / `keel.toml` config files and the default database name `keel` still appear next to the Aven name.
 
-**Keel, from names that are still in the tree.** The docs say Aven continues a project named Keel and keeps its runtime names so an existing install upgrades in place. See [Upgrading from Keel](#upgrading-from-keel) and the note at the top of [docs/self-hosting.md](docs/self-hosting.md). The names still in the tree:
-
-- Environment variables are `KEEL_*` (`KEEL_DATA`, `KEEL_PUBLIC_URL`, `KEEL_ADMIN_PASSWORD`, and the others listed in the self-hosting guide).
-- State lives in `/var/lib/keel`. The installer writes `/etc/keel/aven.env` ([`install-server.sh`](install-server.sh)).
-- The proxy container is `keel-proxy`. The upgrade section below also names `/var/lib/keel-agent`, the `keel-agent` unit, `.keel` CLI links, and `keel.*` container labels.
-- Config-as-code reads `keel.json` and `keel.toml` next to `aven.json` and `railway.json` (`internal/config/config.go`).
-- The one-click database templates default the database name to `keel` (`internal/catalog/catalog.go`).
-
-<!-- TODO(owner): when Keel started, whether a public Keel repository existed, why the name became Aven, and a link to that history if it should be published. This git history does not contain it. -->
-
-**How it was written.** AI coding agents were used substantially in development. Changes went through human review and testing.
-
-<!-- TODO(owner): name the agents and the period they were used, what they were allowed to change, and who reviewed. Say what was tested by hand and on which kind of server. The repository does not record those details. -->
-
-<!-- TODO(owner): if the sentence above overstates the review process, replace it. It is the maintainer's account for this draft. No commit message in this repository spells it out. -->
+AI coding agents were used substantially in development. Changes went through human review and testing.
 
 ## Highlights
 
