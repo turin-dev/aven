@@ -41,7 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
   | sudo sh -s -- --public-url https://aven.example.com
 ```
 
-스크립트는 릴리스 체크섬을 확인하고 `aven-server`, CLI, Railpack을 설치합니다. 관리자 비밀번호를 만들어 `/etc/keel/aven.env`에 쓰고, 서비스를 시작한 뒤 로그인 정보와 만들어야 할 DNS 레코드를 알려 줍니다. `aven.example.com`(생성 도메인을 쓰려면 `KEEL_BASE_DOMAIN`과 함께 `*.apps.example.com`도)을 서버로 향하게 하고 로그인한 다음, *어드민 → Owner · 초기 설정*의 체크리스트를 따라가세요.
+스크립트는 릴리스 체크섬을 확인하고 `aven-server`, CLI, Railpack을 설치합니다. 관리자 비밀번호를 만들어 `/etc/aven/aven.env`에 쓰고, 서비스를 시작한 뒤 로그인 정보와 만들어야 할 DNS 레코드를 알려 줍니다. `aven.example.com`(생성 도메인을 쓰려면 `AVEN_BASE_DOMAIN`과 함께 `*.apps.example.com`도)을 서버로 향하게 하고 로그인한 다음, *어드민 → Owner · 초기 설정*의 체크리스트를 따라가세요.
 
 그다음 프로젝트를 열고 캔버스에서 **추가**를 눌러 첫 서비스를 배포합니다. DNS, 설정, 직접 설치, 백업, 업그레이드, 서버 추가는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
 
@@ -166,7 +166,7 @@ aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 
 Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소는 첫 Aven 릴리스(`755a737`, 2026-10-25)에서 시작하며 Keel의 기록은 들어 있지 않습니다.
 
-Aven은 기존 설치를 그 자리에서 올릴 수 있도록 Keel의 런타임 이름을 유지합니다([Keel에서 업그레이드](#keel에서-업그레이드) 참고). 그래서 `KEEL_*` 환경 변수, `/var/lib/keel`, `keel-proxy` 컨테이너, `keel.json` / `keel.toml` 설정 파일, 기본 데이터베이스 이름 `keel`이 Aven이라는 이름 옆에 아직 보입니다.
+새 설치는 Aven 이름(`AVEN_*` 설정, `/var/lib/aven`, `aven-proxy`, `aven.*` 라벨)을 씁니다. Keel로 시작한 설치는 바꿀 것 없이 그대로 동작합니다. 예전 `KEEL_*` 이름, 경로, 컨테이너를 계속 읽고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. [Keel에서 업그레이드](#keel에서-업그레이드)를 보세요.
 
 개발에 AI 코딩 에이전트를 상당히 썼습니다. 변경은 사람이 리뷰하고 테스트했습니다.
 
@@ -175,7 +175,7 @@ Aven은 기존 설치를 그 자리에서 올릴 수 있도록 Keel의 런타임
 **배포**
 - GitHub 저장소(Dockerfile 또는 Dockerfile 없이 [Railpack](https://github.com/railwayapp/railpack)), Docker 이미지, Docker Compose 파일, 템플릿, 단일 파일 function, 로컬 디렉터리(`aven up`)로 서비스를 만듭니다.
 - push 자동 배포, watch paths, CI 대기, 커밋 상태 표시, PR 미리보기 환경.
-- 변수 참조(`${{ db.DATABASE_URL }}`), 공유·봉인 변수, raw 편집기, config as code(`railway.json`, `keel.json`)를 갖춘 환경.
+- 변수 참조(`${{ db.DATABASE_URL }}`), 공유·봉인 변수, raw 편집기, config as code(`railway.json`, `aven.json`)를 갖춘 환경.
 - pre-deploy 명령, 헬스체크, 무중단 교체, 롤백, cron 작업, 앱 sleep, 이미지 자동 업데이트.
 
 **데이터**
@@ -211,21 +211,21 @@ Aven은 기존 설치를 그 자리에서 올릴 수 있도록 Keel의 런타임
 flowchart TB
   users((인터넷<br/>IPv6 / IPv4)) --> proxy1
   subgraph main["첫 서버"]
-    proxy1["keel-proxy (Caddy)<br/>TLS · 라우팅 · 엣지"] --> apps1["서비스<br/>데이터베이스 · 볼륨"]
+    proxy1["aven-proxy (Caddy)<br/>TLS · 라우팅 · 엣지"] --> apps1["서비스<br/>데이터베이스 · 볼륨"]
     server["aven-server<br/>API · 대시보드 · 스케줄러<br/>빌드 · SQLite"] -- Docker API --> apps1
     server -.->|설정| proxy1
   end
   subgraph node2["추가 서버"]
     agent["aven-agent"] -->|Docker API| apps2["서비스"]
-    proxy2["keel-proxy"] --> apps2
+    proxy2["aven-proxy"] --> apps2
   end
   users --> proxy2
   agent <-->|"Tailscale / WireGuard 위 mTLS"| server
   apps1 <-.->|"사설망(mesh)"| apps2
 ```
 
-- `aven-server`는 대시보드가 들어 있는 Go 바이너리 하나입니다. 상태는 SQLite(`/var/lib/keel`)에 두고, Docker와 Railpack으로 이미지를 빌드하고, Docker API로 컨테이너를 돌립니다.
-- `keel-proxy`는 Aven이 설정하는 Caddy 컨테이너입니다. TLS를 끝내고 도메인을 자기 노드의 replica로 보내며 엣지 기능을 처리합니다.
+- `aven-server`는 대시보드가 들어 있는 Go 바이너리 하나입니다. 상태는 SQLite(`/var/lib/aven`)에 두고, Docker와 Railpack으로 이미지를 빌드하고, Docker API로 컨테이너를 돌립니다.
+- `aven-proxy`는 Aven이 설정하는 Caddy 컨테이너입니다(Keel로 시작한 설치에서는 `keel-proxy`). TLS를 끝내고 도메인을 자기 노드의 replica로 보내며 엣지 기능을 처리합니다.
 - `aven-agent`는 추가 서버에서 돌며 인증서로 서버에 연결해 그 서버의 Docker 작업을 맡습니다. 다른 노드의 서비스끼리는 지정한 사설 주소 위의 mTLS mesh로 통신합니다.
 
 ## 소스에서 빌드
@@ -240,8 +240,8 @@ make all        # ./bin에 웹 UI, aven-server, agent, CLI 바이너리
 
 ```sh
 mkdir -p ./data
-KEEL_ADMIN_PASSWORD='replace-with-a-long-password' \
-KEEL_HTTP_PORT=18080 KEEL_HTTPS_PORT=18443 KEEL_PROXY_BIND=127.0.0.1 \
+AVEN_ADMIN_PASSWORD='replace-with-a-long-password' \
+AVEN_HTTP_PORT=18080 AVEN_HTTPS_PORT=18443 AVEN_PROXY_BIND=127.0.0.1 \
 ./bin/aven-server -listen 127.0.0.1:7070 -data ./data
 ```
 
@@ -249,7 +249,7 @@ KEEL_HTTP_PORT=18080 KEEL_HTTPS_PORT=18443 KEEL_PROXY_BIND=127.0.0.1 \
 
 ## Keel에서 업그레이드
 
-Aven은 Keel을 잇는 프로젝트이고 런타임 이름을 그대로 쓰므로 기존 설치를 그 자리에서 올릴 수 있습니다. `KEEL_*` 설정, `/var/lib/keel`, `/var/lib/keel-agent`, `keel-agent` 유닛, `.keel` CLI 연결, `keel.*` 컨테이너 라벨이 모두 유지됩니다. 환경 파일을 `/etc/keel/aven.env`로 복사하고 `deploy/aven-server.service`와 `aven-server` 바이너리를 설치한 뒤 `keel-server`를 멈추고 `aven-server`를 켜세요. 두 서버를 같은 데이터 디렉터리로 동시에 돌리면 안 됩니다.
+Aven은 Keel을 잇는 프로젝트이고, 기존 Keel 설치는 그 자리에서 올릴 수 있습니다. Aven은 설정마다 `AVEN_*` 이름을 먼저 읽고, 없으면 `KEEL_*` 이름을 읽은 뒤 한 번 경고합니다. `/var/lib/keel`, `/etc/keel/aven.env`, 실행 중인 `keel-proxy`, `keel-<env>` 네트워크, `keel.*` 라벨이 이미 있으면 그대로 씁니다. 기존 세션과 `keel_` API 토큰도 계속 동작하고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. 업그레이드 뒤에 배포한 컨테이너는 `.aven.internal`로도 응답합니다. systemd의 `keel-server`에서 옮길 때는 `deploy/aven-server.service`와 `aven-server` 바이너리를 설치한 뒤 `keel-server`를 멈추고 `aven-server`를 켜세요. 두 서버를 같은 데이터 디렉터리로 동시에 돌리면 안 됩니다. 서버를 먼저 올리고, 그다음 다른 노드의 agent를 올리세요. 아직 받아들이는 예전 이름 전체는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
 
 ## Railway와의 관계
 
@@ -276,7 +276,7 @@ Railway는 그 권리자의 상표이며, 여기서는 호환성을 설명하는
 
 **Kubernetes가 필요한가요?** 아니요. Aven은 각 서버의 Docker로 컨테이너를 돌리고 자기 상태는 SQLite에 둡니다. 설치하거나 운영할 클러스터가 없습니다.
 
-**운영 환경에 써도 되나요?** 만든 사람들이 실제 서비스에 쓰고 있지만 아직 젊은 프로젝트입니다. 부족한 부분이 있을 수 있으니 업그레이드 전에 릴리스 노트를 읽어 주세요. DB와 비밀값 암호화 키가 있는 데이터 디렉터리(`/var/lib/keel`)는 꼭 백업하세요. 이 트리의 테스트가 덮는 범위는 [기능 안정성](#기능-안정성)을 보세요.
+**운영 환경에 써도 되나요?** 만든 사람들이 실제 서비스에 쓰고 있지만 아직 젊은 프로젝트입니다. 부족한 부분이 있을 수 있으니 업그레이드 전에 릴리스 노트를 읽어 주세요. DB와 비밀값 암호화 키가 있는 데이터 디렉터리(`/var/lib/aven`, Keel로 시작한 설치는 `/var/lib/keel`)는 꼭 백업하세요. 이 트리의 테스트가 덮는 범위는 [기능 안정성](#기능-안정성)을 보세요.
 
 **GitHub가 꼭 필요한가요?** 아니요. Docker 이미지, Compose 파일, 템플릿, 로컬 디렉터리(`aven up`)로도 배포할 수 있습니다. push 자동 배포와 미리보기 환경에만 GitHub가 필요합니다.
 
