@@ -201,7 +201,7 @@ const GRID = "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] sm:grid-cols-[auto
 
 /* ── Avatar ──────────────────────────────────────────────────────────── */
 function Avatar({ d }: { d: Deployment }) {
-  const who = d.commit_author ?? "keel";
+  const who = d.commit_author ?? "Aven";
   const src = d.trigger === "cli" ? "cli" : d.builder_used === "image" ? "docker" : "github";
   return (
     <div className="relative h-9 w-9 shrink-0" aria-hidden="true" title={who}>
