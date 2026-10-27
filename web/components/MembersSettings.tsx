@@ -871,7 +871,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
               });
           }}
         >
-          <p className="text-sm text-gray-600">{t("aven에 이미 있는 사용자만 추가할 수 있습니다. 새 사용자는 아래에서 초대 링크를 만들 수 있습니다.")}</p>
+          <p className="text-sm text-gray-600">{t("Aven에 이미 있는 사용자만 추가할 수 있습니다. 새 사용자는 아래에서 초대 링크를 만들 수 있습니다.")}</p>
           {workspaceInvite && <InviteLink invite={workspaceInvite} />}
           <Field label={t("이메일")}>
             <Input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" />

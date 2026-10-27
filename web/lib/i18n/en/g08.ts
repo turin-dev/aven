@@ -292,7 +292,7 @@ const en: Record<string, string> = {
   "GitHub 계정을 연결하세요": "Connect your GitHub account",
   "나중에": "Later",
   "GitHub 연결": "Connect GitHub",
-  "aven에서는 GitHub 연결이 사람마다 따로입니다. 내 계정을 연결해야 내 저장소 목록을 보고, 비공개 저장소를 배포하고, 커밋에 배포 상태를 표시할 수 있습니다.": "In Aven, each person connects GitHub separately. Connect your own account to see your repositories, deploy private repositories, and show deployment status on commits.",
+  "Aven에서는 GitHub 연결이 사람마다 따로입니다. 내 계정을 연결해야 내 저장소 목록을 보고, 비공개 저장소를 배포하고, 커밋에 배포 상태를 표시할 수 있습니다.": "In Aven, each person connects GitHub separately. Connect your own account to see your repositories, deploy private repositories, and show deployment status on commits.",
   "내가 만든 프로젝트는 내 GitHub 연결을 씁니다. 다른 사람의 연결은 쓰지 않습니다.": "Projects you create use your own GitHub connection, not someone else's.",
   "나중에 계정 › GitHub 연결에서 언제든 연결하거나 해제할 수 있습니다.": "You can connect or disconnect anytime under Account › GitHub connection.",
   "{label} 복사됨": "Copied {label}",

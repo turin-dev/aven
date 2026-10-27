@@ -120,7 +120,7 @@ export function fmtClock(start: string | null | undefined, end?: string | null):
   return h ? `${h}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}` : `${p(Math.floor(s / 60))}:${p(s % 60)}`;
 }
 
-function viaText(d: Deployment) {
+export function viaText(d: Deployment) {
   if (d.trigger === "github") return "GitHub";
   if (d.trigger === "cli") return "CLI";
   if (d.builder_used === "image" && d.trigger === "manual") return "Docker";
@@ -463,10 +463,14 @@ function Meta({ d }: { d: Deployment }) {
         {depTitle(d)}
       </p>
       <p className="min-w-0 truncate text-sm text-gray-500" title={extra || undefined}>
-        <time dateTime={d.created_at} title={fmtTime(d.created_at)}>
-          {fmtRelative(d.created_at)}
-        </time>{" "}
-        via <span className="text-gray-500">{viaText(d)}</span>
+        {tr("{time} · {trigger}", {
+          time: (
+            <time dateTime={d.created_at} title={fmtTime(d.created_at)}>
+              {fmtRelative(d.created_at)}
+            </time>
+          ),
+          trigger: <span className="text-gray-500">{viaText(d)}</span>,
+        })}
       </p>
     </div>
   );
@@ -992,8 +996,8 @@ export function DeploymentsTab({
           <span className="size-2 shrink-0 rounded-full bg-pink-600" aria-hidden />
           <span className="flex-1">
             {pend.local.length
-              ? tr("적용하지 않은 변경 사항 {count}개가 있습니다. 캔버스 위쪽의 변경 사항 배너에서 배포하면 반영됩니다.", { count: <b className="tabular-nums text-pink-600">{t("{count}개", { count: staged })}</b> })
-              : tr("배포하지 않은 변경 사항 {count}개가 있습니다. 캔버스 위쪽의 변경 사항 배너에서 배포하면 반영됩니다.", { count: <b className="tabular-nums text-pink-600">{t("{count}개", { count: staged })}</b> })}
+              ? tr("적용하지 않은 변경 사항 {count}개가 있습니다. 캔버스 위쪽의 변경 사항 배너에서 배포하면 반영됩니다.", { count: <b className="tabular-nums text-pink-600">{staged}</b> })
+              : tr("배포하지 않은 변경 사항 {count}개가 있습니다. 캔버스 위쪽의 변경 사항 배너에서 배포하면 반영됩니다.", { count: <b className="tabular-nums text-pink-600">{staged}</b> })}
           </span>
         </div>
       )}

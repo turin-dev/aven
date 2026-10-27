@@ -61,7 +61,7 @@ export function PrivateNetworking({
       title={t("비공개 네트워킹")}
       keywords={`private internal ipv6 ipv4 dns endpoint mesh node ${t("노드 간 포트 엔드포인트")}`}
       badge={<Changed on={stage.changed("private_dns_name") || stage.changed("private_ports")} />}
-      description={t("aven 비공개 네트워크 안에서 이 서비스와 통신합니다.")}
+      description={t("Aven 비공개 네트워크 안에서 이 서비스와 통신합니다.")}
     >
       <div className="flex flex-col space-y-4">
         <div className="divide-y divide-gray-200 rounded-lg border border-gray-200">

@@ -20,9 +20,9 @@ const MODES: { value: PoolMode; label: string; desc: string }[] = [
 
 const POOL_VARS: [string, string, string][] = [
   ["DATABASE_URL", t("PgBouncer · 비공개 네트워크"), t("일반 애플리케이션 쿼리")],
-  ["DATABASE_PUBLIC_URL", t("PgBouncer · TCP 프록시"), t("aven 밖에서 연결")],
+  ["DATABASE_PUBLIC_URL", t("PgBouncer · TCP 프록시"), t("Aven 밖에서 연결")],
   ["DATABASE_UNPOOLED_URL", t("PostgreSQL · 비공개 네트워크"), t("마이그레이션, CREATE INDEX CONCURRENTLY, LISTEN/NOTIFY, advisory lock")],
-  ["DATABASE_PUBLIC_UNPOOLED_URL", t("PostgreSQL · TCP 프록시"), t("aven 밖에서 풀링 없이 연결")],
+  ["DATABASE_PUBLIC_UNPOOLED_URL", t("PostgreSQL · TCP 프록시"), t("Aven 밖에서 풀링 없이 연결")],
 ];
 
 function Section({ title, desc, children }: { title: string; desc: ReactNode; children: ReactNode }) {
@@ -93,7 +93,7 @@ function PostgresPoolingSection({ svc, env }: { svc: CanvasService; env: Environ
             {tr("{svc} 서비스를 만들고 {mode} 모드로 배포합니다.", { svc: <span className="font-mono text-foreground">{svc.name}-pgbouncer</span>, mode: MODES.find((m) => m.value === mode)?.label })}
           </li>
           <li>{tr("배포가 끝나면 {url}이 PgBouncer를 가리키고, 직접 연결은 {unpooled}로 옮깁니다.", { url: <span className="font-mono">DATABASE_URL</span>, unpooled: <span className="font-mono">DATABASE_UNPOOLED_URL</span> })}</li>
-          <li>{t("이 데이터베이스의 연결 변수를 참조하는 실행 중인 서비스는 다시 배포됩니다. aven 밖에 직접 적어 둔 연결 문자열은 직접 바꿔야 합니다.")}</li>
+          <li>{t("이 데이터베이스의 연결 변수를 참조하는 실행 중인 서비스는 다시 배포됩니다. Aven 밖에 직접 적어 둔 연결 문자열은 직접 바꿔야 합니다.")}</li>
         </ul>
       ),
       confirmLabel: t("PgBouncer 추가"),

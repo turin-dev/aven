@@ -2,7 +2,7 @@
 const en: Record<string, string> = {
   "비밀번호 확인이 일치하지 않습니다.": "Passwords do not match.",
   "비밀번호를 입력하세요.": "Enter a password.",
-  "aven 초대 수락": "Accept Aven invite",
+  "Aven 초대 수락": "Accept Aven invite",
   "이름과 비밀번호를 정하면 계정이 만들어집니다": "Choose a name and password to create your account",
   "초대 링크에 토큰이 없습니다. 받은 링크 전체를 주소창에 붙여 넣으세요.": "This invite link has no token. Paste the entire link you received into the address bar.",
   "이름": "Name",
@@ -296,6 +296,6 @@ const en: Record<string, string> = {
   "주 메뉴": "Main menu",
   "{name} 환경": "{name} environment",
   "서버에 연결할 수 없습니다": "Can't connect to the server",
-  "{error}. aven 서버가 실행 중인지 확인한 뒤 다시 시도하세요.": "{error}. Check that the Aven server is running, then try again.",
+  "{error}. Aven 서버가 실행 중인지 확인한 뒤 다시 시도하세요.": "{error}. Check that the Aven server is running, then try again.",
 };
 export default en;

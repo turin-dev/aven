@@ -144,7 +144,7 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
         {!tok ? (
           <>
             <p>
-              {t("다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 keel-proxy가 그 서버의 80/443 포트를 씁니다.")}
+              {t("다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 Aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 keel-proxy가 그 서버의 80/443 포트를 씁니다.")}
             </p>
             <RemoteLimits />
             <Field label={t("노드 이름")} hint={t("비워 두면 서버의 hostname을 씁니다.")}>

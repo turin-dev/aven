@@ -13,7 +13,7 @@ const en: Record<string, string> = {
   "이름에는 영문 소문자, 숫자, 하이픈(-)만 쓸 수 있습니다.": "Names may only contain lowercase letters, numbers and hyphens (-).",
   "노드 추가": "Add node",
   "설치 명령 만들기": "Create install command",
-  "다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 keel-proxy가 그 서버의 80/443 포트를 씁니다.": "Connect another server as a node to deploy services to it. We will generate the install command to run on the new server. It needs Linux with Docker and systemd (amd64 or arm64), and it must be able to reach this Aven server over HTTPS. The node's keel-proxy uses ports 80/443 on that server.",
+  "다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 Aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 keel-proxy가 그 서버의 80/443 포트를 씁니다.": "Connect another server as a node to deploy services to it. We will generate the install command to run on the new server. It needs Linux with Docker and systemd (amd64 or arm64), and it must be able to reach this Aven server over HTTPS. The node's keel-proxy uses ports 80/443 on that server.",
   "노드 이름": "Node name",
   "비워 두면 서버의 hostname을 씁니다.": "Leave empty to use the server's hostname.",
   "새 서버에서 이 명령을 실행하세요 (sudo 권한 필요)": "Run this command on the new server (requires sudo)",
@@ -262,7 +262,7 @@ const en: Record<string, string> = {
   // PrivateNetworking
   "비공개 네트워킹": "Private networking",
   "노드 간 포트 엔드포인트": "node-to-node ports endpoint",
-  "aven 비공개 네트워크 안에서 이 서비스와 통신합니다.": "Reach this service from inside the Aven private network.",
+  "Aven 비공개 네트워크 안에서 이 서비스와 통신합니다.": "Reach this service from inside the Aven private network.",
   "같은 노드 안에서는 IPv4와 IPv6로 접속합니다. 다른 노드의 서비스와는 IPv4로만 연결됩니다.": "Within the same node, connect over IPv4 and IPv6. Services on other nodes connect over IPv4 only.",
   "비공개 통신 준비됨": "Private connectivity ready",
   "이렇게만 불러도 됩니다": "You can just reference it like this",
@@ -291,7 +291,7 @@ const en: Record<string, string> = {
   "로그인": "Sign in",
   "조직 SSO로 로그인": "Sign in with organization SSO",
   "패스키로 로그인": "Sign in with passkey",
-  "aven에 오신 것을 환영합니다": "Welcome to Aven",
+  "Aven에 오신 것을 환영합니다": "Welcome to Aven",
   "계정 이메일과 비밀번호를 입력하세요": "Enter your account email and password",
 
   // FunctionTab
@@ -310,7 +310,7 @@ const en: Record<string, string> = {
   "코드는 환경마다 따로 저장되고 배포할 때 이미지로 빌드됩니다. cron 일정을 정하면 일정마다 이 파일을 실행하는 job이 됩니다(설정 탭).": "Code is saved separately for each environment and built into an image when deployed. If you set a cron schedule, each schedule runs this file as a job (Settings tab).",
 
   // ProvidedVariables
-  "aven이 추가한 변수 {count}개": "{count} {count|variable|variables} added by Aven",
+  "Aven이 추가한 변수 {count}개": "{count} {count|variable|variables} added by Aven",
   "배포할 때 자동으로 주입됩니다. 같은 이름으로 서비스 변수를 만들면 그 값이 우선합니다. 다른 서비스에서는 {ref}처럼 참조합니다.": "Injected automatically on deploy. If you create a service variable with the same name, its value takes precedence. From other services, reference it as {ref}.",
   "${{서비스.KEEL_PRIVATE_DOMAIN}}": "${{service.KEEL_PRIVATE_DOMAIN}}",
   "이 환경에서는 비어 있음": "Empty in this environment",

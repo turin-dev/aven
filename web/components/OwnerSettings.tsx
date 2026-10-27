@@ -160,7 +160,7 @@ function AnnouncementCard({ data }: { data: OwnerOverview }) {
       <div className="space-y-4">
         <label className="flex items-center justify-between gap-4 text-sm"><span className="font-medium">{t("공지 게시")}</span><Toggle checked={enabled} onChange={setEnabled} label={t("공지 게시")} /></label>
         <Segmented label={t("공지 수준")} value={level} options={LEVELS} onChange={setLevel} />
-        <Textarea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={t("예: 오늘 23시부터 10분간 aven 서버를 재시작합니다.")} aria-label={t("공지 내용")} maxLength={500} />
+        <Textarea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} placeholder={t("예: 오늘 23시부터 10분간 Aven 서버를 재시작합니다.")} aria-label={t("공지 내용")} maxLength={500} />
         <ErrorBox error={error} />
       </div>
     </Card>
@@ -446,15 +446,15 @@ export function OwnerBackups() {
   return (
     <div className="space-y-8">
       {node}
-      <Card title={<span className="flex items-center gap-2"><HardDriveDownload className="size-4" />{t("aven DB 백업")}</span>}
-        description={t("aven 자체 데이터베이스(사용자, 프로젝트, 설정, 암호화된 변수)를 서버를 멈추지 않고 데이터 디렉터리의 backups/에 복사합니다. 배포 전 수동 백업도 여기에 보입니다.")}
+      <Card title={<span className="flex items-center gap-2"><HardDriveDownload className="size-4" />{t("Aven DB 백업")}</span>}
+        description={t("Aven 자체 데이터베이스(사용자, 프로젝트, 설정, 암호화된 변수)를 서버를 멈추지 않고 데이터 디렉터리의 backups/에 복사합니다. 배포 전 수동 백업도 여기에 보입니다.")}
         action={<Button variant="primary" size="sm" loading={busy === "create"} onClick={() => run("create", api.createKeelBackup, t("백업을 만들었습니다"))}>{t("지금 백업")}</Button>}>
         <p className="text-xs text-gray-500">{t("백업 파일에는 비밀값이 암호화된 채 들어 있습니다. 복원하려면 같은 master.key가 필요합니다. 내려받은 파일은 안전하게 보관하세요.")}</p>
         <ErrorBox error={error ?? backups.error} className="mt-3" />
       </Card>
       <Card title={t("백업 목록")} flush>
         {backups.isPending ? <CenterSpinner /> : (backups.data ?? []).length === 0 ? <p className="p-5 text-sm text-gray-500">{t("백업이 없습니다.")}</p> : (
-          <ul className="divide-y divide-gray-200" aria-label={t("aven DB 백업")}>
+          <ul className="divide-y divide-gray-200" aria-label={t("Aven DB 백업")}>
             {backups.data!.map((b) => (
               <li key={b.name} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
                 <div className="min-w-0 flex-1">

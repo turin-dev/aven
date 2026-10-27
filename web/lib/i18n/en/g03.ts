@@ -231,7 +231,7 @@ const en: Record<string, string> = {
   "환경마다 서비스 설정, 변수, 도메인, 볼륨이 따로 있습니다. production이 아닌 환경에서는 화면 둘레에 색이 표시됩니다.": "Each environment has its own service settings, variables, domains, and volumes. Non-production environments show a colored border around the screen.",
   "새 환경": "New environment",
   "PR 환경": "PR environments",
-  "GitHub PR이 열리면 aven이 자동으로 환경을 만들고, PR이 닫히면 정리합니다.": "When a GitHub PR opens, Aven creates an environment automatically and cleans it up when the PR closes.",
+  "GitHub PR이 열리면 Aven이 자동으로 환경을 만들고, PR이 닫히면 정리합니다.": "When a GitHub PR opens, Aven creates an environment automatically and cleans it up when the PR closes.",
   "PR 환경 설정": "Configure PR environments",
   "PR 환경 켜기": "Turn on PR environments",
   "기본 환경": "default environment",
