@@ -55,29 +55,23 @@ Then open a project, press **Add** on the canvas and deploy your first service. 
 
 ## Comparison
 
-Aven cells come from this repository. Competitor cells come from the official pages linked under the table, checked on 2026-10-27. A cell is `?` when those pages did not state the fact. `?` is not a claim that the feature is missing.
+Aven cells come from this repository. Competitor cells come from the official pages linked under the table, checked on 2026-10-27. “Not documented” means those pages did not describe the feature. It is not a claim that the feature is missing.
 
 | | Aven | Railway | Coolify | Dokploy |
 | --- | --- | --- | --- | --- |
-| Self-hosted | Yes. `aven-server` on your Linux host; more hosts run `aven-agent`. [^aven] | Hosted plans from Free through Enterprise. A self-host installer: ? [^r-price] | Yes. Self-hosted is the free edition. [^c-price] | Yes. Self-Hosted (OSS). [^d-diff] |
+| Self-hosted | Yes. `aven-server` on your Linux host; more hosts run `aven-agent`. [^aven] | Hosted plans from Free through Enterprise. Enterprise adds Railway-managed dedicated hosts. An installer for your own servers is not documented. [^r-price] [^r-ent] | Yes. Self-hosted is the free edition. [^c-price] | Yes. Self-Hosted (OSS). [^d-diff] |
 | Pricing model | No usage fees and no paid-feature gate in this repository. You pay for your own machines. [^aven] | Per-second CPU, memory, and volume usage, plus a plan fee. The Free plan is $0 with $1 of usage credit per month. [^r-price] | Self-hosted is free and includes all current and upcoming features. Cloud is $5/month for two servers, then $3/month per extra server. [^c-price] | Self-Hosted (OSS) is free. Cloud starts at $4.50/month per server. Enterprise is a license (contact). [^d-diff] |
-| License | AGPL-3.0-only. [^a-lic] | ? The pages checked do not state a license for the platform. The CLI docs say the CLI is open source. [^r-cli] | Apache-2.0. [^c-lic] | Apache-2.0, except a `/proprietary` directory if present, which `LICENSE.MD` places under a separate proprietary license. [^d-lic] |
+| License | AGPL-3.0-only. [^a-lic] | The platform source is not published. The CLI is open source. [^r-cli] | Apache-2.0. [^c-lic] | Apache-2.0, except a `/proprietary` directory if present, which `LICENSE.MD` places under a separate proprietary license. [^d-lic] |
 | SSO in the free tier | Yes. SAML SSO is in the core. [^a-sso] | No on the Free plan. SSO is listed for Enterprise and for committed spend. [^r-price] | Yes on self-hosted (the free edition), from v4.3.0. Coolify Cloud manages its own sign-in. [^c-sso] | No. SSO is Enterprise only. The OSS and non-Enterprise Cloud editions do not include it. [^d-diff] |
-| Passkeys | Yes. WebAuthn passkeys for dashboard sign-in. [^a-pk] | Yes, as account MFA. Whether every plan includes them: ? [^r-mfa] | ? [^c-pk] | Yes, for panel sign-in. Whether Cloud Hobby includes them: ? [^d-pk] |
-| Multi-node | Yes. Additional servers join with `aven-agent`. [^a-nodes] | Horizontal replicas (plan limits) and geographic regions, on Railway's platform. Attaching your own servers: ? [^r-nodes] | Yes. Self-hosted can connect unlimited servers. [^c-price] | Yes. Multi-server / remote servers on the OSS edition. [^d-diff] |
+| Passkeys | Yes. WebAuthn passkeys for dashboard sign-in. [^a-pk] | Yes, as account MFA. The MFA page names no plan restriction. [^r-mfa] | Not documented for Coolify's own sign-in (2FA and SSO are). [^c-pk] | Yes, for panel sign-in. The Cloud plan table does not list them for Hobby. [^d-pk] |
+| Multi-node | Yes. Additional servers join with `aven-agent`. [^a-nodes] | Horizontal replicas (plan limits) and geographic regions, on Railway's platform. Attaching your own servers is not documented. [^r-nodes] | Yes. Self-hosted can connect unlimited servers. [^c-price] | Yes. Multi-server / remote servers on the OSS edition. [^d-diff] |
 | Preview environments | Yes. Pull-request environments. [^a-prev] | Yes. PR environments, created when a pull request opens and removed when it merges or closes. [^r-prev] | Yes. Pull-request and merge-request previews. [^c-prev] | Yes. GitHub pull-request previews, off by default. [^d-prev] |
 | Managed databases | One-click Postgres, MySQL, Redis, MongoDB, and an S3-compatible bucket, on your servers. [^a-db] | Postgres, MySQL, Redis, and MongoDB templates. Railway provisions each one. HA is a conversion you turn on. [^r-db] | One-click Postgres, MySQL, MariaDB, MongoDB, Redis, Dragonfly, KeyDB, and ClickHouse, plus SQLite marked experimental, on your servers. [^c-db] | MySQL, PostgreSQL, MongoDB, Redis, and MariaDB, on your servers. [^d-feat] |
-| PITR / backups | Postgres WAL and MySQL binlog PITR to backup storage, logical database backups, and a copy of Aven's own SQLite database. [^a-pitr] | Volume backups, and PITR for Postgres and MySQL, which you turn on. [^r-pitr] | Scheduled dumps (Postgres uses `pg_dump` / `pg_dumpall`) with optional S3. The Postgres guide says PITR is continuous WAL archiving you set up separately. [^c-pitr] | Manual and scheduled database backups. PITR: ? [^d-feat] |
+| PITR / backups | Postgres WAL and MySQL binlog PITR to backup storage, logical database backups, and a copy of Aven's own SQLite database. [^a-pitr] | Volume backups, and PITR for Postgres and MySQL, which you turn on. [^r-pitr] | Scheduled dumps (Postgres uses `pg_dump` / `pg_dumpall`) with optional S3. The Postgres guide says PITR is continuous WAL archiving you set up separately. [^c-pitr] | Manual and scheduled database backups. PITR is not documented. [^d-feat] |
 | Git push deploy | GitHub push webhooks. This tree has no git receive-pack server. [^a-git] | GitHub autodeploy when the connected branch is pushed. [^r-git] | Deploy on push through a GitHub App, GitLab, or a repository webhook. [^c-git] | GitHub autodeploy on push. Webhooks for GitHub, GitLab, Bitbucket, and Gitea. [^d-git] |
-| Dockerfile / buildpack / Nixpacks | Dockerfile and Railpack. Unknown `railway.json` keys such as `nixpacksPlan` are ignored. A Dokploy nixpacks build is imported as Railpack. [^a-build] | Railpack and Dockerfile. Nixpacks and buildpacks: ? [^r-build] | Nixpacks, Dockerfile, Docker Compose, and static. Buildpacks: ? [^c-build] | Nixpacks (the default), Railpack, Dockerfile, Heroku buildpacks, Paketo buildpacks, and static. [^d-build] |
+| Dockerfile / buildpack / Nixpacks | Dockerfile and Railpack. Unknown `railway.json` keys such as `nixpacksPlan` are ignored. A Dokploy nixpacks build is imported as Railpack. [^a-build] | Railpack and Dockerfile. Heroku and Paketo buildpacks were retired in 2025, and the build docs no longer mention Nixpacks. [^r-build] [^r-bp] | Nixpacks, Dockerfile, Docker Compose, and static. Buildpacks are not among the documented build packs. [^c-build] | Nixpacks (the default), Railpack, Dockerfile, Heroku buildpacks, Paketo buildpacks, and static. [^d-build] |
 | Web UI | Yes. Embedded dashboard, English and Korean. [^aven] | Yes. Project canvas and service settings. [^r-ui] | Yes. Dashboard. [^c-price] | Yes. Dashboard. [^d-diff] |
 | CLI | Yes. `aven`. [^a-cli] | Yes. Railway CLI, documented as open source. [^r-cli] | Yes. `coolify`. [^c-cli] | Yes. `@dokploy/cli`. [^d-cli] |
-
-`?` in the table:
-
-- Railway: a self-host installer; the platform source license; whether passkeys are on every plan; attaching your own servers; Nixpacks and buildpacks.
-- Coolify: passkeys for the Coolify dashboard itself; buildpacks (Heroku, Paketo, or Cloud Native Buildpacks).
-- Dokploy: database PITR; whether Cloud Hobby includes passkeys. The account-security page documents panel passkeys, and the Cloud plan table lists 2FA as unavailable on Hobby without mentioning passkeys.
 
 [^aven]: This repository: [README.md](README.md), [docs/self-hosting.md](docs/self-hosting.md), [install-server.sh](install-server.sh). A search of the Go sources and docs found no billing, price, or license-key gate.
 [^a-lic]: [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (AGPL-3.0-only).
@@ -99,6 +93,8 @@ Aven cells come from this repository. Competitor cells come from the official pa
 [^r-db]: [Postgres](https://docs.railway.com/databases/postgresql), [MySQL](https://docs.railway.com/databases/mysql), [Redis](https://docs.railway.com/databases/redis), and [MongoDB](https://docs.railway.com/databases/mongodb), fetched 2026-10-27.
 [^r-pitr]: [docs.railway.com/volumes/point-in-time-recovery](https://docs.railway.com/volumes/point-in-time-recovery) (Postgres and MySQL) and the backup sections of the Postgres and MySQL pages above, fetched 2026-10-27.
 [^r-git]: [docs.railway.com/deployments/github-autodeploys](https://docs.railway.com/deployments/github-autodeploys), fetched 2026-10-27.
+[^r-bp]: [Heroku Buildpacks & Paketo deprecation notice](https://station.railway.com/feedback/important-heroku-buildpacks-paketo-de-8e60f54d), posted by Railway staff on 2025-01-13, fetched 2026-10-27. Railway retired both builders on 2025-02-21.
+[^r-ent]: [docs.railway.com/maturity/enterprise](https://docs.railway.com/maturity/enterprise), fetched 2026-10-27 (“Your workloads run on dedicated Railway hosts for complete resource isolation”).
 [^r-build]: [docs.railway.com/builds](https://docs.railway.com/builds), fetched 2026-10-27. The page documents Railpack and Dockerfiles. It does not mention Nixpacks or buildpacks.
 [^r-ui]: Project canvas on the Postgres page and service settings on the autodeploy page, same fetches as above.
 
@@ -261,7 +257,7 @@ What Aven shares with Railway is on the surface:
 - **Compatibility.** Aven accepts `railway.json` / `railway.toml` config files and offers a GraphQL endpoint shaped like Railway's public API, so existing configuration and scripts keep working when you move.
 - **Railpack.** Builds without a Dockerfile use [Railpack](https://github.com/railwayapp/railpack), an open-source builder published by Railway (MIT, [license](https://github.com/railwayapp/railpack/blob/main/LICENSE)), run as a separate program.
 
-Railway is a trademark of its owner and is used here only to describe compatibility. The [comparison](#comparison) records what the Railway docs say, and leaves the platform license as `?` because the pages checked did not state it.
+Railway is a trademark of its owner and is used here only to describe compatibility. The [comparison](#comparison) records what the Railway docs say, and notes that Railway has not published the platform's source.
 
 ## Documentation
 

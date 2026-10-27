@@ -55,29 +55,23 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
 
 ## 비교
 
-aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아래 공식 페이지에서 가져왔고, 확인 날짜는 2026-10-27입니다. 그 페이지가 사실을 말하지 않으면 칸은 `?`입니다. `?`는 기능이 없다는 뜻이 아닙니다.
+Aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아래 공식 페이지에서 가져왔고, 확인 날짜는 2026-10-27입니다. “문서에 없음”은 그 페이지가 기능을 설명하지 않았다는 뜻이며, 기능이 없다는 주장이 아닙니다.
 
 | | Aven | Railway | Coolify | Dokploy |
 | --- | --- | --- | --- | --- |
-| 셀프호스팅 | 예. Linux 호스트에서 `aven-server`, 추가 호스트에서 `aven-agent`. [^aven] | Free부터 Enterprise까지 호스팅 플랜. 셀프호스트 설치 프로그램: ? [^r-price] | 예. 셀프호스팅이 무료 에디션입니다. [^c-price] | 예. Self-Hosted (OSS). [^d-diff] |
+| 셀프호스팅 | 예. Linux 호스트에서 `aven-server`, 추가 호스트에서 `aven-agent`. [^aven] | Free부터 Enterprise까지 호스팅 플랜. Enterprise에는 Railway가 관리하는 전용 호스트가 있습니다. 자기 서버용 설치 프로그램은 문서에 없음. [^r-price] [^r-ent] | 예. 셀프호스팅이 무료 에디션입니다. [^c-price] | 예. Self-Hosted (OSS). [^d-diff] |
 | 요금 | 이 저장소에는 사용량 요금도 유료 기능 게이트도 없습니다. 머신 비용은 직접 냅니다. [^aven] | CPU, 메모리, 볼륨을 초 단위로 과금하고 플랜 요금이 붙습니다. Free 플랜은 월 $0에 사용 크레딧 $1입니다. [^r-price] | 셀프호스팅은 무료이고 현재와 이후 기능을 모두 포함합니다. Cloud는 서버 2대까지 월 $5, 그다음 서버마다 월 $3입니다. [^c-price] | Self-Hosted (OSS)는 무료입니다. Cloud는 서버당 월 $4.50부터입니다. Enterprise는 라이선스(문의)입니다. [^d-diff] |
-| 라이선스 | AGPL-3.0-only. [^a-lic] | ? 확인한 페이지에는 플랫폼 라이선스가 없습니다. CLI 문서는 CLI가 오픈소스라고 합니다. [^r-cli] | Apache-2.0. [^c-lic] | Apache-2.0. `/proprietary` 디렉터리가 있으면 `LICENSE.MD`는 그 부분을 별도의 독점 라이선스로 둡니다. [^d-lic] |
+| 라이선스 | AGPL-3.0-only. [^a-lic] | 플랫폼 소스는 공개되지 않았습니다. CLI는 오픈소스입니다. [^r-cli] | Apache-2.0. [^c-lic] | Apache-2.0. `/proprietary` 디렉터리가 있으면 `LICENSE.MD`는 그 부분을 별도의 독점 라이선스로 둡니다. [^d-lic] |
 | 무료 구성의 SSO | 예. SAML SSO가 코어에 있습니다. [^a-sso] | Free 플랜에는 없습니다. SSO는 Enterprise와 committed spend에 있습니다. [^r-price] | 셀프호스팅(무료 에디션)은 v4.3.0부터 예. Coolify Cloud는 자체 로그인을 관리합니다. [^c-sso] | 없습니다. SSO는 Enterprise 전용입니다. OSS와 Enterprise가 아닌 Cloud에는 없습니다. [^d-diff] |
-| 패스키 | 예. 대시보드 로그인용 WebAuthn 패스키. [^a-pk] | 예. 계정 MFA입니다. 모든 플랜에 있는지는 ? [^r-mfa] | ? [^c-pk] | 예. 패널 로그인에 있습니다. Cloud Hobby에 있는지는 ? [^d-pk] |
-| 여러 노드 | 예. 추가 서버는 `aven-agent`로 붙입니다. [^a-nodes] | Railway 플랫폼의 수평 replica(플랜 한도)와 지역. 자기 서버를 붙이는 기능: ? [^r-nodes] | 예. 셀프호스팅은 서버를 무제한으로 연결할 수 있습니다. [^c-price] | 예. OSS 에디션의 멀티 서버 / 원격 서버. [^d-diff] |
+| 패스키 | 예. 대시보드 로그인용 WebAuthn 패스키. [^a-pk] | 예. 계정 MFA입니다. MFA 문서에 플랜 제한은 없습니다. [^r-mfa] | Coolify 자체 로그인용은 문서에 없음(2FA와 SSO는 있음). [^c-pk] | 예. 패널 로그인에 있습니다. Cloud 플랜 표에는 Hobby용으로 나오지 않습니다. [^d-pk] |
+| 여러 노드 | 예. 추가 서버는 `aven-agent`로 붙입니다. [^a-nodes] | Railway 플랫폼의 수평 replica(플랜 한도)와 지역. 자기 서버를 붙이는 기능은 문서에 없음. [^r-nodes] | 예. 셀프호스팅은 서버를 무제한으로 연결할 수 있습니다. [^c-price] | 예. OSS 에디션의 멀티 서버 / 원격 서버. [^d-diff] |
 | 미리보기 환경 | 예. pull request 환경. [^a-prev] | 예. PR이 열리면 만들고, 머지하거나 닫으면 지우는 PR 환경. [^r-prev] | 예. pull request와 merge request 미리보기. [^c-prev] | 예. GitHub pull request 미리보기. 기본값은 꺼져 있습니다. [^d-prev] |
 | 관리형 데이터베이스 | 내 서버에서 클릭 한 번으로 Postgres, MySQL, Redis, MongoDB, S3 호환 버킷. [^a-db] | Postgres, MySQL, Redis, MongoDB 템플릿. Railway가 각각 프로비저닝합니다. HA는 켜서 전환합니다. [^r-db] | 내 서버에서 클릭 한 번으로 Postgres, MySQL, MariaDB, MongoDB, Redis, Dragonfly, KeyDB, ClickHouse. SQLite는 experimental. [^c-db] | 내 서버에서 MySQL, PostgreSQL, MongoDB, Redis, MariaDB. [^d-feat] |
-| PITR / 백업 | 백업 저장소로 보내는 Postgres WAL·MySQL binlog PITR, 논리 백업, Aven 자체 SQLite 복사본. [^a-pitr] | 볼륨 백업과, 직접 켜는 Postgres·MySQL PITR. [^r-pitr] | 예약 덤프(Postgres는 `pg_dump` / `pg_dumpall`)와 선택적 S3. Postgres 가이드는 PITR을 따로 구성하는 연속 WAL 아카이빙이라고 합니다. [^c-pitr] | 수동·예약 데이터베이스 백업. PITR: ? [^d-feat] |
+| PITR / 백업 | 백업 저장소로 보내는 Postgres WAL·MySQL binlog PITR, 논리 백업, Aven 자체 SQLite 복사본. [^a-pitr] | 볼륨 백업과, 직접 켜는 Postgres·MySQL PITR. [^r-pitr] | 예약 덤프(Postgres는 `pg_dump` / `pg_dumpall`)와 선택적 S3. Postgres 가이드는 PITR을 따로 구성하는 연속 WAL 아카이빙이라고 합니다. [^c-pitr] | 수동·예약 데이터베이스 백업. PITR은 문서에 없음. [^d-feat] |
 | Git push 배포 | GitHub push webhook. 이 트리에는 git receive-pack 서버가 없습니다. [^a-git] | 연결된 브랜치에 push하면 GitHub autodeploy. [^r-git] | GitHub App, GitLab, 또는 저장소 webhook으로 push 배포. [^c-git] | push하면 GitHub autodeploy. GitHub, GitLab, Bitbucket, Gitea용 webhook. [^d-git] |
-| Dockerfile / buildpack / Nixpacks | Dockerfile과 Railpack. `nixpacksPlan` 같은 모르는 `railway.json` 키는 무시합니다. Dokploy의 nixpacks 빌드는 Railpack으로 가져옵니다. [^a-build] | Railpack과 Dockerfile. Nixpacks와 buildpack: ? [^r-build] | Nixpacks, Dockerfile, Docker Compose, static. Buildpack: ? [^c-build] | Nixpacks(기본값), Railpack, Dockerfile, Heroku buildpack, Paketo buildpack, static. [^d-build] |
+| Dockerfile / buildpack / Nixpacks | Dockerfile과 Railpack. `nixpacksPlan` 같은 모르는 `railway.json` 키는 무시합니다. Dokploy의 nixpacks 빌드는 Railpack으로 가져옵니다. [^a-build] | Railpack과 Dockerfile. Heroku·Paketo buildpack은 2025년에 종료됐고, 빌드 문서에는 Nixpacks가 더 이상 나오지 않습니다. [^r-build] [^r-bp] | Nixpacks, Dockerfile, Docker Compose, static. 문서의 빌드 방식에 buildpack은 없습니다. [^c-build] | Nixpacks(기본값), Railpack, Dockerfile, Heroku buildpack, Paketo buildpack, static. [^d-build] |
 | 웹 UI | 예. 내장 대시보드, 영어와 한국어. [^aven] | 예. 프로젝트 캔버스와 서비스 설정. [^r-ui] | 예. 대시보드. [^c-price] | 예. 대시보드. [^d-diff] |
 | CLI | 예. `aven`. [^a-cli] | 예. Railway CLI. 오픈소스로 문서화되어 있습니다. [^r-cli] | 예. `coolify`. [^c-cli] | 예. `@dokploy/cli`. [^d-cli] |
-
-표의 `?`:
-
-- Railway: 셀프호스트 설치 프로그램, 플랫폼 소스 라이선스, 패스키가 모든 플랜에 있는지, 자기 서버를 붙이는 기능, Nixpacks와 buildpack.
-- Coolify: Coolify 대시보드 자체의 패스키, buildpack(Heroku, Paketo, Cloud Native Buildpacks).
-- Dokploy: 데이터베이스 PITR, Cloud Hobby의 패스키. 계정 보안 페이지는 패널 패스키를 설명하고, Cloud 플랜 표는 Hobby의 2FA를 쓸 수 없다고만 하며 패스키는 언급하지 않습니다.
 
 [^aven]: 이 저장소: [README.md](README.md), [docs/self-hosting.md](docs/self-hosting.md), [install-server.sh](install-server.sh). Go 소스와 문서에서 과금, 가격, 라이선스 키 게이트는 찾지 못했습니다.
 [^a-lic]: [LICENSE](LICENSE)와 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) (AGPL-3.0-only).
@@ -99,6 +93,8 @@ aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 [^r-db]: [Postgres](https://docs.railway.com/databases/postgresql), [MySQL](https://docs.railway.com/databases/mysql), [Redis](https://docs.railway.com/databases/redis), [MongoDB](https://docs.railway.com/databases/mongodb), 2026-10-27에 확인.
 [^r-pitr]: [docs.railway.com/volumes/point-in-time-recovery](https://docs.railway.com/volumes/point-in-time-recovery) (Postgres와 MySQL)와 위 Postgres·MySQL 페이지의 백업 절, 2026-10-27에 확인.
 [^r-git]: [docs.railway.com/deployments/github-autodeploys](https://docs.railway.com/deployments/github-autodeploys), 2026-10-27에 확인.
+[^r-bp]: [Heroku Buildpacks & Paketo deprecation notice](https://station.railway.com/feedback/important-heroku-buildpacks-paketo-de-8e60f54d), Railway 직원이 2025-01-13에 게시, 2026-10-27에 확인. Railway는 2025-02-21에 두 빌더를 종료했습니다.
+[^r-ent]: [docs.railway.com/maturity/enterprise](https://docs.railway.com/maturity/enterprise), 2026-10-27에 확인 (“Your workloads run on dedicated Railway hosts for complete resource isolation”).
 [^r-build]: [docs.railway.com/builds](https://docs.railway.com/builds), 2026-10-27에 확인. Railpack과 Dockerfile을 설명합니다. Nixpacks와 buildpack은 언급하지 않습니다.
 [^r-ui]: Postgres 페이지의 프로젝트 캔버스와 autodeploy 페이지의 서비스 설정. 위와 같은 확인입니다.
 
@@ -261,7 +257,7 @@ Railway와 닮은 점은 겉모습입니다.
 - **호환성.** Aven은 `railway.json` / `railway.toml`을 읽고, Railway 공개 API 형태의 GraphQL 엔드포인트에 답합니다. 옮겨 와도 기존 설정과 스크립트가 계속 동작합니다.
 - **Railpack.** Dockerfile 없는 빌드는 Railway가 공개한 오픈소스 빌더 [Railpack](https://github.com/railwayapp/railpack)을 별도 프로그램으로 실행합니다 (MIT, [라이선스](https://github.com/railwayapp/railpack/blob/main/LICENSE)).
 
-Railway는 그 권리자의 상표이며, 여기서는 호환성을 설명하는 데만 씁니다. [비교](#비교)는 Railway 문서가 말한 것만 적고, 확인한 페이지가 플랫폼 라이선스를 말하지 않아 그 칸은 `?`로 두었습니다.
+Railway는 그 권리자의 상표이며, 여기서는 호환성을 설명하는 데만 씁니다. [비교](#비교)는 Railway 문서가 말한 것만 적고, Railway가 플랫폼 소스를 공개하지 않았다는 점을 적습니다.
 
 ## 문서
 
