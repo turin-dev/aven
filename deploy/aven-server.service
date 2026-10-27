@@ -1,9 +1,9 @@
-# aven-server systemd unit. Configure /etc/keel/aven.env before enabling.
+# aven-server systemd unit. Configure /etc/aven/aven.env before enabling.
 # 설치: sudo install -m 0644 deploy/aven-server.service /etc/systemd/system/
-#       sudo install -m 0600 deploy/aven.env.example /etc/keel/aven.env  (값을 채운다)
+#       sudo install -m 0600 deploy/aven.env.example /etc/aven/aven.env  (값을 채운다)
 #       sudo install -m 0755 bin/aven-server /usr/local/bin/aven-server
-#       sudo install -m 0755 bin/aven-agent-linux-amd64 bin/aven-agent-linux-arm64 /usr/local/lib/keel/
-#       sudo install -m 0755 bin/aven-linux-* bin/aven-darwin-* bin/aven-windows-*.exe /usr/local/lib/keel/  (CLI downloads, make clis)
+#       sudo install -m 0755 bin/aven-agent-linux-amd64 bin/aven-agent-linux-arm64 /usr/local/lib/aven/
+#       sudo install -m 0755 bin/aven-linux-* bin/aven-darwin-* bin/aven-windows-*.exe /usr/local/lib/aven/  (CLI downloads, make clis)
 #       sudo systemctl daemon-reload && sudo systemctl enable --now aven-server
 [Unit]
 Description=aven PaaS server
@@ -14,12 +14,12 @@ Requires=docker.service
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/keel/aven.env
+EnvironmentFile=/etc/aven/aven.env
 ExecStart=/usr/local/bin/aven-server
 Restart=always
 RestartSec=3
-# 데이터(SQLite, master.key, DB 백업)는 KEEL_DATA(/var/lib/keel)에 있다. /tmp(tmpfs)에 두면 재부팅 때 사라진다.
-StateDirectory=keel
+# 데이터(SQLite, master.key, DB 백업)는 AVEN_DATA(/var/lib/aven)에 있다. /tmp(tmpfs)에 두면 재부팅 때 사라진다.
+StateDirectory=aven
 StateDirectoryMode=0700
 LimitNOFILE=1048576
 # 컨테이너가 계속 돌아가야 하므로 aven-server만 멈춘다(proxy·앱 컨테이너는 Docker restart 정책으로 산다).

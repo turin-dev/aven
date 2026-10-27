@@ -148,8 +148,9 @@ func TestNetworkingHandler(t *testing.T) {
 		t.Errorf("tcp: %+v", tp)
 	}
 	pr := v.Private
-	fqdn := f.web.Name + "." + f.prod.Name + ".keel.internal"
-	if pr.DNSName != f.web.Name || pr.FQDN != fqdn || !reflect.DeepEqual(pr.Aliases, []string{f.web.Name, fqdn}) ||
+	fqdn := f.web.Name + "." + f.prod.Name + ".aven.internal"
+	legacy := f.web.Name + "." + f.prod.Name + ".keel.internal"
+	if pr.DNSName != f.web.Name || pr.FQDN != fqdn || !reflect.DeepEqual(pr.Aliases, []string{f.web.Name, fqdn, legacy}) ||
 		!reflect.DeepEqual(pr.IPv4, []string{"10.20.0.5"}) || !reflect.DeepEqual(pr.IPv6, []string{"fd00:1::5"}) || !reflect.DeepEqual(pr.MeshPorts, []int{8080}) {
 		t.Errorf("private: %+v", pr)
 	}

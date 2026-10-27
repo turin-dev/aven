@@ -34,7 +34,7 @@ func TestAddDomainTunnelDefaultsAndClaims(t *testing.T) {
 	}
 	vf, _ := out["verification"].(map[string]any)
 	txt, _ := vf["txt"].(map[string]any)
-	if txt["name"] != "_keel-verify.direct.example.org" || !strings.HasPrefix(txt["value"].(string), "keel-verify=") || len(txt["value"].(string)) != len("keel-verify=")+32 {
+	if txt["name"] != "_aven-verify.direct.example.org" || !strings.HasPrefix(txt["value"].(string), "aven-verify=") || len(txt["value"].(string)) != len("aven-verify=")+32 {
 		t.Fatalf("verification: %v", vf)
 	}
 	if recs, _ := out["dns"].([]any); len(recs) != 1 || recs[0].(map[string]any)["status"] != "pending" {

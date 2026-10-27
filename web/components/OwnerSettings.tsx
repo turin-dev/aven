@@ -182,11 +182,11 @@ function ServerCard({ data }: { data: OwnerOverview }) {
         <Row label={t("노드")}>{s.node} <span className="text-gray-500">· PID {s.pid}</span></Row>
         <Row label={t("가동 시간")}>{fmtUptime(s.uptime_seconds)} <span className="text-gray-500">· {t("{time} 시작", { time: fmtTime(s.started_at) })}</span></Row>
         <Row label={t("실행 방식")}>{s.systemd ? t("systemd 서비스(재시작 가능)") : t("직접 실행(여기서 재시작할 수 없음)")}</Row>
-        <Row label={t("데이터")}>{s.data_dir || "-"} <span className="text-gray-500">· keel.db {fmtBytes(s.db_bytes)}</span></Row>
+        <Row label={t("데이터")}>{s.data_dir || "-"} <span className="text-gray-500">· {s.db_name || "aven.db"} {fmtBytes(s.db_bytes)}</span></Row>
         <Row label={t("공개 URL")}>{s.public_url || <span className="text-gray-500">{t("없음")}</span>}</Row>
         <Row label={t("계정·연결")}>{t("사용자 {users}명 · 활성 세션 {sessions}개 · API 토큰 {tokens}개", { users: data.counts.users, sessions: data.counts.sessions, tokens: data.counts.api_tokens })}</Row>
-        <Row label="KEEL_ADMIN_PASSWORD"><Flag on={s.admin_password_set} /></Row>
-        <Row label="KEEL_API_TOKEN"><Flag on={s.legacy_api_token_set} yes={t("설정됨(모든 권한)")} /></Row>
+        <Row label="AVEN_ADMIN_PASSWORD"><Flag on={s.admin_password_set} /></Row>
+        <Row label="AVEN_API_TOKEN"><Flag on={s.legacy_api_token_set} yes={t("설정됨(모든 권한)")} /></Row>
         <Row label="GitHub"><span>OAuth <Flag on={s.github_oauth_configured} /> · {t("웹훅 비밀")} <Flag on={s.github_webhook_secret_set} /></span></Row>
         <Row label="SMTP"><Flag on={s.smtp_configured} /></Row>
         <Row label={t("보안")}>{tr("Secure 쿠키 {cookie} · 옛 agent 연결 {agents} · 신뢰 프록시 {proxies}개", {
@@ -245,7 +245,7 @@ function LockdownCard() {
 
 /* ── owner 계정과 서버 관리자 권한 범위 ─────────────────────────────── */
 
-const SOURCE_LABEL = { role: t("서버 역할"), builtin: t("기본 계정"), env: "KEEL_SUPERADMINS" };
+const SOURCE_LABEL = { role: t("서버 역할"), builtin: t("기본 계정"), env: "AVEN_SUPERADMINS" };
 
 export function OwnerAccess() {
   const query = useOwnerOverview();
@@ -272,7 +272,7 @@ function OwnersCard({ data }: { data: OwnerOverview }) {
   const ownerIDs = new Set(data.owners.map((o) => o.id));
   const candidates = (users.data ?? []).filter((u) => !u.disabled && !ownerIDs.has(u.id));
   const picked = candidates.find((u) => u.id === target);
-  // 기본 계정·KEEL_SUPERADMINS는 역할과 상관없이 owner라 넘겨도 owner로 남는다.
+  // 기본 계정·AVEN_SUPERADMINS는 역할과 상관없이 owner라 넘겨도 owner로 남는다.
   const canStepDown = !!me && me.role === "owner" && !me.builtin;
   return (
     <>
@@ -284,7 +284,7 @@ function OwnersCard({ data }: { data: OwnerOverview }) {
             <li key={o.id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{o.name || o.email}{o.id === me?.id && <span className="ml-2 text-xs text-pink-500">{t("나")}</span>}</div>
-                <div className="truncate text-xs tabular-nums text-gray-500">{o.email} · {SOURCE_LABEL[o.source]}{o.superadmin && o.source !== "env" ? " · KEEL_SUPERADMINS" : ""} · 2FA {o.totp_enabled ? t("켬") : t("끔")}{o.last_login_at ? ` · ${t("마지막 로그인 {time}", { time: fmtRelative(o.last_login_at) })}` : ""}</div>
+                <div className="truncate text-xs tabular-nums text-gray-500">{o.email} · {SOURCE_LABEL[o.source]}{o.superadmin && o.source !== "env" ? " · AVEN_SUPERADMINS" : ""} · 2FA {o.totp_enabled ? t("켬") : t("끔")}{o.last_login_at ? ` · ${t("마지막 로그인 {time}", { time: fmtRelative(o.last_login_at) })}` : ""}</div>
               </div>
               {o.disabled && <span className="text-xs text-danger">{t("비활성")}</span>}
               {o.source === "role" && o.id !== me?.id && (
@@ -299,7 +299,7 @@ function OwnersCard({ data }: { data: OwnerOverview }) {
         </ul>
       </Card>
       {data.superadmins.length > 0 && (
-        <p className="-mt-4 text-xs text-gray-500">{t("KEEL_SUPERADMINS: {list} (환경변수로만 바꿀 수 있습니다)", { list: data.superadmins.join(", ") })}</p>
+        <p className="-mt-4 text-xs text-gray-500">{t("AVEN_SUPERADMINS: {list} (환경변수로만 바꿀 수 있습니다)", { list: data.superadmins.join(", ") })}</p>
       )}
       <Card title={t("owner 추가·소유권 이전")} description={t("다른 계정을 서버 owner로 만듭니다. '나는 owner로 남기'를 끄면 소유권을 넘기고 자신은 서버 관리자가 됩니다.")}
         footer={<Button variant="primary" size="sm" disabled={!picked} onClick={() => setConfirming(true)}>{stayOwner || !canStepDown ? t("owner로 지정") : t("소유권 넘기기")}</Button>}>
@@ -309,7 +309,7 @@ function OwnersCard({ data }: { data: OwnerOverview }) {
             {candidates.map((u) => <option key={u.id} value={u.id}>{u.name ? `${u.name} (${u.email})` : u.email} · {u.role}</option>)}
           </Select>
           <label className="flex items-center justify-between gap-4 text-sm">
-            <span>{t("나는 owner로 남기")}{!canStepDown && <span className="block text-xs text-gray-500">{t("기본 계정·KEEL_SUPERADMINS는 항상 owner입니다.")}</span>}</span>
+            <span>{t("나는 owner로 남기")}{!canStepDown && <span className="block text-xs text-gray-500">{t("기본 계정·AVEN_SUPERADMINS는 항상 owner입니다.")}</span>}</span>
             <Toggle checked={stayOwner || !canStepDown} disabled={!canStepDown} onChange={setStayOwner} label={t("owner로 남기")} />
           </label>
           <ErrorBox error={error} />
@@ -440,7 +440,7 @@ export function OwnerSessions() {
 /* ── aven DB 백업 ───────────────────────────────────────────────────── */
 
 export function OwnerBackups() {
-  const backups = useQuery({ queryKey: qk.keelBackups, queryFn: api.keelBackups });
+  const backups = useQuery({ queryKey: qk.avenBackups, queryFn: api.avenBackups });
   const { busy, error, run } = useOwnerRun();
   const { confirm, node } = useConfirm();
   return (
@@ -448,7 +448,7 @@ export function OwnerBackups() {
       {node}
       <Card title={<span className="flex items-center gap-2"><HardDriveDownload className="size-4" />{t("aven DB 백업")}</span>}
         description={t("aven 자체 데이터베이스(사용자, 프로젝트, 설정, 암호화된 변수)를 서버를 멈추지 않고 데이터 디렉터리의 backups/에 복사합니다. 배포 전 수동 백업도 여기에 보입니다.")}
-        action={<Button variant="primary" size="sm" loading={busy === "create"} onClick={() => run("create", api.createKeelBackup, t("백업을 만들었습니다"))}>{t("지금 백업")}</Button>}>
+        action={<Button variant="primary" size="sm" loading={busy === "create"} onClick={() => run("create", api.createAvenBackup, t("백업을 만들었습니다"))}>{t("지금 백업")}</Button>}>
         <p className="text-xs text-gray-500">{t("백업 파일에는 비밀값이 암호화된 채 들어 있습니다. 복원하려면 같은 master.key가 필요합니다. 내려받은 파일은 안전하게 보관하세요.")}</p>
         <ErrorBox error={error ?? backups.error} className="mt-3" />
       </Card>
@@ -461,11 +461,11 @@ export function OwnerBackups() {
                   <div className="truncate font-mono">{b.name}</div>
                   <div className="text-xs tabular-nums text-gray-500">{fmtBytes(b.bytes)} · {fmtTime(b.modified_at)}</div>
                 </div>
-                <a href={api.keelBackupUrl(b.name)} download className="inline-flex h-[26px] items-center gap-1.5 rounded-md px-1.5 text-xs text-foreground hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"><Download className="size-3.5 text-gray-500" />{t("내려받기")}</a>
+                <a href={api.avenBackupUrl(b.name)} download className="inline-flex h-[26px] items-center gap-1.5 rounded-md px-1.5 text-xs text-foreground hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"><Download className="size-3.5 text-gray-500" />{t("내려받기")}</a>
                 <Button size="sm" variant="ghost" loading={busy === b.name} onClick={() => confirm({
                   title: t("백업 삭제"), danger: true, confirmLabel: t("삭제"),
                   message: <p>{tr("{name}을(를) 서버에서 지웁니다.", { name: <span className="font-mono">{b.name}</span> })}</p>,
-                  run: () => run(b.name, () => api.deleteKeelBackup(b.name), t("백업을 지웠습니다")),
+                  run: () => run(b.name, () => api.deleteAvenBackup(b.name), t("백업을 지웠습니다")),
                 })}>{t("삭제")}</Button>
               </li>
             ))}

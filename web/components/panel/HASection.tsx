@@ -304,7 +304,7 @@ function ClusterOverview({
       </div>
 
       <div className="mt-5 divide-y divide-gray-200 rounded-lg border border-gray-200 bg-secondaryBg">
-        {cluster.keel_failover && (
+        {(cluster.aven_failover ?? cluster.keel_failover) && (
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div>
               <div className="text-sm font-medium">{t("자동 failover")}</div>

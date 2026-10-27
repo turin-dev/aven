@@ -133,9 +133,9 @@ func applyPgbouncerVars(in *store.Instance, databaseName string, p *store.Postgr
 }
 
 func pooledURL(poolerName string, public bool) string {
-	host, port := "${{"+poolerName+".KEEL_PRIVATE_DOMAIN}}", strconv.Itoa(pgBouncerPort)
+	host, port := "${{"+poolerName+".AVEN_PRIVATE_DOMAIN}}", strconv.Itoa(pgBouncerPort)
 	if public {
-		host, port = "${{"+poolerName+".KEEL_TCP_PROXY_DOMAIN}}", "${{"+poolerName+".KEEL_TCP_PROXY_PORT}}"
+		host, port = "${{"+poolerName+".AVEN_TCP_PROXY_DOMAIN}}", "${{"+poolerName+".AVEN_TCP_PROXY_PORT}}"
 	}
 	return "postgresql://${{PGUSER}}:${{PGPASSWORD}}@" + host + ":" + port + "/${{PGDATABASE}}"
 }

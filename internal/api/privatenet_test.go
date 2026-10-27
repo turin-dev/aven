@@ -54,8 +54,8 @@ func TestPrivateDNSNameAPI(t *testing.T) {
 		t.Errorf("private_dns_name not pending: %v", pc)
 	}
 	name, fqdn, aliases := privateDNS(in, f.web, f.prod)
-	if name != "frontend" || fqdn != "frontend."+f.prod.Name+".keel.internal" ||
-		!slices.Equal(aliases, []string{"web", "web." + f.prod.Name + ".keel.internal", "frontend", fqdn}) {
+	if name != "frontend" || fqdn != "frontend."+f.prod.Name+".aven.internal" ||
+		!slices.Equal(aliases, []string{"web", "web." + f.prod.Name + ".aven.internal", "web." + f.prod.Name + ".keel.internal", "frontend", "frontend." + f.prod.Name + ".aven.internal", "frontend." + f.prod.Name + ".keel.internal"}) {
 		t.Fatalf("privateDNS: %s %s %v", name, fqdn, aliases)
 	}
 

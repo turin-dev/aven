@@ -29,7 +29,7 @@ func NewTag() string {
 const killClients = `for d in /proc/[0-9]*; do
   p=${d#/proc/}
   [ "$p" = "$$" ] && continue
-  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "KEEL_DATA_TAG=$KILL_TAG"; then kill -TERM "$p" 2>/dev/null; fi
+  if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "AVEN_DATA_TAG=$KILL_TAG" || tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "KEEL_DATA_TAG=$KILL_TAG"; then kill -TERM "$p" 2>/dev/null; fi
 done
 `
 
@@ -39,7 +39,7 @@ func PgCancelQuery(tag string) (string, error) {
 		return "", errors.New("invalid tag")
 	}
 	return "SELECT count(pg_cancel_backend(pid)) AS cancelled FROM pg_stat_activity\n" +
-		"WHERE application_name = 'keel-data-" + tag + "' AND pid <> pg_backend_pid();\n", nil
+		"WHERE application_name IN ('aven-data-" + tag + "', 'keel-data-" + tag + "') AND pid <> pg_backend_pid();\n", nil
 }
 
 // MySQLFindQuery는 tag 주석이 붙은 실행 중인 쿼리의 processlist id를 찾는 쿼리다.
@@ -48,8 +48,8 @@ func MySQLFindQuery(tag string) (string, error) {
 	if !tagRe.MatchString(tag) {
 		return "", errors.New("invalid tag")
 	}
-	return "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE INFO LIKE '%keel-data:" + tag +
-		"%' AND ID <> CONNECTION_ID();\n", nil
+	return "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE (INFO LIKE '%aven-data:" + tag +
+		"%' OR INFO LIKE '%keel-data:" + tag + "%') AND ID <> CONNECTION_ID();\n", nil
 }
 
 // MySQLKillQuery는 processlist id들의 쿼리를 멈추는 문장이다(연결은 남긴다). id가 없으면 빈 문자열.

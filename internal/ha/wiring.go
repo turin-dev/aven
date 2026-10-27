@@ -18,7 +18,7 @@ type Topology struct {
 }
 
 // HostRef는 서비스의 사설 도메인 참조다. 서비스 이름을 바꾸면 Aven이 참조도 같이 바꾼다.
-func HostRef(name string) string { return "${{" + name + ".KEEL_PRIVATE_DOMAIN}}" }
+func HostRef(name string) string { return "${{" + name + ".AVEN_PRIVATE_DOMAIN}}" }
 
 // Format은 clusterWiring 형식을 채운다: {host} {name} {rootName} {port}.
 func (t Topology) Format(format, name string, port int) string {

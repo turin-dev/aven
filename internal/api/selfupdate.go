@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -23,7 +23,7 @@ const settingSelfUpdate = "self_update"
 
 // selfUpdateInterval은 확인 주기다(KEEL_SELF_UPDATE_INTERVAL, 기본 30분, off면 끈다).
 func selfUpdateInterval() time.Duration {
-	v := strings.TrimSpace(os.Getenv("KEEL_SELF_UPDATE_INTERVAL"))
+	v := strings.TrimSpace(compat.Env("SELF_UPDATE_INTERVAL"))
 	if strings.EqualFold(v, "off") {
 		return 0
 	}

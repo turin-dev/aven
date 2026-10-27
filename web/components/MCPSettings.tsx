@@ -28,16 +28,16 @@ export function MCPSettings({ project, env }: { project?: string; env?: string }
   const q = (s: string) => (/^[\w.-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
   const tokenCmd = `aven tokens create --name mcp${project ? ` --project ${q(project)}` : ""}${env ? ` --environment ${q(env)}` : ""} --role member`;
   const stdio = { command: "aven", args: ["mcp"] };
-  const auth = { Authorization: "Bearer ${KEEL_TOKEN}" };
+  const auth = { Authorization: "Bearer ${AVEN_TOKEN}" };
 
   const claude =
     mode === "cli"
       ? `aven login ${origin}\nclaude mcp add aven -- aven mcp`
-      : `export KEEL_TOKEN=$(${tokenCmd})\nclaude mcp add --transport http aven ${endpoint} \\\n  --header "Authorization: Bearer $KEEL_TOKEN"`;
+      : `export AVEN_TOKEN=$(${tokenCmd})\nclaude mcp add --transport http aven ${endpoint} \\\n  --header "Authorization: Bearer $AVEN_TOKEN"`;
   const claudeJson = json({ mcpServers: { aven: mode === "cli" ? stdio : { type: "http", url: endpoint, headers: auth } } });
-  const cursor = json({ mcpServers: { aven: mode === "cli" ? stdio : { url: endpoint, headers: { Authorization: "Bearer ${env:KEEL_TOKEN}" } } } });
+  const cursor = json({ mcpServers: { aven: mode === "cli" ? stdio : { url: endpoint, headers: { Authorization: "Bearer ${env:AVEN_TOKEN}" } } } });
   const vscode = json({
-    servers: { aven: mode === "cli" ? { type: "stdio", ...stdio } : { type: "http", url: endpoint, headers: { Authorization: "Bearer ${env:KEEL_TOKEN}" } } },
+    servers: { aven: mode === "cli" ? { type: "stdio", ...stdio } : { type: "http", url: endpoint, headers: { Authorization: "Bearer ${env:AVEN_TOKEN}" } } },
   });
 
   return (
@@ -68,17 +68,17 @@ export function MCPSettings({ project, env }: { project?: string; env?: string }
                 mcp: <code className="font-mono">aven mcp</code>,
                 login: <code className="font-mono">aven login</code>,
                 install: <code className="font-mono">aven mcp install</code>,
-                token: <code className="font-mono">KEEL_TOKEN</code>,
+                token: <code className="font-mono">AVEN_TOKEN</code>,
               })
             : env
               ? tr("CLI 없이 에디터가 {endpoint}에 직접 연결합니다. 이 프로젝트의 {env} 환경으로 범위를 정한 API 토큰을 만들어 {token} 환경 변수에 넣으세요. 토큰은 설정 파일에 직접 적지 마세요.", {
                   endpoint: <code className="font-mono">/mcp</code>,
                   env,
-                  token: <code className="font-mono">KEEL_TOKEN</code>,
+                  token: <code className="font-mono">AVEN_TOKEN</code>,
                 })
               : tr("CLI 없이 에디터가 {endpoint}에 직접 연결합니다. 이 프로젝트로 범위를 정한 API 토큰을 만들어 {token} 환경 변수에 넣으세요. 토큰은 설정 파일에 직접 적지 마세요.", {
                   endpoint: <code className="font-mono">/mcp</code>,
-                  token: <code className="font-mono">KEEL_TOKEN</code>,
+                  token: <code className="font-mono">AVEN_TOKEN</code>,
                 })}
         </p>
         {mode === "http" && <Snippet value={tokenCmd} label={t("토큰 생성 명령 복사")} />}

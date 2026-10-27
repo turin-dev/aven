@@ -39,12 +39,12 @@
         },
         "variables": {
           "MYSQLDATABASE": "${{MYSQL_DATABASE}}",
-          "MYSQLHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MYSQLHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "MYSQLPASSWORD": "${{MYSQL_ROOT_PASSWORD}}",
           "MYSQLPORT": "3306",
           "MYSQLUSER": "root",
-          "MYSQL_DATABASE": "keel",
-          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+          "MYSQL_DATABASE": "aven",
+          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
           "MYSQL_ROOT_PASSWORD": "\u003crandom:32\u003e",
           "MYSQL_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{MYSQLHOST}}:${{MYSQLPORT}}/${{MYSQLDATABASE}}"
         },
@@ -92,7 +92,7 @@
           "database__connection__password": "${{mysql.MYSQLPASSWORD}}",
           "database__connection__port": "${{mysql.MYSQLPORT}}",
           "database__connection__user": "${{mysql.MYSQLUSER}}",
-          "url": "https://${{KEEL_PUBLIC_DOMAIN}}"
+          "url": "https://${{AVEN_PUBLIC_DOMAIN}}"
         },
         "volumes": [
           "/var/lib/ghost/content"
@@ -142,8 +142,8 @@
         "variables": {
           "MINIO_ROOT_PASSWORD": "\u003crandom:32\u003e",
           "MINIO_ROOT_USER": "keel",
-          "S3_ENDPOINT": "http://${{KEEL_PRIVATE_DOMAIN}}:9000",
-          "S3_PUBLIC_ENDPOINT": "https://${{KEEL_PUBLIC_DOMAIN}}"
+          "S3_ENDPOINT": "http://${{AVEN_PRIVATE_DOMAIN}}:9000",
+          "S3_PUBLIC_ENDPOINT": "https://${{AVEN_PUBLIC_DOMAIN}}"
         },
         "volumes": [
           "/data"
@@ -191,13 +191,13 @@
           "draining_seconds": null
         },
         "variables": {
-          "MONGOHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MONGOHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "MONGOPASSWORD": "${{MONGO_INITDB_ROOT_PASSWORD}}",
           "MONGOPORT": "27017",
           "MONGOUSER": "${{MONGO_INITDB_ROOT_USERNAME}}",
           "MONGO_INITDB_ROOT_PASSWORD": "\u003crandom:32\u003e",
           "MONGO_INITDB_ROOT_USERNAME": "mongo",
-          "MONGO_PUBLIC_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+          "MONGO_PUBLIC_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}",
           "MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{MONGOHOST}}:${{MONGOPORT}}"
         },
         "volumes": [
@@ -247,12 +247,12 @@
         },
         "variables": {
           "MYSQLDATABASE": "${{MYSQL_DATABASE}}",
-          "MYSQLHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "MYSQLHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "MYSQLPASSWORD": "${{MYSQL_ROOT_PASSWORD}}",
           "MYSQLPORT": "3306",
           "MYSQLUSER": "root",
-          "MYSQL_DATABASE": "keel",
-          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+          "MYSQL_DATABASE": "aven",
+          "MYSQL_PUBLIC_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
           "MYSQL_ROOT_PASSWORD": "\u003crandom:32\u003e",
           "MYSQL_URL": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{MYSQLHOST}}:${{MYSQLPORT}}/${{MYSQLDATABASE}}"
         },
@@ -304,10 +304,10 @@
         "variables": {
           "GENERIC_TIMEZONE": "UTC",
           "N8N_ENCRYPTION_KEY": "\u003crandom:32\u003e",
-          "N8N_HOST": "${{KEEL_PUBLIC_DOMAIN}}",
+          "N8N_HOST": "${{AVEN_PUBLIC_DOMAIN}}",
           "N8N_PORT": "5678",
           "N8N_PROTOCOL": "https",
-          "WEBHOOK_URL": "https://${{KEEL_PUBLIC_DOMAIN}}/"
+          "WEBHOOK_URL": "https://${{AVEN_PUBLIC_DOMAIN}}/"
         },
         "volumes": [
           "/home/node/.n8n"
@@ -355,15 +355,15 @@
           "draining_seconds": null
         },
         "variables": {
-          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{PGDATABASE}}",
           "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
           "PGDATA": "/var/lib/postgresql/data/pgdata",
           "PGDATABASE": "${{POSTGRES_DB}}",
-          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
           "PGPORT": "5432",
           "PGUSER": "${{POSTGRES_USER}}",
-          "POSTGRES_DB": "keel",
+          "POSTGRES_DB": "aven",
           "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
           "POSTGRES_USER": "postgres"
         },
@@ -445,8 +445,8 @@
           "draining_seconds": null
         },
         "variables": {
-          "BASE_URL": "https://${{KEEL_PUBLIC_DOMAIN}}",
-          "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.KEEL_PRIVATE_DOMAIN}}:8123/plausible_events_db",
+          "BASE_URL": "https://${{AVEN_PUBLIC_DOMAIN}}",
+          "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.AVEN_PRIVATE_DOMAIN}}:8123/plausible_events_db",
           "DATABASE_URL": "${{postgres.DATABASE_URL}}",
           "DISABLE_REGISTRATION": "invite_only",
           "HTTP_PORT": "8000",
@@ -498,15 +498,15 @@
           "draining_seconds": null
         },
         "variables": {
-          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{PGDATABASE}}",
           "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
           "PGDATA": "/var/lib/postgresql/data/pgdata",
           "PGDATABASE": "${{POSTGRES_DB}}",
-          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
           "PGPORT": "5432",
           "PGUSER": "${{POSTGRES_USER}}",
-          "POSTGRES_DB": "keel",
+          "POSTGRES_DB": "aven",
           "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
           "POSTGRES_USER": "postgres"
         },
@@ -556,12 +556,12 @@
           "draining_seconds": null
         },
         "variables": {
-          "REDISHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "REDISHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "REDISPASSWORD": "${{REDIS_PASSWORD}}",
           "REDISPORT": "6379",
           "REDISUSER": "default",
           "REDIS_PASSWORD": "\u003crandom:32\u003e",
-          "REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+          "REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}",
           "REDIS_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{REDISHOST}}:${{REDISPORT}}"
         },
         "volumes": [
@@ -610,15 +610,15 @@
           "draining_seconds": null
         },
         "variables": {
-          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+          "DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{PGDATABASE}}",
           "DATABASE_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
           "PGDATA": "/var/lib/postgresql/data/pgdata",
           "PGDATABASE": "${{POSTGRES_DB}}",
-          "PGHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+          "PGHOST": "${{AVEN_PRIVATE_DOMAIN}}",
           "PGPASSWORD": "${{POSTGRES_PASSWORD}}",
           "PGPORT": "5432",
           "PGUSER": "${{POSTGRES_USER}}",
-          "POSTGRES_DB": "keel",
+          "POSTGRES_DB": "aven",
           "POSTGRES_PASSWORD": "\u003crandom:32\u003e",
           "POSTGRES_USER": "postgres"
         },

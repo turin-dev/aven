@@ -15,6 +15,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"net"
 	"net/http"
 	"os"
@@ -29,11 +30,14 @@ const (
 	PrevName      = "aven-server-prev" // 교체 중 멈춰 둔 이전 aven-server(실패하면 되살린다)
 	UpgraderName  = "aven-selfupgrade" // 교체를 맡는 일회성 컨테이너(새 이미지)
 
-	EnvActive = "KEEL_SELFHOST"   // 컨테이너 안에서 "1"
-	EnvImage  = "KEEL_SELF_IMAGE" // 컨테이너가 도는 이미지
-	LabelSelf = "keel.self"
+	EnvActive       = "AVEN_SELFHOST"   // 컨테이너 안에서 "1"
+	LegacyEnvActive = "KEEL_SELFHOST"   // 예전 설치가 넣는 이름
+	EnvImage        = "AVEN_SELF_IMAGE" // 컨테이너가 도는 이미지
+	LegacyEnvImage  = "KEEL_SELF_IMAGE"
+	LabelSelf       = "aven.self"
+	LegacyLabelSelf = "keel.self"
 
-	DefaultEnvFile = "/etc/keel/aven.env"
+	DefaultEnvFile = "/etc/aven/aven.env"
 	DefaultUnit    = "aven-server" // bootstrap이 대신하는 systemd 유닛
 	// BinDir은 이미지 안에서 aven-server, railpack, agent·CLI 다운로드가 있는 곳이다(Dockerfile).
 	BinDir     = "/usr/local/bin"
@@ -42,14 +46,14 @@ const (
 )
 
 // Active는 aven-server가 self 컨테이너 안에서 도는지 알려준다.
-func Active() bool { return os.Getenv(EnvActive) == "1" }
+func Active() bool { return compat.Env("SELFHOST") == "1" }
 
 // Image는 지금 도는 self 컨테이너의 이미지다(컨테이너가 아니면 "").
 func Image() string {
 	if !Active() {
 		return ""
 	}
-	return os.Getenv(EnvImage)
+	return compat.Env("SELF_IMAGE")
 }
 
 // Paths는 aven-server 컨테이너에 같은 경로로 마운트하는 호스트 경로다.
@@ -61,10 +65,10 @@ type Paths struct {
 
 func (p Paths) withDefaults() Paths {
 	if p.DataDir == "" {
-		p.DataDir = "/var/lib/keel"
+		p.DataDir = compat.DefaultDataDir()
 	}
 	if p.EnvFile == "" {
-		p.EnvFile = DefaultEnvFile
+		p.EnvFile = compat.DefaultEnvFile()
 	}
 	if p.DockerRoot == "" {
 		p.DockerRoot = "/var/lib/docker"
@@ -84,9 +88,12 @@ func RunArgs(image string, p Paths) []string {
 		// 네트워크 로그(raw socket), 컨테이너 포트 감지(/proc/<pid>/net), 호스트 지표.
 		"--network", "host", "--pid", "host", "--uts", "host", "--privileged",
 		"--env-file", p.EnvFile,
-		"-e", EnvActive + "=1", "-e", EnvImage + "=" + image, "-e", "KEEL_DATA=" + p.DataDir,
+		"-e", EnvActive + "=1", "-e", LegacyEnvActive + "=1",
+		"-e", EnvImage + "=" + image, "-e", LegacyEnvImage + "=" + image,
+		"-e", "AVEN_DATA=" + p.DataDir, "-e", "KEEL_DATA=" + p.DataDir,
 		// env 파일의 호스트 경로 대신 이미지에 든 railpack과 다운로드 바이너리를 쓴다.
-		"-e", "KEEL_RAILPACK_BIN=" + BinDir + "/railpack", "-e", "KEEL_AGENT_BIN_DIR=" + BinDir,
+		"-e", "AVEN_RAILPACK_BIN=" + BinDir + "/railpack", "-e", "KEEL_RAILPACK_BIN=" + BinDir + "/railpack",
+		"-e", "AVEN_AGENT_BIN_DIR=" + BinDir, "-e", "KEEL_AGENT_BIN_DIR=" + BinDir,
 		"-v", DockerSock + ":" + DockerSock,
 		"-v", p.DataDir + ":" + p.DataDir,
 		// 읽기·쓰기: 대시보드의 서버 설정이 env 파일을 고친다(internal/selfhost/envfile.go).
@@ -94,7 +101,8 @@ func RunArgs(image string, p Paths) []string {
 		"-v", volumes + ":" + volumes,
 		"-v", "/root/.docker:/root/.docker", // buildx builder(keel-railpack)와 docker 설정
 		// 빌드 이미지의 keel.managed=true 라벨을 덮어쓴다: reconcile·이벤트 감시가 이 컨테이너를 앱으로 보지 않게.
-		"--label", "keel.managed=false", "--label", LabelSelf + "=server",
+		"--label", "aven.managed=false", "--label", "keel.managed=false",
+		"--label", LabelSelf + "=server", "--label", LegacyLabelSelf + "=server",
 		"--stop-timeout", "30",
 		"--log-opt", "max-size=50m", "--log-opt", "max-file=5",
 		"--health-cmd", "aven-server selfhost health",
@@ -118,7 +126,8 @@ func UpgraderArgs(o UpgradeOpts) []string {
 	envDir := filepath.Dir(p.EnvFile)
 	return []string{"run", "-d", "--name", UpgraderName,
 		"--network", "host",
-		"--label", "keel.managed=false", "--label", LabelSelf + "=upgrader",
+		"--label", "aven.managed=false", "--label", "keel.managed=false",
+		"--label", LabelSelf + "=upgrader", "--label", LegacyLabelSelf + "=upgrader",
 		"-v", DockerSock + ":" + DockerSock,
 		"-v", p.DataDir + ":" + p.DataDir,
 		"-v", envDir + ":" + envDir + ":ro",
@@ -428,7 +437,7 @@ func unitFromCgroup(s string) string {
 
 // Health는 KEEL_LISTEN의 /healthz를 확인한다(컨테이너 HEALTHCHECK).
 func Health(ctx context.Context) error {
-	listen := os.Getenv("KEEL_LISTEN")
+	listen := compat.Env("LISTEN")
 	if listen == "" {
 		listen = "[::1]:7070"
 	}
@@ -441,7 +450,7 @@ func Health(ctx context.Context) error {
 	}
 	scheme := "http"
 	client := &http.Client{Timeout: 4 * time.Second}
-	if os.Getenv("KEEL_TLS_CERT") != "" {
+	if compat.Env("TLS_CERT") != "" {
 		scheme = "https"
 		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} // 자기 자신(로컬 주소)만 확인한다
 	}
@@ -476,8 +485,8 @@ func Main(args []string) int {
 	image := fs.String("image", "", "aven-server image")
 	dep := fs.String("deployment", "", "self service deployment id")
 	prev := fs.String("previous", "", "previous current deployment id")
-	data := fs.String("data", envOr("KEEL_DATA", "/var/lib/keel"), "KEEL_DATA")
-	envFile := fs.String("env-file", DefaultEnvFile, "env file passed to the container")
+	data := fs.String("data", envOr("DATA", compat.DefaultDataDir()), "AVEN_DATA")
+	envFile := fs.String("env-file", compat.DefaultEnvFile(), "env file passed to the container")
 	dockerRoot := fs.String("docker-root", "", "docker data root (default: docker info)")
 	unit := fs.String("systemd-unit", DefaultUnit, "bootstrap: systemd unit to replace (empty: none)")
 	timeout := fs.Duration("timeout", 4*time.Minute, "health wait")
@@ -527,8 +536,8 @@ func Main(args []string) int {
 	return 0
 }
 
-func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
+func envOr(suffix, def string) string {
+	if v := compat.Env(suffix); v != "" {
 		return v
 	}
 	return def

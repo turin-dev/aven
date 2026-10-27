@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"net/http"
 	"net/netip"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -351,10 +351,10 @@ func (s *Server) localTCPProxyDomain() string {
 
 // applyLocalIngressEnv는 로컬 노드의 env 설정을 덮어쓴다(값이 있는 것만).
 func applyLocalIngressEnv(ing *store.NodeIngress, tcpProxyDomain string) {
-	if v := strings.TrimSpace(os.Getenv("KEEL_INGRESS_MODE")); v != "" {
+	if v := strings.TrimSpace(compat.Env("INGRESS_MODE")); v != "" {
 		ing.IngressMode = v
 	}
-	if v := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(os.Getenv("KEEL_INGRESS_HOSTNAME")), ".")); v != "" {
+	if v := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(compat.Env("INGRESS_HOSTNAME")), ".")); v != "" {
 		ing.IngressHostname = v
 	}
 	if v := strings.TrimSpace(tcpProxyDomain); v != "" {

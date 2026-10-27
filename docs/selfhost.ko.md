@@ -17,15 +17,15 @@ Aven은 `aven-server` 자신을 빌드하고 배포할 수 있습니다. Aven �
 - 교체하는 몇 초 동안 대시보드와 API가 끊깁니다. `keel-proxy`와 앱 컨테이너는 건드리지 않으므로 서비스는 계속 돕니다.
 - 대시보드는 특별 서비스로 다룹니다. 패널에는 배포와 설정(소스·빌드)만 있고, 배포 상세에는 상세와 빌드 로그만 있으며, 캔버스 메뉴에는 열기·설정·배포·롤백·복사만 있습니다. 카드에는 지금 도는 버전이 나옵니다.
 - **업데이트 확인.** 30분마다(그리고 시작 1분 뒤) 서비스 브랜치의 최신 커밋을 지금 배포와 GitHub API로 비교합니다(프로젝트의 GitHub 연결을 씁니다). 뒤처져 있으면 캔버스 카드에 분홍 점이 붙고, 서비스 패널에 새 커밋 목록과 **업데이트**(브랜치 최신 커밋 배포), **지금 확인**(`POST /api/owner/self-service/check`)이 나오며, 활동 기록에 새 버전마다 한 번 `aven.update_available`이 남습니다. 업데이트를 자동으로 적용하지는 않습니다.
-- **서버 설정.** 서비스의 설정 탭 맨 위 *서버 설정*에서 env 파일의 `KEEL_*` 값을 그룹(일반, 네트워크, GitHub, 메일, 고급)별로 보고 고칩니다. 비밀값은 설정 여부만 보입니다(`GET/PUT /api/owner/server-config`, 서버 owner 전용). 저장하면 파일만 바뀌고, 지금 서버와 다른 값은 *적용 대기*로 표시되며 aven-server를 다시 배포할 때 적용됩니다(**저장하고 배포**는 지금 이미지로 다시 배포하므로 빌드하지 않습니다). 그 배포가 되돌려지면 env 파일도 마지막으로 정상 동작한 서버의 사본(`KEEL_DATA/selfhost-env.good`)으로 되돌리므로 잘못된 값이 남지 않습니다. 데이터 경로와 컨테이너가 덮어쓰는 값(`KEEL_DATA`, `KEEL_GATEWAY_SECRET_FILE`, `KEEL_AGENT_BIN_DIR`, `KEEL_RAILPACK_BIN`, `KEEL_SELF_*` 파일·서비스)은 읽기 전용입니다. 이를 위해 컨테이너는 env 파일 디렉터리를 읽기·쓰기로 마운트합니다.
+- **서버 설정.** 서비스의 설정 탭 맨 위 *서버 설정*에서 env 파일의 `AVEN_*` 값을 그룹(일반, 네트워크, GitHub, 메일, 고급)별로 보고 고칩니다. 비밀값은 설정 여부만 보입니다(`GET/PUT /api/owner/server-config`, 서버 owner 전용). 저장하면 파일만 바뀌고, 지금 서버와 다른 값은 *적용 대기*로 표시되며 aven-server를 다시 배포할 때 적용됩니다(**저장하고 배포**는 지금 이미지로 다시 배포하므로 빌드하지 않습니다). 그 배포가 되돌려지면 env 파일도 마지막으로 정상 동작한 서버의 사본(`AVEN_DATA/selfhost-env.good`)으로 되돌리므로 잘못된 값이 남지 않습니다. 데이터 경로와 컨테이너가 덮어쓰는 값(`AVEN_DATA`, `AVEN_GATEWAY_SECRET_FILE`, `AVEN_AGENT_BIN_DIR`, `AVEN_RAILPACK_BIN`, `AVEN_SELF_*` 파일·서비스)은 읽기 전용입니다. 이를 위해 컨테이너는 env 파일 디렉터리를 읽기·쓰기로 마운트합니다.
 - self 서비스는 Aven에서 중지, 재시작, scale, sleep할 수 없습니다(`409`). 항상 서버 자신의 노드에 replica 1개로 돕니다. 수동 작업은 호스트에서 `docker`로 합니다.
 
 ## 준비물
 
 - [셀프 호스팅 가이드](self-hosting.ko.md)대로 설치해 systemd 유닛 `aven-server`로 도는 서버.
-- `/etc/keel/aven.env` 환경 파일(다른 경로면 `KEEL_SELF_ENV_FILE`). 컨테이너는 이 파일을 `docker --env-file`로 읽는데, 이 방식은 따옴표를 벗기지 **않습니다**. `KEY="value"`가 아니라 `KEY=value`로 쓰세요. 배포할 때 이를 확인해, 따옴표로 감싼 값이 있으면 서버를 건드리기 전에 실패합니다.
-- 환경 파일에 적힌 경로는 컨테이너 안에도 있어야 합니다. 데이터 디렉터리(`KEEL_DATA`), 환경 파일 디렉터리(서버 설정 화면이 고치므로 읽기·쓰기), Docker 볼륨, `/root/.docker`는 같은 경로로 마운트됩니다. `KEEL_RAILPACK_BIN`과 `KEEL_AGENT_BIN_DIR`은 이미지 안의 파일로 덮어씁니다. 그 밖의 경로(예: `KEEL_TLS_CERT`)는 마운트되는 경로 아래에 두어야 합니다.
-- `KEEL_LISTEN`이 사설 주소(Tailscale/WireGuard)면 Docker가 컨테이너를 띄우기 전에 그 인터페이스가 올라와 있어야 합니다. Docker가 컨테이너를 다시 시도하므로(`--restart unless-stopped`) 인터페이스가 늦으면 시작이 늦어질 뿐입니다.
+- `/etc/aven/aven.env` 환경 파일(다른 경로면 `AVEN_SELF_ENV_FILE`). 컨테이너는 이 파일을 `docker --env-file`로 읽는데, 이 방식은 따옴표를 벗기지 **않습니다**. `KEY="value"`가 아니라 `KEY=value`로 쓰세요. 배포할 때 이를 확인해, 따옴표로 감싼 값이 있으면 서버를 건드리기 전에 실패합니다.
+- 환경 파일에 적힌 경로는 컨테이너 안에도 있어야 합니다. 데이터 디렉터리(`AVEN_DATA`), 환경 파일 디렉터리(서버 설정 화면이 고치므로 읽기·쓰기), Docker 볼륨, `/root/.docker`는 같은 경로로 마운트됩니다. `AVEN_RAILPACK_BIN`과 `AVEN_AGENT_BIN_DIR`은 이미지 안의 파일로 덮어씁니다. 그 밖의 경로(예: `AVEN_TLS_CERT`)는 마운트되는 경로 아래에 두어야 합니다.
+- `AVEN_LISTEN`이 사설 주소(Tailscale/WireGuard)면 Docker가 컨테이너를 띄우기 전에 그 인터페이스가 올라와 있어야 합니다. Docker가 컨테이너를 다시 시도하므로(`--restart unless-stopped`) 인터페이스가 늦으면 시작이 늦어질 뿐입니다.
 
 ## 대시보드에서 설정
 
@@ -43,11 +43,11 @@ Aven은 `aven-server` 자신을 빌드하고 배포할 수 있습니다. Aven �
 
 | 변수 | 기본값 | 뜻 |
 | --- | --- | --- |
-| `KEEL_SELF_SERVICE` | | self 서비스를 ID로 고정합니다. 대시보드보다 우선하며, 대시보드에서는 바꿀 수 없게 됩니다. |
-| `KEEL_SELF_PROJECT` | | `off`면 새로 설치할 때 aven 프로젝트를 만들지 않습니다. |
-| `KEEL_SELF_REPO`, `KEEL_SELF_BRANCH` | `https://github.com/turin-dev/aven`, `main` | 처음 시작할 때나 체크리스트에서 만드는 프로젝트의 소스. |
-| `KEEL_SELF_UPDATE_INTERVAL` | `30m` | 저장소 브랜치의 새 커밋을 확인하는 주기(`off`면 끕니다). |
-| `KEEL_SELF_ENV_FILE` | `/etc/keel/aven.env` | 컨테이너에 넘기는 환경 파일. |
+| `AVEN_SELF_SERVICE` | | self 서비스를 ID로 고정합니다. 대시보드보다 우선하며, 대시보드에서는 바꿀 수 없게 됩니다. |
+| `AVEN_SELF_PROJECT` | | `off`면 새로 설치할 때 aven 프로젝트를 만들지 않습니다. |
+| `AVEN_SELF_REPO`, `AVEN_SELF_BRANCH` | `https://github.com/turin-dev/aven`, `main` | 처음 시작할 때나 체크리스트에서 만드는 프로젝트의 소스. |
+| `AVEN_SELF_UPDATE_INTERVAL` | `30m` | 저장소 브랜치의 새 커밋을 확인하는 주기(`off`면 끕니다). |
+| `AVEN_SELF_ENV_FILE` | `/etc/aven/aven.env` | 컨테이너에 넘기는 환경 파일. |
 
 ## 직접 bootstrap
 
@@ -88,7 +88,7 @@ docker rm -f aven-server
 sudo systemctl enable --now aven-server
 ```
 
-그다음 체크리스트에서 Aven 관리를 해제하세요(또는 `KEEL_SELF_SERVICE`를 지웁니다). 그대로 두면 다음 배포가 서버를 다시 컨테이너로 옮깁니다.
+그다음 체크리스트에서 Aven 관리를 해제하세요(또는 `AVEN_SELF_SERVICE`를 지웁니다). 그대로 두면 다음 배포가 서버를 다시 컨테이너로 옮깁니다.
 
 **Docker를 업그레이드**하면 재시작 정책이 있는 다른 컨테이너처럼 `aven-server` 컨테이너도 다시 시작됩니다.
 

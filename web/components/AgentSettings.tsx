@@ -14,7 +14,7 @@ const PRESETS = [
 ];
 
 /**
- * Workspace admin settings for Keel Agent (bring-your-own-model setup, modeled on Railway's dashboard): an OpenAI-compatible
+ * Workspace admin settings for Aven Agent (bring-your-own-model setup, modeled on Railway's dashboard): an OpenAI-compatible
  * Chat Completions endpoint, model and API key. The key is stored encrypted and never shown again.
  */
 export function AgentSettings() {

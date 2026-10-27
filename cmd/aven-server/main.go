@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/secret"
 	"log/slog"
 	"net"
@@ -46,16 +47,14 @@ import (
 
 var version = "dev"
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
+// env reads AVEN_<suffix>, then KEEL_<suffix>. The old name logs one deprecation warning.
+func env(suffix, def string) string { return compat.EnvDefault(suffix, def) }
 
-func envInt(key string, def int) int {
-	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
-		return v
+func envInt(suffix string, def int) int {
+	if v := compat.Env(suffix); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
@@ -64,12 +63,12 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "selfhost" {
 		os.Exit(selfhost.Main(os.Args[2:]))
 	}
-	listen := flag.String("listen", env("KEEL_LISTEN", "[::1]:7070"), "API/UI listen address")
-	dataDir := flag.String("data", env("KEEL_DATA", "/var/lib/keel"), "data directory")
+	listen := flag.String("listen", env("LISTEN", "[::1]:7070"), "API/UI listen address")
+	dataDir := flag.String("data", env("DATA", compat.DefaultDataDir()), "data directory (AVEN_DATA)")
 	flag.Parse()
 
 	logLevel := slog.LevelInfo
-	if os.Getenv("KEEL_DEBUG") != "" {
+	if compat.Env("DEBUG") != "" {
 		logLevel = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
@@ -81,14 +80,14 @@ func main() {
 }
 
 func run(log *slog.Logger, listen, dataDir string) error {
-	password := os.Getenv("KEEL_ADMIN_PASSWORD")
+	password := compat.Env("ADMIN_PASSWORD")
 	if len(password) < 8 {
-		return errors.New("KEEL_ADMIN_PASSWORD(8자 이상)가 필요합니다")
+		return errors.New(compat.Describe("ADMIN_PASSWORD") + "(8자 이상)가 필요합니다")
 	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return err
 	}
-	st, err := store.Open(filepath.Join(dataDir, "keel.db"))
+	st, err := store.Open(compat.DBPath(dataDir))
 	if err != nil {
 		return err
 	}
@@ -125,37 +124,38 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		return err
 	}
 	caddy := proxy.New(proxy.Config{
-		HTTPPort:  envInt("KEEL_HTTP_PORT", 80),
-		HTTPSPort: envInt("KEEL_HTTPS_PORT", 443),
-		BindIP:    os.Getenv("KEEL_PROXY_BIND"),
-		TLS:       proxy.TLSMode(env("KEEL_TLS", "auto")),
-		ACMEEmail: os.Getenv("KEEL_ACME_EMAIL"),
+		HTTPPort:  envInt("HTTP_PORT", 80),
+		HTTPSPort: envInt("HTTPS_PORT", 443),
+		BindIP:    compat.Env("PROXY_BIND"),
+		TLS:       proxy.TLSMode(env("TLS", "auto")),
+		ACMEEmail: compat.Env("ACME_EMAIL"),
 		// 사설 주소(Tailscale)를 Host로 한 :80/metrics에 Caddy 지표를 낸다(Prometheus가 Traefik 때와 같은 대상으로 수집).
-		MetricsHosts: proxy.ParseList(os.Getenv("KEEL_PRIVATE_ADDRESS")),
+		MetricsHosts: proxy.ParseList(compat.Env("PRIVATE_ADDRESS")),
 
 		OTLPEndpoint: otlpEndpoint(), TraceToken: proxyTraceToken,
 	})
-	if err := caddy.EnsureRunning(ctx, node.NetworkName); err != nil {
+	if err := caddy.EnsureRunning(ctx, docker.ActiveBridge(ctx)); err != nil {
 		return err
 	}
 	// aven 밖의 upstream(다른 compose의 컨테이너 등): 허용 목록과 keel-proxy가 붙을 네트워크.
-	externalUps := proxy.ParseList(os.Getenv("KEEL_EXTERNAL_UPSTREAMS"))
+	externalUps := proxy.ParseList(compat.Env("EXTERNAL_UPSTREAMS"))
 	for _, u := range externalUps {
 		if !proxy.ValidExternalUpstream(u) {
-			return fmt.Errorf("KEEL_EXTERNAL_UPSTREAMS: %q is not a container-name or private-IP host:port", u)
+			return fmt.Errorf("%s: %q is not a container-name or private-IP host:port", compat.Describe("EXTERNAL_UPSTREAMS"), u)
 		}
 	}
-	for _, n := range proxy.ParseList(os.Getenv("KEEL_PROXY_NETWORKS")) {
+	proxyName := caddy.Resolve(ctx).Container
+	for _, n := range proxy.ParseList(compat.Env("PROXY_NETWORKS")) {
 		if err := caddy.Connect(ctx, n); err != nil {
-			log.Warn("keel-proxy could not join network", "network", n, "err", err)
+			log.Warn("proxy could not join network", "proxy", proxyName, "network", n, "err", err)
 		} else {
-			log.Info("keel-proxy joined network", "network", n)
+			log.Info("proxy joined network", "proxy", proxyName, "network", n)
 		}
 	}
 	startEdge(ctx, caddy, docker, log)
 
 	bus := &events.Bus{Store: st, Log: log}
-	// 알림: 채널(webhook/Slack/Discord/이메일), 예전 프로젝트 webhook, 사용자 알림함. 사설 목적지는 KEEL_NOTIFY_ALLOW_PRIVATE=1일 때만.
+	// 알림: 채널(webhook/Slack/Discord/이메일), 예전 프로젝트 webhook, 사용자 알림함. 사설 목적지는 AVEN_NOTIFY_ALLOW_PRIVATE=1일 때만.
 	mailer, err := notify.MailerFromEnv(os.Getenv)
 	if err != nil {
 		return err
@@ -164,11 +164,11 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	if err != nil {
 		return err
 	}
-	notifier := &notify.Notifier{Store: st, Log: log, Mailer: mailer, PublicURL: os.Getenv("KEEL_PUBLIC_URL"),
-		Guard: &notify.Guard{AllowPrivate: os.Getenv("KEEL_NOTIFY_ALLOW_PRIVATE") == "1"}}
+	notifier := &notify.Notifier{Store: st, Log: log, Mailer: mailer, PublicURL: compat.Env("PUBLIC_URL"),
+		Guard: &notify.Guard{AllowPrivate: compat.Env("NOTIFY_ALLOW_PRIVATE") == "1"}}
 	bus.Notifier = notifier
 	ipv4, ipv6 := publicIPs()
-	railpackBin := os.Getenv("KEEL_RAILPACK_BIN")
+	railpackBin := compat.Env("RAILPACK_BIN")
 	if railpackBin == "" {
 		railpackBin = findRailpack()
 	}
@@ -178,46 +178,51 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	}
 	cfg := deploy.Config{
 		DataDir:           dataDir,
-		BaseDomain:        strings.TrimPrefix(strings.ToLower(os.Getenv("KEEL_BASE_DOMAIN")), "."),
-		PublicIPv4:        env("KEEL_PUBLIC_IPV4", ipv4),
-		PublicIPv6:        env("KEEL_PUBLIC_IPV6", ipv6),
-		TCPProxyDomain:    os.Getenv("KEEL_TCP_PROXY_DOMAIN"),
+		BaseDomain:        strings.TrimPrefix(strings.ToLower(compat.Env("BASE_DOMAIN")), "."),
+		PublicIPv4:        env("PUBLIC_IPV4", ipv4),
+		PublicIPv6:        env("PUBLIC_IPV6", ipv6),
+		TCPProxyDomain:    compat.Env("TCP_PROXY_DOMAIN"),
 		NodeHostname:      nodeHostname(),
-		ProxyBind:         os.Getenv("KEEL_PROXY_BIND"),
-		GitHubToken:       os.Getenv("KEEL_GITHUB_TOKEN"),
+		ProxyBind:         compat.Env("PROXY_BIND"),
+		GitHubToken:       compat.Env("GITHUB_TOKEN"),
 		ExternalUpstreams: externalUps,
 		SelfHost:          selfHost,
 		Railpack:          railpackBin,
-		RailpackFrontend:  env("KEEL_RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"),
-		TCPPortMin:        envInt("KEEL_TCP_PORT_MIN", 20000),
-		TCPPortMax:        envInt("KEEL_TCP_PORT_MAX", 29999),
-		PrivateAddress:    strings.TrimSpace(os.Getenv("KEEL_PRIVATE_ADDRESS")),
-		Mesh:              env("KEEL_MESH", "auto"),
-		MeshPort:          envInt("KEEL_MESH_PORT", 7443),
+		RailpackFrontend:  env("RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"),
+		TCPPortMin:        envInt("TCP_PORT_MIN", 20000),
+		TCPPortMax:        envInt("TCP_PORT_MAX", 29999),
+		PrivateAddress:    strings.TrimSpace(compat.Env("PRIVATE_ADDRESS")),
+		Mesh:              env("MESH", "auto"),
+		MeshPort:          envInt("MESH_PORT", 7443),
 		OTLPEndpoint:      otlpEndpoint(),
-		IPv6Iface:         strings.TrimSpace(os.Getenv("KEEL_IPV6_IFACE")),
-		SelfServiceID:     strings.TrimSpace(os.Getenv("KEEL_SELF_SERVICE")),
-		SelfEnvFile:       env("KEEL_SELF_ENV_FILE", selfhost.DefaultEnvFile),
+		IPv6Iface:         strings.TrimSpace(compat.Env("IPV6_IFACE")),
+		SelfServiceID:     strings.TrimSpace(compat.Env("SELF_SERVICE")),
+		SelfEnvFile:       env("SELF_ENV_FILE", selfhost.DefaultEnvFile),
 	}
-	// 도메인별 공개 IPv6: KEEL_IPV6_POOL(CIDR, /64~/120)이 있으면 로컬 노드 풀로 쓴다(PATCH /api/nodes/node_local 값보다 우선).
-	if v := strings.TrimSpace(os.Getenv("KEEL_IPV6_POOL")); v != "" {
+	// 도메인별 공개 IPv6: AVEN_IPV6_POOL(CIDR, /64~/120)이 있으면 로컬 노드 풀로 쓴다(PATCH /api/nodes/node_local 값보다 우선).
+	if v := strings.TrimSpace(compat.Env("IPV6_POOL")); v != "" {
 		if _, err := node.ParseIPv6Pool(v); err != nil {
-			log.Warn("KEEL_IPV6_POOL ignored", "err", err)
+			log.Warn(compat.Describe("IPV6_POOL")+" ignored", "err", err)
 		} else {
 			cfg.IPv6Pool = v
 		}
 	}
 	// aven-server 자신의 공개 호스트: keel-proxy와 공유하는 볼륨 안 unix socket으로 받는다(컷오버 뒤 Caddy가 TLS를 끝낸다).
 	if selfHost != "" {
-		mp, err := docker.VolumeMountpoint(ctx, proxy.WakeVolume)
+		names := caddy.Resolve(ctx)
+		mp, err := docker.VolumeMountpoint(ctx, names.WakeVolume)
 		if err != nil {
 			return fmt.Errorf("self route: %w", err)
 		}
-		cfg.SelfUpstream = "unix/" + proxy.WakeDir + "/" + selfSocket
+		sockName := selfSocket
+		if names.Legacy {
+			sockName = legacySelfSocket
+		}
+		cfg.SelfUpstream = "unix/" + names.WakeDir + "/" + sockName
 		cfg.SelfHeaders = map[string]string{api.GatewayHeader: selfSecret}
-		selfListenPath = filepath.Join(mp, selfSocket)
+		selfListenPath = filepath.Join(mp, sockName)
 	}
-	// agent 인증용 내부 CA(키는 KEEL_DATA/agent-ca.key, 0600). 노드 간 mesh도 이 CA의 노드 인증서로 mTLS를 한다.
+	// agent 인증용 내부 CA(키는 AVEN_DATA/agent-ca.key, 0600). 노드 간 mesh도 이 CA의 노드 인증서로 mTLS를 한다.
 	agentCA, err := agentpki.LoadOrCreateCA(dataDir)
 	if err != nil {
 		return fmt.Errorf("agent CA: %w", err)
@@ -228,10 +233,10 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		Store: st, Docker: docker, Proxy: caddy, Logs: logs, Events: bus, Cfg: cfg, Log: log, Agents: hub, MeshCA: agentCA,
 		IPRunner: node.SystemIPRunner(), // 도메인별 IPv6 주소(root일 때만, ip -6 addr replace/del)
 	}
-	// GitHub commit status: GitHub 토큰(대시보드 연결 또는 KEEL_GITHUB_TOKEN)이 있으면 github.com 저장소의 커밋에 배포 상태를 올린다
+	// GitHub commit status: GitHub 토큰(대시보드 연결 또는 AVEN_GITHUB_TOKEN)이 있으면 github.com 저장소의 커밋에 배포 상태를 올린다
 	// (비동기, 실패해도 배포와 무관). 토큰은 요청마다 다시 읽는다.
-	poster := &ghstatus.Poster{Store: st, TokenFunc: mgr.DeploymentGitHubToken, APIBase: env("KEEL_GITHUB_API_URL", ghstatus.DefaultAPIBase),
-		PublicURL: os.Getenv("KEEL_PUBLIC_URL"), Log: log}
+	poster := &ghstatus.Poster{Store: st, TokenFunc: mgr.DeploymentGitHubToken, APIBase: env("GITHUB_API_URL", ghstatus.DefaultAPIBase),
+		PublicURL: compat.Env("PUBLIC_URL"), Log: log}
 	mgr.StatusHook = poster.Hook
 	// 원격 노드가 (다시) 연결되면 그 노드의 reconcile과 라우트 동기화를 바로 이어서 한다.
 	hub.OnRequest = mgr.HandleAgentRequest
@@ -249,7 +254,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	if err := mgr.Init(ctx); err != nil {
 		return err
 	}
-	// 노드 간 사설 네트워킹: KEEL_PRIVATE_ADDRESS(사설 IP):KEEL_MESH_PORT에서만 mTLS로 listen한다(KEEL_MESH=off로 끈다).
+	// 노드 간 사설 네트워킹: AVEN_PRIVATE_ADDRESS(사설 IP):AVEN_MESH_PORT에서만 mTLS로 listen한다(AVEN_MESH=off로 끈다).
 	if err := mgr.StartLocalMesh(ctx); err != nil {
 		log.Warn("mesh gateway disabled", "err", err)
 	} else if mgr.LocalMesh != nil {
@@ -258,15 +263,15 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	go mgr.ReconcileLoop(ctx, 30*time.Second)
 	go mgr.EgressLoop(ctx, 30*time.Second)  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
 	go mgr.DomainIPv6Loop(ctx, time.Minute) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
-	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, KEEL_NETWORK_LOGS=off로 끈다).
-	if !strings.EqualFold(strings.TrimSpace(env("KEEL_NETWORK_LOGS", "on")), "off") {
+	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
+	if !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)
 	}
 	go mgr.WatchCrashes(ctx)
 	go mgr.CronLoop(ctx)
 	go mgr.ImageUpdateLoop(ctx)
 	// wake handler: keel-proxy와 같이 쓰는 볼륨의 unix socket에서만 listen한다(외부에 열지 않음).
-	if wl, err := listenWake(ctx, docker); err != nil {
+	if wl, err := listenWake(ctx, docker, caddy); err != nil {
 		log.Warn("wake handler disabled (sleeping services cannot wake)", "err", err)
 	} else {
 		mgr.Cfg.WakeAddr = proxy.WakeDial
@@ -320,20 +325,20 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	hostname, _ := os.Hostname()
 	traceReceiver := &tracing.Receiver{Store: st, ProxyToken: proxyTraceToken, Log: log}
 	srv := &api.Server{
-		Store: st, Agents: hub, Deploy: mgr, Events: bus, Metrics: collector, AdminPassword: password, APIToken: os.Getenv("KEEL_API_TOKEN"),
-		AllowFileRepo: os.Getenv("KEEL_ALLOW_FILE_REPO") != "",
-		SessionKey:    key, SecureCookie: os.Getenv("KEEL_INSECURE_COOKIE") == "",
+		Store: st, Agents: hub, Deploy: mgr, Events: bus, Metrics: collector, AdminPassword: password, APIToken: compat.Env("API_TOKEN"),
+		AllowFileRepo: compat.Env("ALLOW_FILE_REPO") != "",
+		SessionKey:    key, SecureCookie: compat.Env("INSECURE_COOKIE") == "",
 		Web: webui.FS(), Version: version, NodeName: hostname, Log: log,
-		GitHubSecret: os.Getenv("KEEL_GITHUB_WEBHOOK_SECRET"), GitHubAPIBase: env("KEEL_GITHUB_API_URL", "https://api.github.com"),
-		GitHubClientID: os.Getenv("KEEL_GITHUB_CLIENT_ID"), GitHubClientSecret: os.Getenv("KEEL_GITHUB_CLIENT_SECRET"), PublicURL: os.Getenv("KEEL_PUBLIC_URL"),
-		AgentBinDir: os.Getenv("KEEL_AGENT_BIN_DIR"),
+		GitHubSecret: compat.Env("GITHUB_WEBHOOK_SECRET"), GitHubAPIBase: env("GITHUB_API_URL", "https://api.github.com"),
+		GitHubClientID: compat.Env("GITHUB_CLIENT_ID"), GitHubClientSecret: compat.Env("GITHUB_CLIENT_SECRET"), PublicURL: compat.Env("PUBLIC_URL"),
+		AgentBinDir: compat.Env("AGENT_BIN_DIR"),
 		Notifier:    notifier, Pricing: pricing,
 		Traces: traceReceiver,
 	}
 	go tracing.RetentionLoop(ctx, st, traceRetention(log), log)
-	trusted, err := parsePrefixes(os.Getenv("KEEL_TRUSTED_PROXIES"))
+	trusted, err := parsePrefixes(compat.Env("TRUSTED_PROXIES"))
 	if err != nil {
-		return fmt.Errorf("KEEL_TRUSTED_PROXIES: %w", err)
+		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
 	}
 	srv.TrustedProxies = trusted
 	go srv.RunHA(ctx) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
@@ -352,10 +357,10 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	go domainChecker.Run(ctx)
 	// 옛 Bearer 비밀키 agent는 기본 허용(첫 인증서 연결 때 자동 업그레이드).
 	srv.CA = agentCA
-	srv.DisableLegacyAgents = os.Getenv("KEEL_AGENT_LEGACY_BEARER") == "off"
-	// KEEL_SUPERADMINS=a@x,b@y: 모든 작업 공간에서 owner인 계정(작업 공간 격리를 넘는다).
+	srv.DisableLegacyAgents = compat.Env("AGENT_LEGACY_BEARER") == "off"
+	// AVEN_SUPERADMINS=a@x,b@y: 모든 작업 공간에서 owner인 계정(작업 공간 격리를 넘는다).
 	srv.SuperAdmins = map[string]bool{}
-	for _, e := range strings.Split(os.Getenv("KEEL_SUPERADMINS"), ",") {
+	for _, e := range strings.Split(compat.Env("SUPERADMINS"), ",") {
 		if e = store.NormalizeEmail(e); e != "" {
 			srv.SuperAdmins[e] = true
 			log.Info("superadmin", "email", e)
@@ -370,12 +375,12 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	go srv.SelfUpdateLoop(ctx) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
 	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	// OTLP 수신기(OTLP/HTTP + h2c OTLP/gRPC). 컨테이너가 host-gateway로 닿아야 하므로 기본은 모든 주소다.
-	// 요청마다 trace 토큰을 확인한다. 바깥에 열고 싶지 않으면 KEEL_OTLP_LISTEN을 docker bridge 주소로 좁히거나 off로 끈다.
+	// 요청마다 trace 토큰을 확인한다. 바깥에 열고 싶지 않으면 AVEN_OTLP_LISTEN을 docker bridge 주소로 좁히거나 off로 끈다.
 	traceServer := &http.Server{Handler: traceReceiver, ReadHeaderTimeout: 10 * time.Second}
 	traceServer.Protocols = new(http.Protocols)
 	traceServer.Protocols.SetHTTP1(true)
 	traceServer.Protocols.SetUnencryptedHTTP2(true)
-	if addr := env("KEEL_OTLP_LISTEN", ":4318"); addr != "off" {
+	if addr := env("OTLP_LISTEN", ":4318"); addr != "off" {
 		if traceListener, err := net.Listen("tcp", addr); err != nil {
 			log.Error("OTLP receiver disabled", "addr", addr, "err", err)
 		} else {
@@ -387,21 +392,21 @@ func run(log *slog.Logger, listen, dataDir string) error {
 			}()
 		}
 	}
-	// KEEL_LISTEN_UNIX: TLS를 끝내는 gateway(reverse proxy)와만 공유하는 unix socket. 이 listener로 온 요청만
-	// X-Forwarded-Proto를 믿는다(TCP listener는 KEEL_TRUSTED_PROXIES 설정을 그대로 따른다).
-	if sock := os.Getenv("KEEL_LISTEN_UNIX"); sock != "" {
+	// AVEN_LISTEN_UNIX: TLS를 끝내는 gateway(reverse proxy)와만 공유하는 unix socket. 이 listener로 온 요청만
+	// X-Forwarded-Proto를 믿는다(TCP listener는 AVEN_TRUSTED_PROXIES 설정을 그대로 따른다).
+	if sock := compat.Env("LISTEN_UNIX"); sock != "" {
 		ul, err := listenUnix(sock)
 		if err != nil {
-			return fmt.Errorf("KEEL_LISTEN_UNIX: %w", err)
+			return fmt.Errorf("%s: %w", compat.Describe("LISTEN_UNIX"), err)
 		}
-		// KEEL_GATEWAY_SECRET_FILE: gateway(Traefik middleware)가 모든 요청에 붙이는 X-Keel-Gateway 비밀. 맞는 요청만 전달 헤더를 믿는다.
+		// AVEN_GATEWAY_SECRET_FILE: gateway(Traefik middleware)가 모든 요청에 붙이는 X-Keel-Gateway 비밀. 맞는 요청만 전달 헤더를 믿는다.
 		gwSecret := ""
-		if f := os.Getenv("KEEL_GATEWAY_SECRET_FILE"); f != "" {
+		if f := compat.Env("GATEWAY_SECRET_FILE"); f != "" {
 			if gwSecret, err = gatewaySecret(f); err != nil {
-				return fmt.Errorf("KEEL_GATEWAY_SECRET_FILE: %w", err)
+				return fmt.Errorf("%s: %w", compat.Describe("GATEWAY_SECRET_FILE"), err)
 			}
 		} else {
-			log.Warn("KEEL_LISTEN_UNIX without KEEL_GATEWAY_SECRET_FILE: every peer that can reach the socket is trusted for X-Forwarded-* headers")
+			log.Warn(compat.Describe("LISTEN_UNIX") + " without " + compat.Describe("GATEWAY_SECRET_FILE") + ": every peer that can reach the socket is trusted for X-Forwarded-* headers")
 		}
 		us := &http.Server{Handler: api.ViaGateway(gwSecret, handler), ReadHeaderTimeout: 10 * time.Second}
 		go us.Serve(ul)
@@ -426,17 +431,17 @@ func run(log *slog.Logger, listen, dataDir string) error {
 			defer cancel()
 			ss.Shutdown(shutdown)
 		}()
-		log.Info("aven-server listening for keel-proxy (own public host)", "host", selfHost, "socket", selfListenPath)
+		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "socket", selfListenPath)
 	}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		return err
 	}
-	// 원격 agent의 enroll/connect는 TLS가 필요하다. 직접 TLS로 열거나(KEEL_TLS_CERT/KEEL_TLS_KEY),
-	// TLS를 끝내는 reverse proxy 뒤라면 KEEL_TRUSTED_PROXIES로 그 proxy만 믿는다.
-	certFile, keyFile := os.Getenv("KEEL_TLS_CERT"), os.Getenv("KEEL_TLS_KEY")
+	// 원격 agent의 enroll/connect는 TLS가 필요하다. 직접 TLS로 열거나(AVEN_TLS_CERT/AVEN_TLS_KEY),
+	// TLS를 끝내는 reverse proxy 뒤라면 AVEN_TRUSTED_PROXIES로 그 proxy만 믿는다.
+	certFile, keyFile := compat.Env("TLS_CERT"), compat.Env("TLS_KEY")
 	if (certFile == "") != (keyFile == "") {
-		return errors.New("KEEL_TLS_CERT and KEEL_TLS_KEY must be set together")
+		return errors.New(compat.Describe("TLS_CERT") + " and " + compat.Describe("TLS_KEY") + " must be set together")
 	}
 	if certFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -546,25 +551,27 @@ func nodeHostname() string {
 }
 
 // listenUnix는 gateway용 unix socket을 만든다(root 전용 0600; 이전 실행의 socket 파일은 지운다).
-// selfSocket은 keel-proxy와 공유하는 볼륨 안에서 aven-server가 자기 공개 호스트 요청을 받는 socket이다.
-const selfSocket = "keel-server.sock"
+// selfSocket은 aven-proxy와 공유하는 볼륨 안에서 aven-server가 자기 공개 호스트 요청을 받는 socket이다.
+// 예전 keel-proxy 레이아웃에서는 legacySelfSocket을 그대로 쓴다.
+const selfSocket = "aven-server.sock"
+const legacySelfSocket = "keel-server.sock"
 
 // selfListenPath는 selfSocket의 호스트 경로다(자기 라우트를 쓸 때만).
 var selfListenPath string
 
-// selfRoute는 KEEL_PUBLIC_URL의 호스트와 keel-proxy가 붙일 비밀을 정한다. KEEL_SELF_ROUTE=off이거나 https URL이 아니면 쓰지 않는다.
-// 비밀은 KEEL_GATEWAY_SECRET_FILE이 있으면 그것, 없으면 실행마다 새로 만든다(proxy 설정은 시작할 때 다시 넣는다).
+// selfRoute는 AVEN_PUBLIC_URL의 호스트와 keel-proxy가 붙일 비밀을 정한다. AVEN_SELF_ROUTE=off이거나 https URL이 아니면 쓰지 않는다.
+// 비밀은 AVEN_GATEWAY_SECRET_FILE이 있으면 그것, 없으면 실행마다 새로 만든다(proxy 설정은 시작할 때 다시 넣는다).
 func selfRoute() (host, secret string, err error) {
-	if strings.EqualFold(os.Getenv("KEEL_SELF_ROUTE"), "off") {
+	if strings.EqualFold(compat.Env("SELF_ROUTE"), "off") {
 		return "", "", nil
 	}
-	u, err := url.Parse(os.Getenv("KEEL_PUBLIC_URL"))
+	u, err := url.Parse(compat.Env("PUBLIC_URL"))
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
 		return "", "", nil
 	}
-	if f := os.Getenv("KEEL_GATEWAY_SECRET_FILE"); f != "" {
+	if f := compat.Env("GATEWAY_SECRET_FILE"); f != "" {
 		if secret, err = gatewaySecret(f); err != nil {
-			return "", "", fmt.Errorf("KEEL_GATEWAY_SECRET_FILE: %w", err)
+			return "", "", fmt.Errorf("%s: %w", compat.Describe("GATEWAY_SECRET_FILE"), err)
 		}
 	} else {
 		b := make([]byte, 32)
@@ -594,8 +601,8 @@ func listenUnix(path string) (net.Listener, error) {
 	return l, nil
 }
 
-func listenWake(ctx context.Context, docker *node.Docker) (net.Listener, error) {
-	mp, err := docker.VolumeMountpoint(ctx, proxy.WakeVolume)
+func listenWake(ctx context.Context, docker *node.Docker, caddy *proxy.Caddy) (net.Listener, error) {
+	mp, err := docker.VolumeMountpoint(ctx, caddy.Resolve(ctx).WakeVolume)
 	if err != nil {
 		return nil, err
 	}

@@ -14,12 +14,12 @@ The dashboard, REST API, GraphQL API, CLI and MCP use the same server checks.
 
 The `owner`, `admin`, `member`, `viewer` order is evaluated independently at each
 boundary. An instance viewer can own a workspace, and an instance owner can be a
-viewer or non-member in another workspace. `KEEL_SUPERADMINS` grants instance
+viewer or non-member in another workspace. `AVEN_SUPERADMINS` grants instance
 owner authority.
 
 ### Instance owner
 
-An instance **owner** (`users.role = owner` or `KEEL_SUPERADMINS`) is never
+An instance **owner** (`users.role = owner` or `AVEN_SUPERADMINS`) is never
 blocked: it is treated as **owner of every workspace** and **admin of every
 project**, including restricted environments and secrets, without needing
 membership rows. `GET /api/workspaces` lists every workspace for it (its own
@@ -28,7 +28,7 @@ do not get this; they keep instance operations only.
 
 API tokens and OAuth grants created by an owner are still narrowed by their own
 scope and role (an `instance` token still has no project access, a workspace
-token only reaches its workspace). The legacy `KEEL_API_TOKEN` keeps its separate
+token only reaches its workspace). The legacy `AVEN_API_TOKEN` keeps its separate
 unrestricted access.
 
 **GitHub connection.** Deploys clone, post commit statuses and read PR files with the
@@ -61,7 +61,7 @@ required workspace/project authority when the link is accepted.
 
 ## Admin panel
 
-Instance owners/admins, including `KEEL_SUPERADMINS`, see **어드민** in navigation.
+Instance owners/admins, including `AVEN_SUPERADMINS`, see **어드민** in navigation.
 `/admin/` manages account invitations, users, resource limits, nodes, global security, SAML, OAuth
 apps, global notifications, audit, Aven Agent and system status independently of
 the selected workspace or project. Account invitations do not require a team or
@@ -104,8 +104,8 @@ Project/workspace settings stay at `/settings/`; personal settings stay at
 
 ## 서버 owner 전용 관리
 
-Only an instance **owner** (`users.role = owner`, `KEEL_SUPERADMINS` or the built-in
-`KEEL_ADMIN_PASSWORD` account) sees the **Owner ·** sections in **어드민**. Instance
+Only an instance **owner** (`users.role = owner`, `AVEN_SUPERADMINS` or the built-in
+`AVEN_ADMIN_PASSWORD` account) sees the **Owner ·** sections in **어드민**. Instance
 admins, workspace owners/admins and every API token or OAuth grant (even one created by
 an owner) get 403 from `/api/owner/*`. Calls require a browser session. Every change is
 written to the audit log as `owner.*`.
@@ -115,7 +115,7 @@ written to the audit log as `owner.*`.
 | **Owner · 점검·제어** | Maintenance mode, global announcement banner, aven-server info and restart, and emergency lockdown. |
 | **Owner · 권한** | Owner list, promote/demote owners, ownership transfer, and the instance-admin capability scope. |
 | **Owner · 세션·토큰** | Every user's sessions and API tokens: revoke one, all of a user's, or everything outside the owners. |
-| **Owner · DB 백업** | Online copy of `keel.db` (`VACUUM INTO`) into `$KEEL_DATA/backups/`, plus list, download and delete. |
+| **Owner · DB 백업** | Online copy of `keel.db` (`VACUUM INTO`) into `$AVEN_DATA/backups/`, plus list, download and delete. |
 
 ### Cross-boundary owner tools
 
@@ -158,7 +158,7 @@ admins. The overview, workspace list and system status are always available. Own
 never restricted. New capabilities default to allowed.
 
 **Maintenance mode.** Every non-GET request from a principal that is not an owner returns
-`503 {"error": <message>, "maintenance": true}`. Owners and `KEEL_API_TOKEN` are exempt,
+`503 {"error": <message>, "maintenance": true}`. Owners and `AVEN_API_TOKEN` are exempt,
 as are marking notifications read and ending your own session. Reads, running services
 and scheduled jobs are unaffected. Options:
 - `block_logins` rejects new non-owner sessions (password, passkey, SAML) and invite
@@ -167,11 +167,11 @@ and scheduled jobs are unaffected. Options:
   not deploy. GitHub does not resend them, so deploy manually afterwards.
 
 **Lockdown** turns on maintenance with both options, then deletes every session and API
-token belonging to non-owners. `KEEL_SUPERADMINS` accounts are treated as owners.
+token belonging to non-owners. `AVEN_SUPERADMINS` accounts are treated as owners.
 
 **Ownership transfer** (`POST /api/owner/transfer {user_id, stay_owner}`) promotes the
 target. With `stay_owner: false`, it demotes the caller to instance admin in the same
-transaction. The built-in account and `KEEL_SUPERADMINS` remain owners regardless.
+transaction. The built-in account and `AVEN_SUPERADMINS` remain owners regardless.
 
 **Restart** sends SIGTERM to aven-server only when it runs under systemd
 (`INVOCATION_ID`). `Restart=always` starts it again, and `KillMode=process` keeps the
@@ -256,7 +256,7 @@ the instance user directory, but account/membership mutations require a session.
 OAuth `workspace:*` scopes are limited to the user's current memberships and never
 grant instance administration; project scopes remain limited to consented projects.
 
-The legacy server environment variable **`KEEL_API_TOKEN` remains an unrestricted
+The legacy server environment variable **`AVEN_API_TOKEN` remains an unrestricted
 operator credential**, including access to all workspaces, for compatibility. It
 is distinct from the new `scope: "instance"` API tokens.
 

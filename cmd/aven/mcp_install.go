@@ -56,7 +56,7 @@ func cmdMCPInstall(args []string) {
 	for _, f := range written {
 		fmt.Fprintf(os.Stderr, "aven: wrote the aven MCP server to %s\n", f)
 	}
-	fmt.Fprintln(os.Stderr, "aven: the server runs `aven mcp`, which uses your aven login session (or KEEL_TOKEN). Restart the MCP client to load it.")
+	fmt.Fprintln(os.Stderr, "aven: the server runs `aven mcp`, which uses your aven login session (or AVEN_TOKEN). Restart the MCP client to load it.")
 }
 
 // installMCP merges a "aven" stdio server into each agent's project config, keeping other servers and settings.

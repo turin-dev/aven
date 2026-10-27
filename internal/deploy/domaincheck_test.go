@@ -146,12 +146,12 @@ func TestDecorateDomainRoutesHoldsOnlyNewUnverifiedHosts(t *testing.T) {
 	if !slices.Equal(onDemand, []string{"*.wild.example.org", "new.example.org"}) {
 		t.Errorf("on-demand: %v", onDemand)
 	}
-	skip := cfg.Apps.HTTP.Servers["keel"].AutomaticHTTPS.Skip
+	skip := cfg.Apps.HTTP.Servers["aven"].AutomaticHTTPS.Skip
 	slices.Sort(skip)
 	if !slices.Equal(skip, []string{"*.wild.example.org", "new.example.org"}) {
 		t.Errorf("skip_certificates: %v", skip)
 	}
-	if _, ok := cfg.Apps.HTTP.Servers["keel-tls-ask"]; !ok {
+	if _, ok := cfg.Apps.HTTP.Servers["aven-tls-ask"]; !ok {
 		t.Error("ask server missing")
 	}
 }

@@ -11,10 +11,10 @@ func TestResolve(t *testing.T) {
 		Shared: map[string]string{"REGION": "region-a", "LABEL": "${{ REGION }}-prod"},
 		Services: map[string]map[string]string{
 			"postgres": {
-				"KEEL_PRIVATE_DOMAIN": "postgres.production.keel.internal",
+				"AVEN_PRIVATE_DOMAIN": "postgres.production.aven.internal",
 				"POSTGRES_PASSWORD":   "s3cret",
 				"PGUSER":              "postgres",
-				"DATABASE_URL":        "postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{KEEL_PRIVATE_DOMAIN}}:5432/app",
+				"DATABASE_URL":        "postgresql://${{PGUSER}}:${{POSTGRES_PASSWORD}}@${{AVEN_PRIVATE_DOMAIN}}:5432/app",
 			},
 			"web": {
 				"PORT":   "3000",
@@ -32,12 +32,12 @@ func TestResolve(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"DB":     "postgresql://postgres:s3cret@postgres.production.keel.internal:5432/app",
+		"DB":     "postgresql://postgres:s3cret@postgres.production.aven.internal:5432/app",
 		"WHERE":  "region-a-prod",
 		"SELF":   "port=3000",
 		"NOPE":   "xy",
 		"PLAIN":  "no refs $HOME ${NOT_A_REF}",
-		"NESTED": "port=3000/postgresql://postgres:s3cret@postgres.production.keel.internal:5432/app",
+		"NESTED": "port=3000/postgresql://postgres:s3cret@postgres.production.aven.internal:5432/app",
 		"PORT":   "3000",
 	}
 	for k, v := range want {

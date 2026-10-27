@@ -629,7 +629,7 @@ func newUUID() (string, error) {
 
 // injectedVar는 배포할 때 자동으로 들어오는 변수인지 본다(참조 대상 검사용).
 func injectedVar(name string) bool {
-	return strings.HasPrefix(name, "KEEL_") || name == "PORT"
+	return strings.HasPrefix(name, "AVEN_") || strings.HasPrefix(name, "KEEL_") || name == "PORT"
 }
 
 // serviceVarNames는 서비스가 갖게 될 변수 이름이다(DB 기본 변수 포함).

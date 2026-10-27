@@ -556,7 +556,7 @@ func (m *Manager) emit(ctx context.Context, t *Target, kind, msg string) {
 }
 
 func containerName(svc string, depID string, i int) string {
-	return fmt.Sprintf("keel-%s-%s-%d", svc, strings.TrimPrefix(depID, "dep_")[:8], i+1)
+	return fmt.Sprintf("aven-%s-%s-%d", svc, strings.TrimPrefix(depID, "dep_")[:8], i+1)
 }
 
 func (m *Manager) execute(depID string) {
@@ -1027,11 +1027,11 @@ func (m *Manager) copyVolumes(ctx context.Context, b *logbook.Book, vols []*stor
 		errc := make(chan error, 1)
 		tag := strings.TrimPrefix(d.ID, "dep_")
 		go func() {
-			err := from.ExportVolume(ctx, v.DockerName, fmt.Sprintf("keel-move-%s-%d", tag, i), pw)
+			err := from.ExportVolume(ctx, v.DockerName, fmt.Sprintf("aven-move-%s-%d", tag, i), pw)
 			pw.CloseWithError(err)
 			errc <- err
 		}()
-		ierr := to.ImportVolume(ctx, v.DockerName, fmt.Sprintf("keel-moveimp-%s-%d", tag, i), pr)
+		ierr := to.ImportVolume(ctx, v.DockerName, fmt.Sprintf("aven-moveimp-%s-%d", tag, i), pr)
 		pr.CloseWithError(ierr)
 		eerr := <-errc
 		if err := errors.Join(eerr, ierr); err != nil {

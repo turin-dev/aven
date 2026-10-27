@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Box, CheckCircle2, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Server, Tag, Trash2 } from "lucide-react";
-import { api, type JoinToken, type KeelNode, type NodeIngressMode, type NodeIPv6Status } from "@/lib/api";
+import { api, type JoinToken, type AvenNode, type NodeIngressMode, type NodeIPv6Status } from "@/lib/api";
 import { qk, useMe, useNodeMetrics, useNodes } from "@/lib/queries";
 import { lock, NO_PERM } from "../Perm";
 import { fmtBytes, fmtRelative, fmtTime } from "@/lib/format";
@@ -12,7 +12,7 @@ import { Button, CopyButton, Dialog, EmptyState, ErrorBox, Field, IconButton, In
 
 const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 // 노드 단위 시계열은 서버가 아직 저장하지 않는다(GET /nodes/{nid}/metrics → 501). mock 미리보기에서만 그린다.
-const NODE_METRICS = process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_KEEL_MOCK === "1";
+const NODE_METRICS = process.env.NODE_ENV === "development" && (process.env.NEXT_PUBLIC_AVEN_MOCK === "1" || process.env.NEXT_PUBLIC_KEEL_MOCK === "1");
 
 /** What a remote node cannot do yet (kept in sync with docs/api-v1.md "v1.2 deviations"). */
 function RemoteLimits({ className }: { className?: string }) {
@@ -29,7 +29,7 @@ function RemoteLimits({ className }: { className?: string }) {
   );
 }
 
-export const NODE_STATUS: Record<KeelNode["status"], { label: string; dot: string; text: string }> = {
+export const NODE_STATUS: Record<AvenNode["status"], { label: string; dot: string; text: string }> = {
   online: { label: t("온라인"), dot: "bg-green-500", text: "text-success" },
   offline: { label: t("오프라인"), dot: "bg-red-500", text: "text-danger" },
   draining: { label: t("비우는 중"), dot: "bg-yellow-500 animate-soft-pulse", text: "text-yellow-600" },
@@ -50,7 +50,7 @@ export function Sparkline({ values, max, color = "var(--pink-600)", label }: { v
   );
 }
 
-function addr(n: KeelNode) {
+function addr(n: AvenNode) {
   return n.address.ipv6 ?? n.address.ipv4 ?? n.address.private ?? t("주소 없음");
 }
 
@@ -144,7 +144,7 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
         {!tok ? (
           <>
             <p>
-              {t("다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 keel-proxy가 그 서버의 80/443 포트를 씁니다.")}
+              {t("다른 서버를 노드로 연결하면 서비스를 그 서버에 배포할 수 있습니다. 새 서버에서 실행할 설치 명령을 만들어 드립니다. Docker와 systemd가 있는 Linux(amd64, arm64)가 필요하고, 그 서버에서 이 aven 서버로 HTTPS 연결이 되어야 합니다. 노드의 aven-proxy가 그 서버의 80/443 포트를 씁니다.")}
             </p>
             <RemoteLimits />
             <Field label={t("노드 이름")} hint={t("비워 두면 서버의 hostname을 씁니다.")}>
@@ -229,7 +229,7 @@ function StepTitle({ n, children }: { n: number; children: ReactNode }) {
 
 /* ── edit dialogs ───────────────────────────────────────────────────── */
 
-function RenameNode({ node, onClose }: { node: KeelNode | null; onClose: () => void }) {
+function RenameNode({ node, onClose }: { node: AvenNode | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [name, setName] = useState(node?.name ?? "");
   const [prev, setPrev] = useState(node);
@@ -278,7 +278,7 @@ function RenameNode({ node, onClose }: { node: KeelNode | null; onClose: () => v
   );
 }
 
-function LabelsNode({ node, onClose }: { node: KeelNode | null; onClose: () => void }) {
+function LabelsNode({ node, onClose }: { node: AvenNode | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toText = (l: Record<string, string>) =>
     Object.entries(l)
@@ -339,8 +339,8 @@ function LabelsNode({ node, onClose }: { node: KeelNode | null; onClose: () => v
 
 const HOST_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
-/** 공개 진입(ingress) 설정: 방식, CNAME 대상 이름, TCP 프록시 호스트. 로컬 노드는 서버 env(KEEL_INGRESS_*)가 있으면 그 값이 우선한다. */
-function IngressNode({ node, onClose }: { node: KeelNode | null; onClose: () => void }) {
+/** 공개 진입(ingress) 설정: 방식, CNAME 대상 이름, TCP 프록시 호스트. 로컬 노드는 서버 env(AVEN_INGRESS_*)가 있으면 그 값이 우선한다. */
+function IngressNode({ node, onClose }: { node: AvenNode | null; onClose: () => void }) {
   const qc = useQueryClient();
   const [mode, setMode] = useState<NodeIngressMode>(node?.ingress_mode ?? "direct");
   const [host, setHost] = useState(node?.ingress_hostname ?? "");
@@ -415,7 +415,7 @@ function IngressNode({ node, onClose }: { node: KeelNode | null; onClose: () => 
         {node?.ipv6_status ? <IPv6PoolStatus st={node.ipv6_status} /> : null}
         {node?.is_local ? (
           <p className="text-xs text-gray-500">
-            {t("로컬 노드는 서버 환경 변수(KEEL_INGRESS_MODE, KEEL_INGRESS_HOSTNAME, KEEL_TCP_PROXY_DOMAIN, KEEL_IPV6_POOL)가 있으면 그 값이 우선합니다.")}
+            {t("로컬 노드는 서버 환경 변수(AVEN_INGRESS_MODE, AVEN_INGRESS_HOSTNAME, AVEN_TCP_PROXY_DOMAIN, AVEN_IPV6_POOL)가 있으면 그 값이 우선합니다.")}
           </p>
         ) : null}
         {error ? <ErrorBox error={error} /> : null}
@@ -441,7 +441,7 @@ function IPv6PoolStatus({ st }: { st: NodeIPv6Status }) {
   );
 }
 
-function RemoveNode({ node, placed, onClose }: { node: KeelNode | null; placed?: number; onClose: () => void }) {
+function RemoveNode({ node, placed, onClose }: { node: AvenNode | null; placed?: number; onClose: () => void }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -488,7 +488,7 @@ function RemoveNode({ node, placed, onClose }: { node: KeelNode | null; placed?:
       }
     >
       <div className="space-y-3 pt-1">
-        <p>{t("노드의 인증 정보가 지워지고 이 노드에는 더 이상 배포하지 않습니다. 그 서버의 컨테이너와 keel-proxy는 직접 정리해야 합니다.")}</p>
+        <p>{t("노드의 인증 정보가 지워지고 이 노드에는 더 이상 배포하지 않습니다. 그 서버의 컨테이너와 aven-proxy(예전 이름의 keel-proxy 포함)는 직접 정리해야 합니다.")}</p>
         {(placed ?? 0) > 0 && (
           <p className="rounded-md bg-danger-surface px-3 py-2 text-sm text-danger">
             {t("이 노드에 배치된 서비스가 {count}개 있습니다. 먼저 그 서비스를 다른 노드로 옮기거나 삭제하세요.", { count: placed ?? 0 })}
@@ -512,7 +512,7 @@ function RemoveNode({ node, placed, onClose }: { node: KeelNode | null; placed?:
 const PEER_DOT = { ok: "bg-green-500", pending: "bg-gray-400", down: "bg-yellow-500" } as const;
 
 /** Cross-node private networking (mesh gateway) status: listen address and per-peer health (mTLS ping every 30 s). */
-function MeshLine({ n }: { n: KeelNode }) {
+function MeshLine({ n }: { n: AvenNode }) {
   const nodes = useNodes();
   const mesh = n.mesh;
   if (!mesh) return null;
@@ -575,7 +575,7 @@ function NodeRow({
   onIngress,
   onRemove,
 }: {
-  n: KeelNode;
+  n: AvenNode;
   placed?: number;
   admin: boolean;
   onRename: () => void;
@@ -704,10 +704,10 @@ export function NodesView({ placedCount, titled = true }: { placedCount?: Record
   const nodes = useNodes();
   const admin = useMe().data?.instance_admin === true;
   const [adding, setAdding] = useState(false);
-  const [renaming, setRenaming] = useState<KeelNode | null>(null);
-  const [labeling, setLabeling] = useState<KeelNode | null>(null);
-  const [ingressing, setIngressing] = useState<KeelNode | null>(null);
-  const [removing, setRemoving] = useState<KeelNode | null>(null);
+  const [renaming, setRenaming] = useState<AvenNode | null>(null);
+  const [labeling, setLabeling] = useState<AvenNode | null>(null);
+  const [ingressing, setIngressing] = useState<AvenNode | null>(null);
+  const [removing, setRemoving] = useState<AvenNode | null>(null);
   const list = [...(nodes.data ?? [])].sort((a, b) => Number(b.is_local) - Number(a.is_local) || a.name.localeCompare(b.name));
   return (
     <section className="min-w-0">

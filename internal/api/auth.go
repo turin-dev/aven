@@ -17,13 +17,39 @@ import (
 	"strings"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/events"
 	"github.com/turin-dev/aven/internal/store"
 )
 
 // ---- auth: 서버 측 세션(쿠키에는 무작위 토큰, DB에는 SHA-256만) ----
 
-const cookieName = "keel_session"
+const (
+	cookieName       = "aven_session"
+	legacyCookieName = "keel_session"
+)
+
+func requestSessionCookie(r *http.Request) (*http.Cookie, error) {
+	if c, err := r.Cookie(cookieName); err == nil {
+		return c, nil
+	}
+	c, err := r.Cookie(legacyCookieName)
+	if err == nil {
+		compat.NoteLegacyResource("session-cookie", "cookie "+legacyCookieName, "cookie "+cookieName)
+	}
+	return c, err
+}
+
+func hasAPITokenPrefix(tok string) bool {
+	if strings.HasPrefix(tok, apiTokenPrefix) {
+		return true
+	}
+	if strings.HasPrefix(tok, legacyAPITokenPrefix) {
+		compat.NoteLegacyResource("api-token-prefix", "token prefix "+legacyAPITokenPrefix, "token prefix "+apiTokenPrefix)
+		return true
+	}
+	return false
+}
 
 // sessionTTL은 마지막 사용으로부터의 세션 수명이다(sliding). sessionTouch마다 한 번 만료를 늦춘다.
 const (
@@ -133,7 +159,7 @@ func (s *Server) bearerPrincipal(ctx context.Context, tok string) *principal {
 	if strings.HasPrefix(tok, oauthAccessTokenPrefix) {
 		return s.oauthPrincipal(ctx, tok)
 	}
-	if !strings.HasPrefix(tok, apiTokenPrefix) || s.Store == nil || len(tok) > 200 {
+	if !hasAPITokenPrefix(tok) || s.Store == nil || len(tok) > 200 {
 		return nil
 	}
 	t, err := s.Store.GetAPITokenByHash(ctx, hashSecret(tok))
@@ -199,7 +225,7 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			}
 			s.lim().agentIP.fail(key)
 		}
-		if c, err := r.Cookie(cookieName); err == nil {
+		if c, err := requestSessionCookie(r); err == nil {
 			if p, refresh := s.sessionPrincipal(r.Context(), c.Value); p != nil {
 				if p.ViewAsBy != nil {
 					if !viewAsAllowed(r) {
@@ -498,13 +524,16 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "cross-origin request rejected")
 		return
 	}
-	if c, err := r.Cookie(cookieName); err == nil && c.Value != "" && s.Store != nil && len(c.Value) <= 200 {
+	if c, err := requestSessionCookie(r); err == nil && c.Value != "" && s.Store != nil && len(c.Value) <= 200 {
 		if err := s.Store.DeleteSessionByHash(r.Context(), hashSecret(c.Value)); err != nil && !errors.Is(err, store.ErrNotFound) {
 			s.Log.Warn("logout", "err", err)
 		}
 		s.kickInboxStreams()
 	}
 	http.SetCookie(w, s.sessionCookie(r, "", time.Time{}, -1))
+	legacy := s.sessionCookie(r, "", time.Time{}, -1)
+	legacy.Name = legacyCookieName
+	http.SetCookie(w, legacy)
 	w.WriteHeader(204)
 }
 

@@ -18,12 +18,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/store"
 )
 
 // ---- 서버 owner 전용 관리(docs/permissions.md의 "서버 owner 전용 관리") ----
 //
-// 서버 owner(users.role=owner, KEEL_SUPERADMINS, 기본 계정)만 쓰는 기능이다. 서버 관리자(admin)는 쓸 수 없고,
+// 서버 owner(users.role=owner, AVEN_SUPERADMINS, 기본 계정)만 쓰는 기능이다. KEEL_SUPERADMINS도 동작한다. 서버 관리자(admin)는 쓸 수 없고,
 // 작업 공간 owner/admin과도 무관하다. 모든 라우트는 세션으로만 부를 수 있다(API 토큰·OAuth 불가).
 //
 //   - 관리자 권한 범위: owner가 서버 관리자에게 어드민 기능을 기능별로 허용/차단한다(authorize가 강제).
@@ -174,7 +175,7 @@ func (s *Server) allowedAdminCaps(ctx context.Context, p *principal) []string {
 	return out
 }
 
-// ownerPrincipal은 점검 모드와 관리자 권한 범위의 영향을 받지 않는 주체다(서버 owner, KEEL_API_TOKEN).
+// ownerPrincipal은 점검 모드와 관리자 권한 범위의 영향을 받지 않는 주체다(서버 owner, AVEN_API_TOKEN). KEEL_API_TOKEN도 동작한다.
 func (s *Server) ownerPrincipal(p *principal) bool {
 	return p != nil && (p.Via == viaEnvToken || s.instanceOwner(p.User))
 }
@@ -208,7 +209,7 @@ func (s *Server) loginBlocked(ctx context.Context, u *store.User) bool {
 	return m.Enabled && m.BlockLogins
 }
 
-// superAdminIDs는 KEEL_SUPERADMINS 계정의 사용자 ID다(users.role과 무관하게 owner라 일괄 정리에서 뺀다).
+// superAdminIDs는 AVEN_SUPERADMINS 계정의 사용자 ID다(KEEL_SUPERADMINS도 동작, users.role과 무관하게 owner라 일괄 정리에서 뺀다).
 func (s *Server) superAdminIDs(ctx context.Context) ([]string, error) {
 	if len(s.SuperAdmins) == 0 {
 		return nil, nil
@@ -314,10 +315,17 @@ func (s *Server) getOwnerOverview(w http.ResponseWriter, r *http.Request) {
 		ann.Level = "info"
 	}
 	var dbBytes int64
+	dbName := compat.DBName
 	dir := s.dataDir()
 	if dir != "" {
-		if fi, err := os.Stat(filepath.Join(dir, "keel.db")); err == nil {
+		next := filepath.Join(dir, compat.DBName)
+		prev := filepath.Join(dir, compat.LegacyDBName)
+		if fi, err := os.Stat(next); err == nil {
 			dbBytes = fi.Size()
+		} else if fi, err := os.Stat(prev); err == nil {
+			dbBytes = fi.Size()
+			dbName = compat.LegacyDBName
+			compat.WarnOnce("owner-db", "database %s is in use; %s is the new name (the old file still works)", prev, next)
 		}
 	}
 	writeJSON(w, 200, map[string]any{
@@ -330,7 +338,7 @@ func (s *Server) getOwnerOverview(w http.ResponseWriter, r *http.Request) {
 		"server": map[string]any{
 			"version": s.Version, "node": s.NodeName, "go_version": runtime.Version(), "pid": os.Getpid(),
 			"started_at": serverStartedAt, "uptime_seconds": int64(time.Since(serverStartedAt).Seconds()),
-			"systemd": os.Getenv("INVOCATION_ID") != "", "data_dir": dir, "db_bytes": dbBytes,
+			"systemd": os.Getenv("INVOCATION_ID") != "", "data_dir": dir, "db_name": dbName, "db_bytes": dbBytes,
 			"public_url": s.PublicURL,
 			// 비밀값은 설정 여부만 보여 준다.
 			"admin_password_set": s.AdminPassword != "", "legacy_api_token_set": s.APIToken != "",
@@ -644,7 +652,7 @@ func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
 // ---- 소유권 이전 ----
 
 // transferOwnership은 대상 계정을 서버 owner로 올리고, stay_owner가 아니면 요청한 owner를 서버 관리자(admin)로 내린다.
-// 기본 계정과 KEEL_SUPERADMINS는 역할과 무관하게 owner라 내려가지 않는다(stay_owner와 같다).
+// 기본 계정과 AVEN_SUPERADMINS(KEEL_SUPERADMINS도 동작)는 역할과 무관하게 owner라 내려가지 않는다(stay_owner와 같다).
 func (s *Server) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p := principalFrom(r)

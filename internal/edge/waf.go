@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 // ---- 요청 제한 ----
@@ -133,12 +135,15 @@ func managedMatch(r *http.Request) string {
 // ---- 브라우저 확인(Under Attack Mode, challenge 규칙) ----
 
 const (
-	ClearanceCookie   = "__keel_clearance"
-	ChallengePath     = "/.keel/challenge"
-	CDNTracePath      = "/.keel/cdn-trace"
-	challengeBits     = 14 // 브라우저에서 수 ms~수십 ms 걸리는 작업 증명
-	challengeTTL      = 5 * time.Minute
-	clearanceLifetime = 24 * time.Hour
+	ClearanceCookie       = "__aven_clearance"
+	LegacyClearanceCookie = "__keel_clearance"
+	ChallengePath         = "/.aven/challenge"
+	LegacyChallengePath   = "/.keel/challenge"
+	CDNTracePath          = "/.aven/cdn-trace"
+	LegacyCDNTracePath    = "/.keel/cdn-trace"
+	challengeBits         = 14 // 브라우저에서 수 ms~수십 ms 걸리는 작업 증명
+	challengeTTL          = 5 * time.Minute
+	clearanceLifetime     = 24 * time.Hour
 )
 
 func sign(secret, msg string) string {
@@ -162,7 +167,11 @@ func clearanceValue(secret, host, ua string, exp time.Time) string {
 func hasClearance(r *http.Request, secret, host string, now time.Time) bool {
 	c, err := r.Cookie(ClearanceCookie)
 	if err != nil {
-		return false
+		c, err = r.Cookie(LegacyClearanceCookie)
+		if err != nil {
+			return false
+		}
+		compat.NoteLegacyResource("clearance-cookie", "cookie "+LegacyClearanceCookie, "cookie "+ClearanceCookie)
 	}
 	e, sig, ok := strings.Cut(c.Value, ".")
 	if !ok {

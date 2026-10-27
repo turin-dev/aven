@@ -86,7 +86,7 @@ func TestDBBackupStreamsWithFixedScript(t *testing.T) {
 	}
 	s := f.gotSpec
 	// helper는 agent가 정한 이름·역할·라벨·스크립트로, DB 컨테이너의 IPv4 주소에 붙는다. 비밀번호는 환경변수로만.
-	if s.Name != "keel-dbb-abc123def" || s.Labels[node.LabelRole] != node.RoleHelper || s.Labels[node.LabelService] != "svc_abcd" ||
+	if s.Name != "aven-dbb-abc123def" || s.Labels[node.LabelRole] != node.RoleHelper || s.Labels[node.LabelService] != "svc_abcd" ||
 		s.Network != dbNet || len(s.Mounts) != 0 || len(s.Publish) != 0 {
 		t.Fatalf("spec: %+v", s)
 	}
@@ -164,7 +164,7 @@ func TestDBRestoreUploadFeedsStdin(t *testing.T) {
 	if err := uploadAll(t, h, agentprotocol.UploadBeginRequest{Kind: agentprotocol.UploadDBTool, DB: &req}, data); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(f.stdin, data) || f.gotSpec.Name != "keel-dbr-abc123def" || !strings.Contains(f.gotSpec.Cmd[1], "pg_restore --clean") {
+	if !bytes.Equal(f.stdin, data) || f.gotSpec.Name != "aven-dbr-abc123def" || !strings.Contains(f.gotSpec.Cmd[1], "pg_restore --clean") {
 		t.Fatalf("stdin %d bytes, spec %q %v", len(f.stdin), f.gotSpec.Name, f.gotSpec.Cmd)
 	}
 	// 대상이 없거나 잘못되면 업로드를 시작하지 못한다

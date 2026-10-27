@@ -45,7 +45,7 @@ func TestWildcardDomainNormalizeAndDNS(t *testing.T) {
 	if len(v.DNS) != 1 || v.DNS[0].Type != "A" || v.DNS[0].Name != "*.shop.example.org" || v.DNS[0].Value != "203.0.113.7" {
 		t.Errorf("dns records: %+v", v.DNS)
 	}
-	if dnsProbeHost("*.shop.example.org") != "keel-dns-check.shop.example.org" || dnsProbeHost("a.b.c") != "a.b.c" {
+	if dnsProbeHost("*.shop.example.org") != "aven-dns-check.shop.example.org" || dnsProbeHost("a.b.c") != "a.b.c" {
 		t.Error("dnsProbeHost")
 	}
 }

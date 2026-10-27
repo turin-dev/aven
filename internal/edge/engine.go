@@ -18,13 +18,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 // Caddy가 엔진으로 넘길 때 덮어쓰는 헤더(클라이언트가 보낸 값은 Caddy가 지운다). origin 서버는 이 값으로
 // X-Forwarded-For / X-Forwarded-Proto를 만들고 헤더를 지운 다음 컨테이너로 보낸다.
 const (
-	HeaderClientIP    = "X-Keel-Client-Ip"
-	HeaderClientProto = "X-Keel-Client-Proto"
+	HeaderClientIP          = "X-Aven-Client-Ip"
+	LegacyHeaderClientIP    = "X-Keel-Client-Ip"
+	HeaderClientProto       = "X-Aven-Client-Proto"
+	LegacyHeaderClientProto = "X-Keel-Client-Proto"
 )
 
 // Policy는 호스트 하나에 적용할 설정이다(호스트를 가진 서비스 인스턴스의 설정).
@@ -196,14 +200,20 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	info := &reqInfo{ip: ip, host: host, path: r.URL.Path, method: r.Method, header: r.Header}
 
 	switch r.URL.Path {
-	case ChallengePath:
+	case ChallengePath, LegacyChallengePath:
+		if r.URL.Path == LegacyChallengePath {
+			compat.NoteLegacyResource("waf-path", "path "+LegacyChallengePath, "path "+ChallengePath)
+		}
 		var until *time.Time
 		if s.WAF.UnderAttack != nil {
 			until = s.WAF.UnderAttack.Until
 		}
 		handleChallengeAnswer(w, r, pol.secret, host, secure, until, now)
 		return
-	case CDNTracePath:
+	case CDNTracePath, LegacyCDNTracePath:
+		if r.URL.Path == LegacyCDNTracePath {
+			compat.NoteLegacyResource("waf-path", "path "+LegacyCDNTracePath, "path "+CDNTracePath)
+		}
 		if s.CDN.Enabled {
 			e.trace(w, r, host, ip, now)
 			return
@@ -328,6 +338,7 @@ rules:
 func deny(w http.ResponseWriter, status int, body, reason string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Aven-Edge", reason)
 	w.Header().Set("X-Keel-Edge", reason)
 	w.WriteHeader(status)
 	io.WriteString(w, body)

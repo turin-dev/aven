@@ -235,18 +235,18 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 	if r1.DatabaseKind == nil || *r1.DatabaseKind != "postgres" || *r1.Template != "postgres-ha" || *ri.Image != "postgres:17-alpine" {
 		t.Errorf("replica service: %+v %v", r1, ri.Image)
 	}
-	if ri.Variables["KEEL_HA_ROLE"] != "replica" || ri.Variables["KEEL_HA_PRIMARY"] != "${{pg.KEEL_PRIVATE_DOMAIN}}" ||
+	if ri.Variables["AVEN_HA_ROLE"] != "replica" || ri.Variables["AVEN_HA_PRIMARY"] != "${{pg.AVEN_PRIVATE_DOMAIN}}" ||
 		ri.Variables["POSTGRES_PASSWORD"] != "${{pg.POSTGRES_PASSWORD}}" || ri.HealthcheckTimeoutS != 3600 {
 		t.Errorf("replica vars: %v", ri.Variables)
 	}
 	if vols, _ := f.st.ListVolumesByInstance(f.ctx, ri.ID); len(vols) != 1 || vols[0].MountPath != "/var/lib/postgresql/data" {
 		t.Errorf("replica volume: %v", vols)
 	}
-	if root.StartCommand == nil || !strings.Contains(*root.StartCommand, "pg_basebackup") || root.Variables["KEEL_HA_ROLE"] != "primary" ||
+	if root.StartCommand == nil || !strings.Contains(*root.StartCommand, "pg_basebackup") || root.Variables["AVEN_HA_ROLE"] != "primary" ||
 		root.Variables["POSTGRES_PASSWORD"] == "" || root.TCPProxy != nil {
 		t.Errorf("root after convert: start=%v vars=%v tcp=%v", root.StartCommand, root.Variables, root.TCPProxy)
 	}
-	if *ei.Image != "haproxy:3.0-alpine" || ei.Variables["KEEL_HA_NODES"] != "${{pg.KEEL_PRIVATE_DOMAIN}}:5432" || ei.TCPProxy == nil ||
+	if *ei.Image != "haproxy:3.0-alpine" || ei.Variables["AVEN_HA_NODES"] != "${{pg.AVEN_PRIVATE_DOMAIN}}:5432" || ei.TCPProxy == nil ||
 		ei.Variables["DATABASE_URL"] == "" || !strings.Contains(ei.Variables["PGPASSWORD"], "${{pg.") {
 		t.Errorf("edge: %v tcp=%v", ei.Variables, ei.TCPProxy)
 	}
@@ -312,10 +312,10 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 		t.Errorf("failover deployments: %d, want 4 (new primary, edge, other replica, old primary)", got)
 	}
 	root, ri2, ei := f.inst(pg.ID), f.inst(r2.ID), f.inst(edge.ID)
-	if root.Variables["KEEL_HA_ROLE"] != "replica" || root.Variables["KEEL_HA_REJOIN"] != "reclone" || root.Variables["KEEL_HA_PRIMARY"] != "${{pg-replica-2.KEEL_PRIVATE_DOMAIN}}" {
+	if root.Variables["AVEN_HA_ROLE"] != "replica" || root.Variables["AVEN_HA_REJOIN"] != "reclone" || root.Variables["AVEN_HA_PRIMARY"] != "${{pg-replica-2.AVEN_PRIVATE_DOMAIN}}" {
 		t.Errorf("old primary vars: %v", root.Variables)
 	}
-	if ri2.Variables["KEEL_HA_ROLE"] != "primary" || ei.Variables["KEEL_HA_NODES"] != "${{pg-replica-2.KEEL_PRIVATE_DOMAIN}}:5432" {
+	if ri2.Variables["AVEN_HA_ROLE"] != "primary" || ei.Variables["AVEN_HA_NODES"] != "${{pg-replica-2.AVEN_PRIVATE_DOMAIN}}:5432" {
 		t.Errorf("new primary %v / edge %v", ri2.Variables, ei.Variables)
 	}
 	// 이전 주 노드가 예전 환경으로 다시 주 노드로 뜨면 다시 배포해서 막는다.
@@ -353,7 +353,7 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 	if cl.PrimaryServiceID != pg.ID || cl.Status != store.HAActive {
 		t.Fatalf("after switchover: %+v", cl)
 	}
-	if v := f.inst(r2.ID).Variables; v["KEEL_HA_REJOIN"] != "standby" || v["KEEL_HA_ROLE"] != "replica" {
+	if v := f.inst(r2.ID).Variables; v["AVEN_HA_REJOIN"] != "standby" || v["AVEN_HA_ROLE"] != "replica" {
 		t.Errorf("demoted primary vars: %v", v)
 	}
 
@@ -383,10 +383,10 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 		t.Errorf("replica volumes kept: %d", detached)
 	}
 	root = f.inst(pg.ID)
-	if root.StartCommand != nil || root.TCPProxy == nil || root.Variables["KEEL_HA_ROLE"] != "" || root.Variables["POSTGRES_PASSWORD"] == "" {
+	if root.StartCommand != nil || root.TCPProxy == nil || root.Variables["AVEN_HA_ROLE"] != "" || root.Variables["POSTGRES_PASSWORD"] == "" {
 		t.Errorf("root after revert: start=%v tcp=%v vars=%v", root.StartCommand, root.TCPProxy, root.Variables)
 	}
-	if _, ok := root.Variables["KEEL_HA_PRIMARY"]; ok {
+	if _, ok := root.Variables["AVEN_HA_PRIMARY"]; ok {
 		t.Error("wiring variable left on root")
 	}
 	if web := f.inst(f.web.ID); web.Variables["DATABASE_URL"] != "${{pg.DATABASE_URL}}" {
@@ -412,11 +412,11 @@ func TestHARedisConvertAndSwitchover(t *testing.T) {
 	root, r1, r2 := f.inst(rd.ID), f.svcNamed("cache-replica-1"), f.svcNamed("cache-replica-2")
 	edge := f.svcNamed("cache-ha")
 	ei := f.inst(edge.ID)
-	if !strings.Contains(*root.StartCommand, "redis-sentinel") || root.Variables["KEEL_HA_QUORUM"] != "2" ||
-		strings.Count(root.Variables["KEEL_HA_PEERS"], "KEEL_PRIVATE_DOMAIN") != 3 {
+	if !strings.Contains(*root.StartCommand, "redis-sentinel") || root.Variables["AVEN_HA_QUORUM"] != "2" ||
+		strings.Count(root.Variables["AVEN_HA_PEERS"], "AVEN_PRIVATE_DOMAIN") != 3 {
 		t.Errorf("root: %v", root.Variables)
 	}
-	if ei.Replicas != 2 || strings.Count(ei.Variables["KEEL_HA_NODES"], ":6379") != 3 || len(root.PrivatePorts) != 2 {
+	if ei.Replicas != 2 || strings.Count(ei.Variables["AVEN_HA_NODES"], ":6379") != 3 || len(root.PrivatePorts) != 2 {
 		t.Errorf("edge replicas=%d vars=%v root ports=%v", ei.Replicas, ei.Variables, root.PrivatePorts)
 	}
 	for _, id := range []string{rd.ID, r1.ID, r2.ID} {
@@ -474,10 +474,10 @@ func TestHARedisConvertAndSwitchover(t *testing.T) {
 	if cl.AutoFailover || cl.Saved.Counts["replica"] != 4 {
 		t.Errorf("after patch: %+v", cl)
 	}
-	if v := f.inst(f.svcNamed("cache-replica-4").ID).Variables; v["KEEL_HA_QUORUM"] != "3" || !strings.Contains(v["KEEL_HA_PRIMARY"], "cache-replica-1") {
+	if v := f.inst(f.svcNamed("cache-replica-4").ID).Variables; v["AVEN_HA_QUORUM"] != "3" || !strings.Contains(v["AVEN_HA_PRIMARY"], "cache-replica-1") {
 		t.Errorf("new replica wiring: %v", v)
 	}
-	if v := f.inst(edge.ID).Variables; strings.Count(v["KEEL_HA_NODES"], ":6379") != 5 {
+	if v := f.inst(edge.ID).Variables; strings.Count(v["AVEN_HA_NODES"], ":6379") != 5 {
 		t.Errorf("edge after scale: %v", v)
 	}
 }
@@ -490,12 +490,12 @@ func TestHAMongoReplicaSet(t *testing.T) {
 		t.Fatalf("convert: %d %v", code, out)
 	}
 	root := f.inst(mg.ID)
-	if root.Variables["MONGO_URL"] != "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{docs.KEEL_PRIVATE_DOMAIN}}:27017,${{docs-replica-1.KEEL_PRIVATE_DOMAIN}}:27017,${{docs-replica-2.KEEL_PRIVATE_DOMAIN}}:27017/?replicaSet=${{KEEL_HA_REPLSET}}&authSource=admin" ||
-		len(root.Variables["KEEL_HA_KEYFILE"]) != 64 {
+	if root.Variables["MONGO_URL"] != "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{docs.AVEN_PRIVATE_DOMAIN}}:27017,${{docs-replica-1.AVEN_PRIVATE_DOMAIN}}:27017,${{docs-replica-2.AVEN_PRIVATE_DOMAIN}}:27017/?replicaSet=${{AVEN_HA_REPLSET}}&authSource=admin" ||
+		len(root.Variables["AVEN_HA_KEYFILE"]) != 64 {
 		t.Errorf("root vars: %v", root.Variables)
 	}
 	r1 := f.inst(f.svcNamed("docs-replica-1").ID)
-	if r1.Variables["KEEL_HA_KEYFILE"] != "${{docs.KEEL_HA_KEYFILE}}" || r1.Variables["MONGO_INITDB_ROOT_USERNAME"] != "" {
+	if r1.Variables["AVEN_HA_KEYFILE"] != "${{docs.AVEN_HA_KEYFILE}}" || r1.Variables["MONGO_INITDB_ROOT_USERNAME"] != "" {
 		t.Errorf("replica vars: %v", r1.Variables)
 	}
 	f.live(mg.ID)
@@ -506,7 +506,7 @@ func TestHAMongoReplicaSet(t *testing.T) {
 		return `{"isWritablePrimary":true}`, nil
 	}
 	f.srv.HAOnce(f.ctx)
-	if !f.exec.sent("docs", `"docs.production.keel.internal:27017","docs-replica-1.production.keel.internal:27017"`) {
+	if !f.exec.sent("docs", `"docs.production.aven.internal:27017","docs-replica-1.production.aven.internal:27017"`) {
 		t.Errorf("reconcile hosts: %+v", f.exec.calls)
 	}
 	// revert는 주 노드인 root만 남기도록 replica set을 줄인다.

@@ -17,13 +17,13 @@ export type FlagDefinition = {
 export type FlagSnapshot = { project_id: string; environment_id: string; flags: FlagDefinition[] };
 
 export type FlagClientOptions = {
-  /** Aven server URL. Defaults to KEEL_URL. */
+  /** Aven server URL. Defaults to AVEN_URL (KEEL_URL still works). */
   baseUrl?: string;
-  /** API token. Defaults to KEEL_TOKEN (project token), then KEEL_API_TOKEN (account token). */
+  /** API token. Defaults to AVEN_TOKEN (project token), then AVEN_API_TOKEN (account token). KEEL_TOKEN and KEEL_API_TOKEN still work. */
   token?: string;
-  /** "project-token" infers the project from the token; "account-token" needs scope.projectId or KEEL_PROJECT_ID. */
+  /** "project-token" infers the project from the token; "account-token" needs scope.projectId or AVEN_PROJECT_ID (KEEL_PROJECT_ID still works). */
   authType?: "project-token" | "account-token";
-  /** Project and environment to read. environmentId defaults to KEEL_ENVIRONMENT_ID, then the project's default environment. */
+  /** Project and environment to read. environmentId defaults to AVEN_ENVIRONMENT_ID (KEEL_ENVIRONMENT_ID still works), then the project's default environment. */
   scope?: { projectId?: string; environmentId?: string };
   /** Background refresh interval (default 30s, minimum 1s). 0 disables polling. */
   pollIntervalMs?: number;
@@ -315,9 +315,22 @@ export function evaluateFlag(flag: FlagDefinition, context: Context): Evaluation
   return { value: flag.default_value, reason: conflict ? "CONFLICT" : "NO_MATCH", trace };
 }
 
-function environmentValue(name: string): string | undefined {
+const warnedEnv = new Set<string>();
+
+function environmentValue(suffix: string): string | undefined {
   const root = globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } };
-  return root.process?.env?.[name] || undefined;
+  const env = root.process?.env;
+  const next = env?.[`AVEN_${suffix}`];
+  if (next) return next;
+  const old = env?.[`KEEL_${suffix}`];
+  if (old) {
+    if (!warnedEnv.has(suffix)) {
+      warnedEnv.add(suffix);
+      console.warn(`KEEL_${suffix} is set; use AVEN_${suffix} instead (the old name still works)`);
+    }
+    return old;
+  }
+  return undefined;
 }
 
 /**
@@ -344,25 +357,25 @@ export class FlagClient {
   /** Loads the first snapshot (throws if it fails) and starts polling. Safe to call again with new options. */
   async init(options: FlagClientOptions = {}): Promise<void> {
     const o: FlagClientOptions = { ...this.defaults, ...options, scope: { ...this.defaults.scope, ...options.scope } };
-    const baseUrl = o.baseUrl ?? environmentValue("KEEL_URL");
-    if (!baseUrl) throw new Error("aven flags: baseUrl or KEEL_URL is required");
+    const baseUrl = o.baseUrl ?? environmentValue("URL");
+    if (!baseUrl) throw new Error("aven flags: baseUrl or AVEN_URL is required (KEEL_URL still works)");
     let token = o.token;
     let authType = o.authType;
-    if (!token && environmentValue("KEEL_TOKEN")) {
-      token = environmentValue("KEEL_TOKEN");
+    if (!token && environmentValue("TOKEN")) {
+      token = environmentValue("TOKEN");
       authType ??= "project-token";
-    } else if (!token && environmentValue("KEEL_API_TOKEN")) {
-      token = environmentValue("KEEL_API_TOKEN");
+    } else if (!token && environmentValue("API_TOKEN")) {
+      token = environmentValue("API_TOKEN");
       authType ??= "account-token";
     }
-    if (!token) throw new Error("aven flags: token, KEEL_TOKEN or KEEL_API_TOKEN is required");
+    if (!token) throw new Error("aven flags: token, AVEN_TOKEN or AVEN_API_TOKEN is required (KEEL_TOKEN and KEEL_API_TOKEN still work)");
     authType ??= o.scope?.projectId ? "account-token" : "project-token";
-    const environmentId = o.scope?.environmentId ?? environmentValue("KEEL_ENVIRONMENT_ID");
+    const environmentId = o.scope?.environmentId ?? environmentValue("ENVIRONMENT_ID");
     const query = environmentId ? `?environment_id=${encodeURIComponent(environmentId)}` : "";
     const base = baseUrl.replace(/\/+$/, "");
     if (authType === "account-token") {
-      const projectId = o.scope?.projectId ?? environmentValue("KEEL_PROJECT_ID");
-      if (!projectId) throw new Error("aven flags: an account token needs scope.projectId or KEEL_PROJECT_ID");
+      const projectId = o.scope?.projectId ?? environmentValue("PROJECT_ID");
+      if (!projectId) throw new Error("aven flags: an account token needs scope.projectId or AVEN_PROJECT_ID (KEEL_PROJECT_ID still works)");
       this.url = `${base}/api/projects/${encodeURIComponent(projectId)}/flags${query}`;
     } else {
       this.url = `${base}/api/feature-flags${query}`;
@@ -454,5 +467,5 @@ export function createFlagClient(options: FlagClientOptions = {}): FlagClient {
   return new FlagClient(options);
 }
 
-/** Default singleton. Set KEEL_URL and a project KEEL_TOKEN on the service, then `await flags.init()`. */
+/** Default singleton. Set AVEN_URL and a project AVEN_TOKEN on the service (KEEL_URL and KEEL_TOKEN still work), then `await flags.init()`. */
 export const flags = new FlagClient();

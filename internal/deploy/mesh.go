@@ -119,7 +119,8 @@ func DesiredMesh(all []MeshNode, ps []MeshPlacement) map[string]mesh.Config {
 					}
 					imported[p.ServiceID] = len(c.Imports)
 					var aliases []string
-					if extra := PrivateAliases(p.Service, p.EnvName, p.DNSName)[2:]; len(extra) > 0 {
+					// 0=service, 1=aven DNS, 2=keel DNS. 그 뒤가 사용자가 붙인 이름이다.
+					if extra := PrivateAliases(p.Service, p.EnvName, p.DNSName)[3:]; len(extra) > 0 {
 						aliases = extra
 					}
 					c.Imports = append(c.Imports, mesh.Import{EnvID: p.EnvID, EnvName: p.EnvName, Service: p.Service, Ports: append([]int(nil), p.Ports...), Node: p.Node, Aliases: aliases})

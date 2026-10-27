@@ -12,6 +12,7 @@ import { GitHubOnboarding } from "./GitHubOnboarding";
 import { SelfServiceSetupAction } from "./SelfService";
 import { Button, Card, CenterSpinner, CopyField, Dialog, ErrorBox, Toggle, cx } from "./ui";
 import { t, tr } from "@/lib/i18n";
+import { readSession, writeSession } from "@/lib/legacyStorage";
 
 // 초기 설정 체크리스트(서버 owner 전용, GET /api/owner/setup). 완료 여부는 서버가 계산하고 문구는 여기서 id로 고른다.
 
@@ -28,8 +29,8 @@ const COPY: Record<SetupItemID, ItemCopy> = {
   public_url: {
     title: t("공개 URL"),
     body: tr("대시보드, GitHub OAuth·웹훅, agent 설치 명령이 쓰는 주소입니다. {file}의 {env}에 https:// 주소를 넣고 aven-server를 재시작하세요.", {
-      file: <Env>/etc/keel/aven.env</Env>,
-      env: <Env>KEEL_PUBLIC_URL</Env>,
+      file: <Env>/etc/aven/aven.env</Env>,
+      env: <Env>AVEN_PUBLIC_URL</Env>,
     }),
     action: (s) => s.server.public_url ? <span className="font-mono text-xs text-gray-500">{s.server.public_url}</span> : null,
   },
@@ -37,7 +38,7 @@ const COPY: Record<SetupItemID, ItemCopy> = {
     title: t("기본 도메인"),
     body: tr("서비스에 자동으로 붙는 {svcDomain} 주소의 뿌리입니다. {baseEnv}을 설정하고 DNS에 와일드카드 레코드({wildcard}의 A/AAAA)를 이 서버로 향하게 하세요.", {
       svcDomain: <Env>{t("서비스.기본도메인")}</Env>,
-      baseEnv: <Env>KEEL_BASE_DOMAIN</Env>,
+      baseEnv: <Env>AVEN_BASE_DOMAIN</Env>,
       wildcard: <Env>{t("*.기본도메인")}</Env>,
     }),
     action: (s) => s.server.base_domain ? <span className="font-mono text-xs text-gray-500">*.{s.server.base_domain}</span> : null,
@@ -46,7 +47,7 @@ const COPY: Record<SetupItemID, ItemCopy> = {
     title: t("개인 owner 계정"),
     body: tr("{admin} 기본 계정은 {password}로 로그인하는 비상용 계정입니다. 내 이메일로 계정을 만들고(사용자·초대) 서버 owner로 지정한 뒤(Owner · 권한) 그 계정으로 작업하세요.", {
       admin: <Env>admin@local</Env>,
-      password: <Env>KEEL_ADMIN_PASSWORD</Env>,
+      password: <Env>AVEN_ADMIN_PASSWORD</Env>,
     }),
     action: () => <div className="flex gap-2"><Go href="/admin/?section=users">{t("사용자·초대")}</Go><Go href="/admin/?section=owner-access">{t("Owner · 권한")}</Go></div>,
   },
@@ -63,20 +64,20 @@ const COPY: Record<SetupItemID, ItemCopy> = {
   github: {
     title: t("GitHub 연동"),
     body: tr("GitHub OAuth App을 만들고 {clientId}, {clientSecret}, 웹훅 비밀값 {webhookSecret}을 설정하면 저장소 선택, 비공개 저장소 배포, push 자동 배포를 쓸 수 있습니다. OAuth App의 callback URL은 아래 주소입니다.", {
-      clientId: <Env>KEEL_GITHUB_CLIENT_ID</Env>,
-      clientSecret: <Env>KEEL_GITHUB_CLIENT_SECRET</Env>,
-      webhookSecret: <Env>KEEL_GITHUB_WEBHOOK_SECRET</Env>,
+      clientId: <Env>AVEN_GITHUB_CLIENT_ID</Env>,
+      clientSecret: <Env>AVEN_GITHUB_CLIENT_SECRET</Env>,
+      webhookSecret: <Env>AVEN_GITHUB_WEBHOOK_SECRET</Env>,
     }),
     action: (s) => s.server.public_url ? <CopyField value={s.server.github_callback_url} className="w-full max-w-md" /> : null,
   },
   smtp: {
     title: t("메일 발송(SMTP)"),
     body: tr("초대, 비밀번호 재설정, 알림 메일에 필요합니다. {host}, {port}, {username}, {password}, {from}을 설정하세요.", {
-      host: <Env>KEEL_SMTP_HOST</Env>,
-      port: <Env>KEEL_SMTP_PORT</Env>,
-      username: <Env>KEEL_SMTP_USERNAME</Env>,
-      password: <Env>KEEL_SMTP_PASSWORD</Env>,
-      from: <Env>KEEL_SMTP_FROM</Env>,
+      host: <Env>AVEN_SMTP_HOST</Env>,
+      port: <Env>AVEN_SMTP_PORT</Env>,
+      username: <Env>AVEN_SMTP_USERNAME</Env>,
+      password: <Env>AVEN_SMTP_PASSWORD</Env>,
+      from: <Env>AVEN_SMTP_FROM</Env>,
     }),
   },
   backup_destination: {
@@ -178,7 +179,8 @@ export function SetupChecklist() {
 
 /* ── 첫 로그인 안내 ─────────────────────────────────────────────────── */
 
-const laterKey = "keel.setup-onboarding.later";
+const laterKey = "aven.setup-onboarding.later";
+const legacyLaterKey = "keel.setup-onboarding.later";
 
 /**
  * 서버 owner가 로그인했을 때 필수 초기 설정이 남아 있으면 한 번 안내한다. "나중에"는 이 브라우저 세션 동안만,
@@ -192,7 +194,7 @@ export function FirstRunOnboarding({ me }: { me: Me | undefined }) {
   const dismiss = useDismiss();
   const [later, setLater] = useState(() => {
     try {
-      return typeof window !== "undefined" && window.sessionStorage.getItem(laterKey) === "1";
+      return readSession(laterKey, legacyLaterKey) === "1";
     } catch {
       return false;
     }
@@ -202,7 +204,7 @@ export function FirstRunOnboarding({ me }: { me: Me | undefined }) {
   if (eligible && (query.isPending || open)) {
     const close = () => {
       try {
-        window.sessionStorage.setItem(laterKey, "1");
+        writeSession(laterKey, "1");
       } catch {
         /* ignore */
       }

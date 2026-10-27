@@ -84,7 +84,7 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
               <p className="text-sm text-gray-600">
                 {c.source === "env" ? (
                   <>
-                    {tr("지금은 서버의 {token}을 씁니다. 내 계정을 연결하면 그 대신 내 계정을 씁니다.", { token: <span className="font-mono">KEEL_GITHUB_TOKEN</span> })}
+                    {tr("지금은 서버의 {token}을 씁니다. 내 계정을 연결하면 그 대신 내 계정을 씁니다.", { token: <span className="font-mono">AVEN_GITHUB_TOKEN</span> })}
                   </>
                 ) : (
                   t("연결된 계정이 없어 비공개 저장소를 클론할 수 없습니다.")
@@ -112,8 +112,8 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
                 </li>
                 <li>
                   {tr("만든 앱의 Client ID와 Client secret을 서버의 {id}, {secret}에 넣고 aven-server를 다시 시작합니다.", {
-                    id: <span className="font-mono">KEEL_GITHUB_CLIENT_ID</span>,
-                    secret: <span className="font-mono">KEEL_GITHUB_CLIENT_SECRET</span>,
+                    id: <span className="font-mono">AVEN_GITHUB_CLIENT_ID</span>,
+                    secret: <span className="font-mono">AVEN_GITHUB_CLIENT_SECRET</span>,
                   })}
                 </li>
               </ol>
@@ -144,7 +144,7 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
                 {!c.secret_configured && (
                   <span className="text-warn">
                     {" "}
-                    {tr("서버에 {name}이 없어 만들 수 없습니다.", { name: <span className="font-mono">KEEL_GITHUB_WEBHOOK_SECRET</span> })}
+                    {tr("서버에 {name}이 없어 만들 수 없습니다.", { name: <span className="font-mono">AVEN_GITHUB_WEBHOOK_SECRET</span> })}
                   </span>
                 )}
               </p>

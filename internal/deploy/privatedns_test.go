@@ -15,13 +15,13 @@ import (
 )
 
 func TestPrivateAliases(t *testing.T) {
-	if got := PrivateAliases("db", "production", ""); !slices.Equal(got, []string{"db", "db.production.keel.internal"}) {
+	if got := PrivateAliases("db", "production", ""); !slices.Equal(got, []string{"db", "db.production.aven.internal", "db.production.keel.internal"}) {
 		t.Fatalf("no custom name: %v", got)
 	}
-	if got := PrivateAliases("db", "production", "db"); len(got) != 2 {
+	if got := PrivateAliases("db", "production", "db"); len(got) != 3 {
 		t.Fatalf("same as service name: %v", got)
 	}
-	want := []string{"db", "db.production.keel.internal", "pg", "pg.production.keel.internal"}
+	want := []string{"db", "db.production.aven.internal", "db.production.keel.internal", "pg", "pg.production.aven.internal", "pg.production.keel.internal"}
 	if got := PrivateAliases("db", "production", "pg"); !slices.Equal(got, want) {
 		t.Fatalf("custom name: %v", got)
 	}
@@ -54,7 +54,7 @@ func TestRunSpecPrivateDNSAliases(t *testing.T) {
 	tg := &Target{Project: p, Env: env, Service: sv, Instance: in}
 	img := "postgres"
 	d := &store.Deployment{ID: "dep_12345678", Image: &img, Env: map[string]string{}}
-	old := []string{"db", PrivateDomain("db", env.Name)}
+	old := []string{"db", PrivateDomain("db", env.Name), LegacyPrivateDomain("db", env.Name)}
 	if got := m.runSpecNamed(tg, d, "keel-db-1", 0).Aliases; !slices.Equal(got, old) {
 		t.Fatalf("without custom name: %v", got)
 	}
@@ -65,7 +65,7 @@ func TestRunSpecPrivateDNSAliases(t *testing.T) {
 	}
 	d.Spec.PrivateDNSName = "pg"
 	got := m.runSpecNamed(tg, d, "keel-db-1", 0).Aliases
-	if !slices.Equal(got, append(old, "pg", PrivateDomain("pg", env.Name))) {
+	if !slices.Equal(got, append(old, "pg", PrivateDomain("pg", env.Name), LegacyPrivateDomain("pg", env.Name))) {
 		t.Fatalf("with custom name: %v", got)
 	}
 }
@@ -167,7 +167,7 @@ func TestDesiredMeshPrivateDNSAliases(t *testing.T) {
 		}
 	}
 	l := got[L]
-	if len(l.Imports) != 1 || !slices.Equal(l.Imports[0].Aliases, []string{"pg", "pg.production.keel.internal"}) {
+	if len(l.Imports) != 1 || !slices.Equal(l.Imports[0].Aliases, []string{"pg", "pg.production.aven.internal", "pg.production.keel.internal"}) {
 		t.Fatalf("local import aliases: %+v", l.Imports)
 	}
 	if a := got[A]; len(a.Imports) != 1 || a.Imports[0].Aliases != nil {

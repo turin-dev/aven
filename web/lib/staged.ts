@@ -8,7 +8,8 @@ import type { InstancePatch, ServiceInstance } from "./api";
 export type SettingsPatch = Omit<InstancePatch, "variables" | "variables_patch">;
 export type Staged = { vars: Record<string, string | null>; settings: SettingsPatch };
 
-const KEY = "keel.staged.v1";
+const KEY = "aven.staged.v1";
+const LEGACY_KEY = "keel.staged.v1";
 const EMPTY: Staged = { vars: {}, settings: {} };
 
 let state: Record<string, Staged> = {};
@@ -19,7 +20,8 @@ function load() {
   if (loaded || typeof window === "undefined") return;
   loaded = true;
   try {
-    state = JSON.parse(window.sessionStorage.getItem(KEY) ?? "{}") as Record<string, Staged>;
+    const raw = window.sessionStorage.getItem(KEY) ?? window.sessionStorage.getItem(LEGACY_KEY);
+    state = JSON.parse(raw ?? "{}") as Record<string, Staged>;
   } catch {
     state = {};
   }

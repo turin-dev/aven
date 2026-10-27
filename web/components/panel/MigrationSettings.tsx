@@ -336,7 +336,7 @@ export function DbBackups({ svc, env }: { svc: CanvasService; env: Environment }
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Select value={destId} onChange={(e) => setDest(e.target.value)} aria-label={t("저장 위치")} size="sm" className="w-[200px]">
-          <option value="">{t("로컬 (KEEL_DATA)")}</option>
+          <option value="">{t("로컬 (AVEN_DATA)")}</option>
           {(dests.data ?? []).filter((d) => d.type === "s3").map((d) => (
             <option key={d.id} value={d.id}>
               S3 · {d.name}

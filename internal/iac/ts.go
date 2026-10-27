@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,7 +15,10 @@ import (
 	"strings"
 )
 
-const Dir = ".keel"
+const (
+	Dir       = ".aven"
+	LegacyDir = ".keel"
+)
 
 // Files are the authoring files `aven config` looks for in Dir, in order. Keep only one.
 var Files = []string{"aven.ts", "aven.mts", "aven.js", "aven.mjs", "aven.json", "aven.yaml", "aven.yml", "keel.ts", "keel.mts", "keel.js", "keel.mjs", "keel.json", "keel.yaml", "keel.yml"}
@@ -29,16 +33,30 @@ var dslTypes []byte
 var runnerJS []byte
 
 // DSLModule is the module name that aven.ts imports.
-const DSLModule = "./keel-iac.mjs"
+const DSLModule = "./aven-iac.mjs"
+const LegacyDSLModule = "./keel-iac.mjs"
 
-// FindFile finds the nearest .keel/aven.{ts,json,yaml,...} from dir upwards.
+// FindFile finds the nearest .aven/aven.{ts,json,yaml,...} from dir upwards (.keel is the fallback).
+func findIn(dir, folder string) []string {
+	found := []string{}
+	for _, name := range Files {
+		p := filepath.Join(dir, folder, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			found = append(found, p)
+		}
+	}
+	return found
+}
+
 func FindFile(dir string) (string, error) {
 	for d := dir; ; d = filepath.Dir(d) {
-		found := []string{}
-		for _, name := range Files {
-			p := filepath.Join(d, Dir, name)
-			if st, err := os.Stat(p); err == nil && !st.IsDir() {
-				found = append(found, p)
+		found := findIn(d, Dir)
+		folder := Dir
+		if len(found) == 0 {
+			found = findIn(d, LegacyDir)
+			folder = LegacyDir
+			if len(found) > 0 {
+				compat.WarnOnce("iac-dir", "directory %s is in use; %s is the new path (the old path still works)", filepath.Join(d, LegacyDir), filepath.Join(d, Dir))
 			}
 		}
 		switch len(found) {
@@ -46,7 +64,7 @@ func FindFile(dir string) (string, error) {
 		case 1:
 			return found[0], nil
 		default:
-			return "", fmt.Errorf("more than one configuration file in %s (%s); keep only one", filepath.Join(d, Dir), strings.Join(baseNames(found), ", "))
+			return "", fmt.Errorf("more than one configuration file in %s (%s); keep only one", filepath.Join(d, folder), strings.Join(baseNames(found), ", "))
 		}
 		if d == filepath.Dir(d) {
 			return "", fmt.Errorf("no %s/aven.ts (or aven.json / aven.yaml) here or in a parent directory (run: aven config import)", Dir)
@@ -99,10 +117,10 @@ func Load(path string, ctx Context) (*Definition, error) {
 	return Evaluate(path, ctx)
 }
 
-// Runner picks the JavaScript runtime: $KEEL_IAC_RUNNER (bun|node|path), else bun, else node.
+// Runner picks the JavaScript runtime: $AVEN_IAC_RUNNER (bun|node|path), else bun, else node. KEEL_IAC_RUNNER still works.
 // The returned args go between the binary and the runner script.
 func Runner(path string) (string, []string, error) {
-	pick := os.Getenv("KEEL_IAC_RUNNER")
+	pick := compat.Env("IAC_RUNNER")
 	candidates := []string{"bun", "node"}
 	if pick != "" {
 		candidates = []string{pick}
@@ -122,9 +140,9 @@ func Runner(path string) (string, []string, error) {
 		return bin, nil, nil
 	}
 	if pick != "" {
-		return "", nil, fmt.Errorf("KEEL_IAC_RUNNER=%s not found", pick)
+		return "", nil, fmt.Errorf("%s=%s not found", compat.Describe("IAC_RUNNER"), pick)
 	}
-	return "", nil, errors.New("evaluating aven.ts needs bun or node (22.6+) in PATH; or use .keel/aven.json / aven.yaml")
+	return "", nil, errors.New("evaluating aven.ts needs bun or node (22.6+) in PATH; or use .aven/aven.json / aven.yaml")
 }
 
 // Evaluate runs a aven.ts/js module and decodes the JSON definition it returns.
@@ -138,7 +156,7 @@ func Evaluate(path string, ctx Context) (*Definition, error) {
 	if err != nil {
 		return nil, err
 	}
-	tmp, err := os.MkdirTemp("", "keel-iac-")
+	tmp, err := os.MkdirTemp("", "aven-iac-")
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +169,7 @@ func Evaluate(path string, ctx Context) (*Definition, error) {
 	ctxJSON, _ := json.Marshal(ctx)
 	cmd := exec.Command(bin, append(args, runner, abs, out)...)
 	cmd.Dir = filepath.Dir(abs)
-	cmd.Env = append(os.Environ(), "KEEL_IAC_CONTEXT="+string(ctxJSON))
+	cmd.Env = append(os.Environ(), "AVEN_IAC_CONTEXT="+string(ctxJSON), "KEEL_IAC_CONTEXT="+string(ctxJSON))
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = os.Stderr, &stderr
 	if err := cmd.Run(); err != nil {
@@ -181,6 +199,9 @@ func WriteSupportFiles(dir string) error {
 		return err
 	}
 	files := map[string][]byte{
+		"aven-iac.mjs":   dslJS,
+		"aven-iac.d.mts": dslTypes,
+		// 예전 import { defineAven } from "./keel-iac.mjs" 가 그대로 동작하게 같은 파일을 쓴다.
 		"keel-iac.mjs":   dslJS,
 		"keel-iac.d.mts": dslTypes,
 	}

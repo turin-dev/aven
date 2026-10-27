@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/url"
 	"os"
@@ -78,7 +79,7 @@ func linkedIfPresent(c *config) *link {
 	}
 }
 
-// parseFlagScope reads `project:<id>` (--scope or KEEL_FLAGS_SCOPE).
+// parseFlagScope reads `project:<id>` (--scope or AVEN_FLAGS_SCOPE; KEEL_FLAGS_SCOPE still works).
 func parseFlagScope(scope string) (string, error) {
 	pid, ok := strings.CutPrefix(scope, "project:")
 	if !ok || pid == "" {
@@ -87,13 +88,13 @@ func parseFlagScope(scope string) (string, error) {
 	return pid, nil
 }
 
-// flagTarget picks the project and environment: --scope/KEEL_FLAGS_SCOPE, then the project owning a
-// project/environment KEEL_TOKEN, then the linked directory. --environment overrides the environment.
+// flagTarget picks the project and environment: --scope/AVEN_FLAGS_SCOPE, then the project owning a
+// project/environment AVEN_TOKEN, then the linked directory. --environment overrides the environment.
 func flagTarget(c *config, o flagOpts) (string, string) {
 	var pid, eid string
 	scope := o.scope
 	if scope == "" {
-		scope = os.Getenv("KEEL_FLAGS_SCOPE")
+		scope = compat.Env("FLAGS_SCOPE")
 	}
 	l := linkedIfPresent(c)
 	switch {
@@ -107,17 +108,17 @@ func flagTarget(c *config, o flagOpts) (string, string) {
 			eid = l.EnvironmentID
 		}
 	default:
-		if os.Getenv("KEEL_TOKEN") != "" {
+		if compat.Env("TOKEN") != "" {
 			var snapshot cliFlagSnapshot
 			if err := c.call("GET", "/feature-flags", nil, &snapshot); err == nil {
 				pid, eid = snapshot.ProjectID, snapshot.EnvironmentID
 				break
 			} else if l == nil {
-				die("%v (use a project-scoped KEEL_TOKEN, run aven link, or pass --scope project:<id>)", err)
+				die("%v (use a project-scoped AVEN_TOKEN, run aven link, or pass --scope project:<id>)", err)
 			}
 		}
 		if l == nil {
-			die("this directory is not linked (run: aven link), or set a project-scoped KEEL_TOKEN")
+			die("this directory is not linked (run: aven link), or set a project-scoped AVEN_TOKEN")
 		}
 		pid, eid = l.ProjectID, l.EnvironmentID
 	}

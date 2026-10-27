@@ -31,10 +31,10 @@
       "volumes": [{ "mount_path": "/var/lib/plausible" }],
       "domains": [{ "generate": true }],
       "variables": {
-        "BASE_URL": "https://${{KEEL_PUBLIC_DOMAIN}}",
+        "BASE_URL": "https://${{AVEN_PUBLIC_DOMAIN}}",
         "SECRET_KEY_BASE": "${{ secret(64) }}",
         "DATABASE_URL": "${{postgres.DATABASE_URL}}",
-        "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.KEEL_PRIVATE_DOMAIN}}:8123/plausible_events_db",
+        "CLICKHOUSE_DATABASE_URL": "http://${{clickhouse.AVEN_PRIVATE_DOMAIN}}:8123/plausible_events_db",
         "HTTP_PORT": "8000",
         "DISABLE_REGISTRATION": "invite_only"
       }

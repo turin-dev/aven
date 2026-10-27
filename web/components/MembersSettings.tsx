@@ -8,6 +8,7 @@ import type { Workspace } from "@/lib/workspace";
 import { fmtRelative } from "@/lib/format";
 import type { User } from "@/lib/api";
 import { t, tr } from "@/lib/i18n";
+import { removeStorage } from "@/lib/legacyStorage";
 import { WorkspaceResourceSummary } from "./ResourceLimitsSettings";
 import { Eye, KeyRound, LogOut, MoreHorizontal, Pencil, ScrollText, ShieldCheck, ShieldOff, Trash2, UserCog, UserMinus, UserPlus } from "lucide-react";
 import { Avatar, Button, Card, CenterSpinner, CopyField, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Menu, MenuItem, Notice, RowList, Segmented, Select, useConfirm } from "./ui";
@@ -905,11 +906,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
               onClick={() =>
                 run(async () => {
                   await api.deleteWorkspace(wsid!);
-                  try {
-                    window.localStorage.removeItem("keel.workspace.v1");
-                  } catch {
-                    /* ignore */
-                  }
+                  removeStorage("aven.workspace.v1", "keel.workspace.v1");
                   await refreshWorkspaces();
                   setDeleting(false);
                   const next = ws.wsList.find((w) => w.id !== wsid);

@@ -85,7 +85,7 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
           </Field>
         </div>
         {kind === "email" ? (
-          <Field label={t("받는 사람")} hint={t("한 줄에 하나씩, 최대 20개. 서버에 KEEL_SMTP_*가 설정되어 있어야 합니다.")}>
+          <Field label={t("받는 사람")} hint={t("한 줄에 하나씩, 최대 20개. 서버에 AVEN_SMTP_*가 설정되어 있어야 합니다.")}>
             <Textarea rows={3} mono className="w-full" value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="ops@example.com" />
           </Field>
         ) : (
@@ -93,7 +93,7 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
             label="URL"
             hint={
               kind === "webhook"
-                ? t("JSON payload를 POST합니다. 사설·루프백 주소는 KEEL_NOTIFY_ALLOW_PRIVATE=1일 때만 허용됩니다.")
+                ? t("JSON payload를 POST합니다. 사설·루프백 주소는 AVEN_NOTIFY_ALLOW_PRIVATE=1일 때만 허용됩니다.")
                 : kind === "slack"
                   ? "Slack Incoming Webhook URL"
                   : t("Discord 채널 webhook URL")
@@ -107,7 +107,10 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
             label={t("서명 키 (선택)")}
             hint={
               <>
-                {tr("설정하면 {header} 헤더를 붙입니다.", { header: <code className="font-mono">X-Keel-Signature: sha256=&lt;HMAC&gt;</code> })}
+                {tr("설정하면 {header} 헤더를 붙입니다. 예전 이름 {legacy}도 같이 붙습니다.", {
+                  header: <code className="font-mono">X-Aven-Signature: sha256=&lt;HMAC&gt;</code>,
+                  legacy: <code className="font-mono">X-Keel-Signature</code>,
+                })}
                 {channel?.secret_set && t(" 지금 키가 설정되어 있습니다. 비워 두면 그대로 둡니다.")}
               </>
             }
@@ -274,8 +277,8 @@ export function SmtpStatus() {
       title={t("메일 (SMTP)")}
       description={
         configured
-          ? t("KEEL_SMTP_*로 설정되어 있습니다. 이메일 채널과 초대 메일에 씁니다.")
-          : t("설정되지 않았습니다. KEEL_SMTP_HOST, KEEL_SMTP_FROM(필수)과 KEEL_SMTP_PORT, KEEL_SMTP_USERNAME, KEEL_SMTP_PASSWORD, KEEL_SMTP_TLS(starttls|tls|none)를 aven-server 환경 변수로 지정하세요.")
+          ? t("AVEN_SMTP_*로 설정되어 있습니다. 이메일 채널과 초대 메일에 씁니다.")
+          : t("설정되지 않았습니다. AVEN_SMTP_HOST, AVEN_SMTP_FROM(필수)과 AVEN_SMTP_PORT, AVEN_SMTP_USERNAME, AVEN_SMTP_PASSWORD, AVEN_SMTP_TLS(starttls|tls|none)를 aven-server 환경 변수로 지정하세요.")
       }
     >
       {configured && (

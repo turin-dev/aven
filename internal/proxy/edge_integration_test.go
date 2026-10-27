@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"log/slog"
 	"net"
@@ -31,7 +32,7 @@ func freePort(t *testing.T) int {
 // TestEdgeWithRealCaddy는 실제 Caddy 바이너리로 client → Caddy → 엣지 엔진 → Caddy origin 서버 → upstream 경로를 확인한다.
 // KEEL_CADDY_BIN=/path/to/caddy 일 때만 돈다(docker 없이 호스트에서 실행한다).
 func TestEdgeWithRealCaddy(t *testing.T) {
-	bin := os.Getenv("KEEL_CADDY_BIN")
+	bin := compat.Env("CADDY_BIN")
 	if bin == "" {
 		t.Skip("set KEEL_CADDY_BIN to run against a real Caddy")
 	}

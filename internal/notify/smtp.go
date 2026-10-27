@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 // Mailer는 SMTP로 평문(text/plain, UTF-8) 메일을 보낸다. 설정은 KEEL_SMTP_* 환경 변수에서 온다.
@@ -31,14 +33,15 @@ type Mailer struct {
 	TLSConfig *tls.Config
 }
 
-// MailerFromEnv는 KEEL_SMTP_HOST가 없으면 nil이다.
+// MailerFromEnv는 AVEN_SMTP_HOST(또는 KEEL_SMTP_HOST)가 없으면 nil이다.
 func MailerFromEnv(getenv func(string) string) (*Mailer, error) {
-	host := strings.TrimSpace(getenv("KEEL_SMTP_HOST"))
+	get := func(suffix string) string { return compat.From(getenv, suffix) }
+	host := strings.TrimSpace(get("SMTP_HOST"))
 	if host == "" {
 		return nil, nil
 	}
-	m := &Mailer{Host: host, Username: getenv("KEEL_SMTP_USERNAME"), Password: getenv("KEEL_SMTP_PASSWORD"),
-		From: strings.TrimSpace(getenv("KEEL_SMTP_FROM")), TLS: strings.ToLower(strings.TrimSpace(getenv("KEEL_SMTP_TLS")))}
+	m := &Mailer{Host: host, Username: get("SMTP_USERNAME"), Password: get("SMTP_PASSWORD"),
+		From: strings.TrimSpace(get("SMTP_FROM")), TLS: strings.ToLower(strings.TrimSpace(get("SMTP_TLS")))}
 	if m.TLS == "" {
 		m.TLS = "starttls"
 	}
@@ -50,20 +53,20 @@ func MailerFromEnv(getenv func(string) string) (*Mailer, error) {
 	case "none":
 		m.Port = 25
 	default:
-		return nil, errors.New("KEEL_SMTP_TLS must be starttls, tls or none")
+		return nil, errors.New(compat.Describe("SMTP_TLS") + " must be starttls, tls or none")
 	}
-	if p := strings.TrimSpace(getenv("KEEL_SMTP_PORT")); p != "" {
+	if p := strings.TrimSpace(get("SMTP_PORT")); p != "" {
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {
-			return nil, errors.New("KEEL_SMTP_PORT must be a port number")
+			return nil, errors.New(compat.Describe("SMTP_PORT") + " must be a port number")
 		}
 		m.Port = n
 	}
 	if m.From == "" {
-		return nil, errors.New("KEEL_SMTP_FROM is required with KEEL_SMTP_HOST")
+		return nil, errors.New(compat.Describe("SMTP_FROM") + " is required with " + compat.Describe("SMTP_HOST"))
 	}
 	if _, err := mail.ParseAddress(m.From); err != nil {
-		return nil, fmt.Errorf("KEEL_SMTP_FROM: %w", err)
+		return nil, fmt.Errorf("%s: %w", compat.Describe("SMTP_FROM"), err)
 	}
 	return m, nil
 }

@@ -40,7 +40,7 @@ export function GraphQLApiCard() {
           <div className={LABEL_CLS}>curl</div>
           <CopyField
             label={t("curl 명령")}
-            value={`curl -s ${endpoint} -H "Authorization: Bearer $KEEL_TOKEN" -H 'Content-Type: application/json' -d '{"query":"{ me { email } }"}'`}
+            value={`curl -s ${endpoint} -H "Authorization: Bearer $AVEN_TOKEN" -H 'Content-Type: application/json' -d '{"query":"{ me { email } }"}'`}
           />
         </div>
       </div>

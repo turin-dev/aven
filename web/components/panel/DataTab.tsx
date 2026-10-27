@@ -162,7 +162,7 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
               ) : (
                 <div className="text-sm text-gray-500">
                   {tr("공개 주소 {addr} → 컨테이너 포트 {port}", {
-                    addr: <span className="font-mono text-gray-600">{`${v.KEEL_TCP_PROXY_DOMAIN ?? t("서버")}:${tcp?.public_port}`}</span>,
+                    addr: <span className="font-mono text-gray-600">{`${v.AVEN_TCP_PROXY_DOMAIN ?? t("서버")}:${tcp?.public_port}`}</span>,
                     port: <span className="font-mono text-gray-600">{tcp?.container_port}</span>,
                   })}
                 </div>
@@ -171,7 +171,7 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
                 {spec.fields.map(([label, key]) => {
                   let value = v[key] ?? "";
                   if (net === "public" && tcp) {
-                    if (label === t("호스트")) value = v.KEEL_TCP_PROXY_DOMAIN ?? value;
+                    if (label === t("호스트")) value = v.AVEN_TCP_PROXY_DOMAIN ?? value;
                     if (label === t("포트")) value = String(tcp.public_port);
                   }
                   return (

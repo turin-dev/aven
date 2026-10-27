@@ -8,10 +8,10 @@ import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { t, tr } from "@/lib/i18n";
 import { Button, ErrorBox, IconButton, Input, Menu, MenuItem, cx, useEscape } from "@/components/ui";
-// 변수 탭(ROW_GRID)과 같은 모양이지만 KEEL_GITHUB_WEBHOOK_SECRET 같은 긴 이름이 잘리지 않게 키 열을 넓힌다.
+// 변수 탭(ROW_GRID)과 같은 모양이지만 AVEN_GITHUB_WEBHOOK_SECRET 같은 긴 이름이 잘리지 않게 키 열을 넓힌다.
 const ROW_GRID = "grid grid-cols-[minmax(15.5rem,auto)_minmax(0,1fr)_2.5rem] gap-3";
 
-// aven-server 자신(self 서비스)의 서버 설정: env 파일의 KEEL_* 값(GET/PUT /api/owner/server-config).
+// aven-server 자신(self 서비스)의 서버 설정: env 파일의 AVEN_* 값(GET/PUT /api/owner/server-config).
 // 변수 탭과 같은 행 모양으로 보여 주고, 고친 값은 모아서 저장한다. 저장은 파일만 바꾸고 다음 aven-server 배포에 적용된다.
 
 type Group = ServerConfigEntry["group"];
@@ -26,42 +26,42 @@ const GROUPS: { id: Group; title: string }[] = [
 ];
 
 const DESC: Record<string, string> = {
-  KEEL_PUBLIC_URL: t("대시보드 주소(https://…). GitHub OAuth·웹훅과 agent 설치 명령이 씁니다."),
-  KEEL_BASE_DOMAIN: t("서비스에 자동으로 붙는 도메인의 뿌리입니다."),
-  KEEL_ACME_EMAIL: t("TLS 인증서를 발급할 때 쓰는 이메일입니다."),
-  KEEL_SUPERADMINS: t("서버 owner 권한을 줄 이메일 목록(쉼표로 구분)."),
-  KEEL_ADMIN_PASSWORD: t("기본 계정 admin@local의 비밀번호(8자 이상)."),
-  KEEL_API_TOKEN: t("모든 작업 공간에 접근하는 옛 운영 토큰입니다. 쓰지 않으면 비워 두세요."),
-  KEEL_DEBUG: t("값이 있으면 디버그 로그를 남깁니다."),
-  KEEL_LISTEN: t("대시보드·API가 listen할 주소(host:port). 잘못 바꾸면 새 서버가 뜨지 않아 되돌아갑니다."),
-  KEEL_LISTEN_UNIX: t("추가로 listen할 unix socket 경로."),
-  KEEL_TRUSTED_PROXIES: t("X-Forwarded-*를 믿을 프록시 주소(쉼표로 구분)."),
-  KEEL_INSECURE_COOKIE: t("값이 있으면 세션 쿠키에 Secure를 붙이지 않습니다(http 개발용)."),
-  KEEL_PUBLIC_IPV4: t("이 서버의 공개 IPv4. 비우면 자동으로 찾습니다."),
-  KEEL_PUBLIC_IPV6: t("이 서버의 공개 IPv6. 비우면 자동으로 찾습니다."),
-  KEEL_IPV6_POOL: t("도메인마다 하나씩 배정할 공개 IPv6 대역(CIDR)."),
-  KEEL_IPV6_IFACE: t("도메인 IPv6를 붙일 네트워크 인터페이스."),
-  KEEL_INGRESS_MODE: t("이 노드의 공개 진입 방식: direct 또는 cloudflare_tunnel."),
-  KEEL_INGRESS_HOSTNAME: t("커스텀 도메인이 CNAME으로 가리킬 이 노드의 이름."),
-  KEEL_PRIVATE_ADDRESS: t("노드 사이 사설망(mesh)에서 이 서버의 주소."),
-  KEEL_MESH: t("노드 간 사설망: on, off, auto."),
-  KEEL_EXTERNAL_UPSTREAMS: t("keel-proxy가 보낼 수 있는 Aven 밖의 upstream(host:port, 쉼표로 구분)."),
-  KEEL_PROXY_NETWORKS: t("keel-proxy를 더 붙일 docker 네트워크(쉼표로 구분)."),
-  KEEL_GITHUB_CLIENT_ID: t("GitHub OAuth App의 Client ID."),
-  KEEL_GITHUB_CLIENT_SECRET: t("GitHub OAuth App의 Client secret."),
-  KEEL_GITHUB_WEBHOOK_SECRET: t("GitHub 웹훅 서명을 확인하는 비밀값."),
-  KEEL_GITHUB_TOKEN: t("GitHub 연결이 없을 때 쓰는 대체 토큰."),
-  KEEL_SMTP_HOST: t("메일 서버 주소."),
-  KEEL_SMTP_PORT: t("메일 서버 포트."),
-  KEEL_SMTP_USERNAME: t("메일 서버 사용자 이름."),
-  KEEL_SMTP_PASSWORD: t("메일 서버 비밀번호."),
-  KEEL_SMTP_FROM: t("보내는 사람 주소."),
-  KEEL_SELF_UPDATE_INTERVAL: t("aven-server 업데이트를 확인하는 주기(예: 30m, 6h). off면 확인하지 않습니다."),
-  KEEL_DATA: t("데이터 디렉터리. 바꾸면 서버가 데이터를 잃으므로 여기서 바꿀 수 없습니다."),
-  KEEL_AGENT_BIN_DIR: t("컨테이너에서는 이미지 안의 파일을 씁니다."),
-  KEEL_RAILPACK_BIN: t("컨테이너에서는 이미지 안의 파일을 씁니다."),
-  KEEL_SELF_SERVICE: t("aven-server를 배포하는 서비스를 고정합니다."),
-  KEEL_SELF_ENV_FILE: t("이 설정 파일의 경로입니다."),
+  AVEN_PUBLIC_URL: t("대시보드 주소(https://…). GitHub OAuth·웹훅과 agent 설치 명령이 씁니다."),
+  AVEN_BASE_DOMAIN: t("서비스에 자동으로 붙는 도메인의 뿌리입니다."),
+  AVEN_ACME_EMAIL: t("TLS 인증서를 발급할 때 쓰는 이메일입니다."),
+  AVEN_SUPERADMINS: t("서버 owner 권한을 줄 이메일 목록(쉼표로 구분)."),
+  AVEN_ADMIN_PASSWORD: t("기본 계정 admin@local의 비밀번호(8자 이상)."),
+  AVEN_API_TOKEN: t("모든 작업 공간에 접근하는 옛 운영 토큰입니다. 쓰지 않으면 비워 두세요."),
+  AVEN_DEBUG: t("값이 있으면 디버그 로그를 남깁니다."),
+  AVEN_LISTEN: t("대시보드·API가 listen할 주소(host:port). 잘못 바꾸면 새 서버가 뜨지 않아 되돌아갑니다."),
+  AVEN_LISTEN_UNIX: t("추가로 listen할 unix socket 경로."),
+  AVEN_TRUSTED_PROXIES: t("X-Forwarded-*를 믿을 프록시 주소(쉼표로 구분)."),
+  AVEN_INSECURE_COOKIE: t("값이 있으면 세션 쿠키에 Secure를 붙이지 않습니다(http 개발용)."),
+  AVEN_PUBLIC_IPV4: t("이 서버의 공개 IPv4. 비우면 자동으로 찾습니다."),
+  AVEN_PUBLIC_IPV6: t("이 서버의 공개 IPv6. 비우면 자동으로 찾습니다."),
+  AVEN_IPV6_POOL: t("도메인마다 하나씩 배정할 공개 IPv6 대역(CIDR)."),
+  AVEN_IPV6_IFACE: t("도메인 IPv6를 붙일 네트워크 인터페이스."),
+  AVEN_INGRESS_MODE: t("이 노드의 공개 진입 방식: direct 또는 cloudflare_tunnel."),
+  AVEN_INGRESS_HOSTNAME: t("커스텀 도메인이 CNAME으로 가리킬 이 노드의 이름."),
+  AVEN_PRIVATE_ADDRESS: t("노드 사이 사설망(mesh)에서 이 서버의 주소."),
+  AVEN_MESH: t("노드 간 사설망: on, off, auto."),
+  AVEN_EXTERNAL_UPSTREAMS: t("aven-proxy가 보낼 수 있는 Aven 밖의 upstream(host:port, 쉼표로 구분)."),
+  AVEN_PROXY_NETWORKS: t("aven-proxy를 더 붙일 docker 네트워크(쉼표로 구분)."),
+  AVEN_GITHUB_CLIENT_ID: t("GitHub OAuth App의 Client ID."),
+  AVEN_GITHUB_CLIENT_SECRET: t("GitHub OAuth App의 Client secret."),
+  AVEN_GITHUB_WEBHOOK_SECRET: t("GitHub 웹훅 서명을 확인하는 비밀값."),
+  AVEN_GITHUB_TOKEN: t("GitHub 연결이 없을 때 쓰는 대체 토큰."),
+  AVEN_SMTP_HOST: t("메일 서버 주소."),
+  AVEN_SMTP_PORT: t("메일 서버 포트."),
+  AVEN_SMTP_USERNAME: t("메일 서버 사용자 이름."),
+  AVEN_SMTP_PASSWORD: t("메일 서버 비밀번호."),
+  AVEN_SMTP_FROM: t("보내는 사람 주소."),
+  AVEN_SELF_UPDATE_INTERVAL: t("aven-server 업데이트를 확인하는 주기(예: 30m, 6h). off면 확인하지 않습니다."),
+  AVEN_DATA: t("데이터 디렉터리. 바꾸면 서버가 데이터를 잃으므로 여기서 바꿀 수 없습니다."),
+  AVEN_AGENT_BIN_DIR: t("컨테이너에서는 이미지 안의 파일을 씁니다."),
+  AVEN_RAILPACK_BIN: t("컨테이너에서는 이미지 안의 파일을 씁니다."),
+  AVEN_SELF_SERVICE: t("aven-server를 배포하는 서비스를 고정합니다."),
+  AVEN_SELF_ENV_FILE: t("이 설정 파일의 경로입니다."),
 };
 
 const MASK = "*******";
@@ -320,7 +320,7 @@ function ConfigRow({
                       {added ? t("추가 취소") : removing ? t("삭제 취소") : t("변경 되돌리기")}
                     </MenuItem>
                   )}
-                  {e.set && !removing && e.name !== "KEEL_ADMIN_PASSWORD" && (
+                  {e.set && !removing && e.name !== "AVEN_ADMIN_PASSWORD" && (
                     <MenuItem danger icon={<Trash2 />} onSelect={() => (close(), onRemove())}>
                       {t("삭제")}
                     </MenuItem>
@@ -395,7 +395,7 @@ function NewSetting({ options, taken, onAdd, onCancel }: { options: string[]; ta
           list="aven-server-config-keys"
           value={key}
           onChange={(ev) => setKey(ev.target.value.toUpperCase())}
-          placeholder="KEEL_…"
+          placeholder="AVEN_…"
           aria-label={t("설정 이름")}
           aria-invalid={!!err}
           className="h-[34px] !px-1.5"

@@ -2,7 +2,7 @@
 
 `POST /graphql/v2` is a GraphQL endpoint shaped like Railway's Public API (`https://backboard.railway.com/graphql/v2`, see <https://docs.railway.com/integrations/api>). Most of the Railway cookbook queries for projects, services, deployments, variables, environments, domains and volumes run unchanged. Only the URL and the token are different.
 
-- **Auth.** Same as REST v1: the `keel_session` cookie (requests that change something must be same-origin, as in REST) or `Authorization: Bearer <keel_… API token | KEEL_API_TOKEN>`. Without credentials the endpoint returns HTTP `401`. Railway's `Project-Access-Token` / `Team-Access-Token` headers are not supported. Use a project- or environment-scoped aven API token instead.
+- **Auth.** Same as REST v1: the `keel_session` cookie (requests that change something must be same-origin, as in REST) or `Authorization: Bearer <keel_… API token | AVEN_API_TOKEN>`. Without credentials the endpoint returns HTTP `401`. Railway's `Project-Access-Token` / `Team-Access-Token` headers are not supported. Use a project- or environment-scoped aven API token instead.
 - **Implementation.** Each resolver calls the REST v1 route in-process with the caller's credentials. Permissions (`authz`), secret masking (viewers see variable values as `•••`, sealed variables read `<sealed>`), validation, audit events and rate limits are therefore exactly the same as REST. A GraphQL request may make at most 500 internal REST calls. Past that, the remaining fields fail with `RATE_LIMITED`.
 - **Request.** `{"query": string, "operationName"?: string, "variables"?: object}`, at most 1 MiB. The response is always HTTP 200 with `{data, errors}` unless the request itself is malformed (`400`) or unauthenticated (`401`).
 - **Errors.** A REST error becomes a GraphQL error with the REST message and `extensions: {code, status}`. `code` is one of `BAD_USER_INPUT` (400), `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `INTERNAL_SERVER_ERROR`.
@@ -27,7 +27,7 @@
 | `variablesForServiceDeployment(projectId, environmentId, serviceId)` | Resolved variables, including the ones aven injects |
 | `domains(projectId, environmentId, serviceId): AllDomains!` | `serviceDomains` (generated) and `customDomains` with `status { verified dnsRecords { recordType hostlabel fqdn requiredValue currentValue status } cdnProvider certificateStatus keelStatus }`. `verified` is true for aven `active` and `proxied` (behind Cloudflare or a tunnel). Record `status` is `VALID` (aven `ok`/`proxied`), `PENDING` or `INVALID` (`mismatch`); `currentValue` is the values seen in the last check, comma-separated, or null. `cdnProvider` is `CLOUDFLARE` or null, `certificateStatus` `VALID`/`INVALID`/null, `keelStatus` the raw REST status |
 | `tcpProxies(serviceId, environmentId): [TCPProxy!]!` | `id domain proxyPort applicationPort serviceId environmentId`. At most one per service instance; `id` is `tcp_<instanceId>` |
-| `privateNetworkEndpoint(serviceId, environmentId, privateNetworkId?): PrivateNetworkEndpoint` | `publicId dnsName privateIps serviceInstanceId tags` plus aven's `fqdn aliases serviceId environmentId`. `dnsName` is the name without suffix (the custom private name or the service name, configured value), `fqdn` is `<dnsName>.<env>.keel.internal`, `privateIps` are the first replica's IPv6 and IPv4 addresses on the environment network (empty when nothing runs), `tags` is `["ipv4", "ipv6"]`. `publicId` is `pne_<instanceId>`. Reads REST `GET …/networking` |
+| `privateNetworkEndpoint(serviceId, environmentId, privateNetworkId?): PrivateNetworkEndpoint` | `publicId dnsName privateIps serviceInstanceId tags` plus aven's `fqdn aliases serviceId environmentId`. `dnsName` is the name without suffix (the custom private name or the service name, configured value), `fqdn` is `<dnsName>.<env>.aven.internal`, `privateIps` are the first replica's IPv6 and IPv4 addresses on the environment network (empty when nothing runs), `tags` is `["ipv4", "ipv6"]`. `publicId` is `pne_<instanceId>`. Reads REST `GET …/networking` |
 | `privateNetworkEndpointNameAvailable(environmentId, prefix, privateNetworkId?, serviceId?): Boolean!` | Whether `prefix` can be used as a private name in the environment. With `serviceId` (aven extension) the service's own names count as free (`GET …/instances/{eid}/private-dns/available`); without it every service name in the environment is taken (`GET /environments/{eid}/private-dns/available`) |
 | `customDomain(id, projectId)` | One domain by its `dom_…` id |
 
@@ -58,7 +58,7 @@ Not available: logs (`buildLogs`, `deploymentLogs`, `httpLogs`, `environmentLogs
 
 ```sh
 curl -s https://aven.example.com/graphql/v2 \
-  -H "Authorization: Bearer $KEEL_TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $AVEN_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"query($id: String!) { project(id: $id) { name services { edges { node { id name } } } } }","variables":{"id":"prj_123"}}'
 
 aven api -F id=prj_123 'query($id: String!) { project(id: $id) { name } }'

@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { sse, type KeelEvent } from "./api";
+import { sse, type AvenEvent } from "./api";
 import { qk } from "./queries";
 
 /** Subscribes to the project's event stream and refreshes the affected queries (canvas live updates). */
@@ -19,15 +19,15 @@ export function useProjectEvents(pid: string | null | undefined) {
       es = new EventSource(sse.events(pid), { withCredentials: true });
       es.onopen = () => (attempt = 0);
       es.addEventListener("event", (m) => {
-        let ev: KeelEvent;
+        let ev: AvenEvent;
         try {
-          ev = JSON.parse((m as MessageEvent).data) as KeelEvent;
+          ev = JSON.parse((m as MessageEvent).data) as AvenEvent;
         } catch {
           return;
         }
-        const prepend = (old: KeelEvent[] | undefined) => (old && !old.some((e) => e.id === ev.id) ? [ev, ...old] : old);
-        qc.setQueryData<KeelEvent[]>(qk.events(pid), prepend);
-        if (ev.environment_id) qc.setQueryData<KeelEvent[]>(qk.events(pid, ev.environment_id), prepend);
+        const prepend = (old: AvenEvent[] | undefined) => (old && !old.some((e) => e.id === ev.id) ? [ev, ...old] : old);
+        qc.setQueryData<AvenEvent[]>(qk.events(pid), prepend);
+        if (ev.environment_id) qc.setQueryData<AvenEvent[]>(qk.events(pid, ev.environment_id), prepend);
         else qc.invalidateQueries({ queryKey: ["events", pid] });
         if (ev.environment_id) {
           qc.invalidateQueries({ queryKey: qk.canvas(ev.environment_id) });

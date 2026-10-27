@@ -17,15 +17,15 @@ A fresh install puts this service on the canvas for the server owner (project `a
 - The dashboard and API are unavailable for the few seconds of the swap. Your services keep running: `keel-proxy` and the app containers are not touched.
 - The dashboard treats it as a special service: the panel shows only Deployments and Settings (source and build), deployments show only details and build logs, and the canvas menu offers open, settings, deploy, rollback and copy. The card shows the running version.
 - **Update checks.** Every 30 minutes (and a minute after start) Aven compares the newest commit of the service's branch with the running deployment through the GitHub API, using the project's GitHub connection. When it is behind, the canvas card gets a pink dot, the service panel lists the new commits with **Update** (deploys the branch head) and **Check now** (`POST /api/owner/self-service/check`), and the activity feed gets one `aven.update_available` event per new version. Updates are never applied automatically.
-- **Server settings.** The service's Settings tab starts with *Server settings*: the `KEEL_*` values of the env file, grouped (general, network, GitHub, mail, advanced), secrets shown only as set/unset (`GET/PUT /api/owner/server-config`, server owners only). Saving writes the file and nothing else; values that differ from the running server are marked *pending* and apply when aven-server is deployed again (**Save and deploy** redeploys the current image, so no build is needed). If that deployment rolls back, the env file is restored to the copy the last healthy server started with (`KEEL_DATA/selfhost-env.good`), so a bad value cannot stick. Data paths and the values the container overrides (`KEEL_DATA`, `KEEL_GATEWAY_SECRET_FILE`, `KEEL_AGENT_BIN_DIR`, `KEEL_RAILPACK_BIN`, `KEEL_SELF_*` file/service) are read-only. The container mounts the env file's directory read-write for this.
+- **Server settings.** The service's Settings tab starts with *Server settings*: the `AVEN_*` values of the env file, grouped (general, network, GitHub, mail, advanced), secrets shown only as set/unset (`GET/PUT /api/owner/server-config`, server owners only). Saving writes the file and nothing else; values that differ from the running server are marked *pending* and apply when aven-server is deployed again (**Save and deploy** redeploys the current image, so no build is needed). If that deployment rolls back, the env file is restored to the copy the last healthy server started with (`AVEN_DATA/selfhost-env.good`), so a bad value cannot stick. Data paths and the values the container overrides (`AVEN_DATA`, `AVEN_GATEWAY_SECRET_FILE`, `AVEN_AGENT_BIN_DIR`, `AVEN_RAILPACK_BIN`, `AVEN_SELF_*` file/service) are read-only. The container mounts the env file's directory read-write for this.
 - The self service cannot be stopped, restarted, scaled or put to sleep from Aven (`409`). It always runs one replica on the server's own node. Use `docker` on the host for manual operations.
 
 ## Requirements
 
 - A server installed as described in [Self-hosting](self-hosting.md), running as the systemd unit `aven-server`.
-- The env file at `/etc/keel/aven.env` (or set `KEEL_SELF_ENV_FILE`). The container reads it with `docker --env-file`, which does **not** strip quotes: write `KEY=value`, not `KEY="value"`. Deployments check this and fail before touching the server if a value is quoted.
-- Paths in the env file must exist inside the container. The data directory (`KEEL_DATA`), the env file's directory (read-write, for the server settings page), Docker volumes and `/root/.docker` are mounted at the same paths. `KEEL_RAILPACK_BIN` and `KEEL_AGENT_BIN_DIR` are overridden to the copies in the image. Anything else (for example `KEEL_TLS_CERT`) must live under one of the mounted paths.
-- If `KEEL_LISTEN` is a private address (Tailscale/WireGuard), that interface must come up before Docker starts the container. Docker retries the container (`--restart unless-stopped`), so a late interface only delays startup.
+- The env file at `/etc/aven/aven.env` (or set `AVEN_SELF_ENV_FILE`). The container reads it with `docker --env-file`, which does **not** strip quotes: write `KEY=value`, not `KEY="value"`. Deployments check this and fail before touching the server if a value is quoted.
+- Paths in the env file must exist inside the container. The data directory (`AVEN_DATA`), the env file's directory (read-write, for the server settings page), Docker volumes and `/root/.docker` are mounted at the same paths. `AVEN_RAILPACK_BIN` and `AVEN_AGENT_BIN_DIR` are overridden to the copies in the image. Anything else (for example `AVEN_TLS_CERT`) must live under one of the mounted paths.
+- If `AVEN_LISTEN` is a private address (Tailscale/WireGuard), that interface must come up before Docker starts the container. Docker retries the container (`--restart unless-stopped`), so a late interface only delays startup.
 
 ## Setup from the dashboard
 
@@ -43,11 +43,11 @@ Settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `KEEL_SELF_SERVICE` | | Pins the self service by ID. Overrides the dashboard, which then cannot change it. |
-| `KEEL_SELF_PROJECT` | | `off` skips creating the aven project on a fresh install. |
-| `KEEL_SELF_REPO`, `KEEL_SELF_BRANCH` | `https://github.com/turin-dev/aven`, `main` | Source of the project created on first start or from the checklist. |
-| `KEEL_SELF_UPDATE_INTERVAL` | `30m` | How often to check the repository branch for new commits (`off` disables). |
-| `KEEL_SELF_ENV_FILE` | `/etc/keel/aven.env` | Env file passed to the container. |
+| `AVEN_SELF_SERVICE` | | Pins the self service by ID. Overrides the dashboard, which then cannot change it. |
+| `AVEN_SELF_PROJECT` | | `off` skips creating the aven project on a fresh install. |
+| `AVEN_SELF_REPO`, `AVEN_SELF_BRANCH` | `https://github.com/turin-dev/aven`, `main` | Source of the project created on first start or from the checklist. |
+| `AVEN_SELF_UPDATE_INTERVAL` | `30m` | How often to check the repository branch for new commits (`off` disables). |
+| `AVEN_SELF_ENV_FILE` | `/etc/aven/aven.env` | Env file passed to the container. |
 
 ## Manual bootstrap
 
@@ -88,7 +88,7 @@ docker rm -f aven-server
 sudo systemctl enable --now aven-server
 ```
 
-Then stop managing Aven in the checklist (or remove `KEEL_SELF_SERVICE`); otherwise the next deployment moves the server into a container again.
+Then stop managing Aven in the checklist (or remove `AVEN_SELF_SERVICE`); otherwise the next deployment moves the server into a container again.
 
 **Upgrading Docker** restarts the `aven-server` container like any other container with a restart policy.
 

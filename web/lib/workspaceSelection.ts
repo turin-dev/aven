@@ -1,4 +1,5 @@
 import type { Project, Workspace } from "./api";
+import { readStorage } from "./legacyStorage";
 
 /** Resolve explicit links before remembered choices. Invalid explicit IDs never
  * silently open a different workspace or project. Shared by navigation and RBAC. */
@@ -18,5 +19,5 @@ export function selectWorkspaceID(
 
 export function rememberedSelection(key: "workspace" | "project"): string | null {
   if (typeof window === "undefined") return null;
-  try { return window.localStorage.getItem(`keel.${key}.v1`); } catch { return null; }
+  return readStorage(`aven.${key}.v1`, `keel.${key}.v1`);
 }

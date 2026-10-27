@@ -24,7 +24,7 @@ func ValidExternalUpstream(s string) bool {
 		return ip.IsPrivate() || netip.MustParsePrefix("100.64.0.0/10").Contains(ip)
 	}
 	h := strings.ToLower(host)
-	if h == "localhost" || strings.HasSuffix(h, ".localhost") || h == ContainerName {
+	if h == "localhost" || strings.HasSuffix(h, ".localhost") || h == ContainerName || h == LegacyContainerName {
 		return false
 	}
 	return upstreamHostRe.MatchString(host)

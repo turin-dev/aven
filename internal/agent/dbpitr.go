@@ -121,9 +121,9 @@ func (h *Handler) pitrToolSpec(ctx context.Context, r agentprotocol.DBToolReques
 	if err != nil {
 		return node.RunSpec{}, err
 	}
-	prefix := "keel-dbb-"
+	prefix := "aven-dbb-"
 	if restore {
-		prefix = "keel-dbr-"
+		prefix = "aven-dbr-"
 	}
 	l := st.Labels
 	sh := "/bin/sh"

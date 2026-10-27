@@ -2,6 +2,7 @@
 
 import { Fragment, type ReactNode } from "react";
 import { EN } from "./i18n/en";
+import { readStorage, writeStorage } from "./legacyStorage";
 
 // UI 번역. 한국어 원문이 키이고 영어 사전(lib/i18n/en/*.ts)이 그 키를 옮긴다. 사전에 없으면 원문을 그대로 쓴다.
 // 언어는 localStorage(keel.locale)에 두고, 바꾸면 페이지를 새로 불러 React 밖의 문자열(시간 표기, toast)까지 한 번에 바꾼다.
@@ -11,12 +12,13 @@ export const LOCALES: { value: Locale; label: string }[] = [
   { value: "ko", label: "한국어" },
   { value: "en", label: "English" },
 ];
-const STORAGE_KEY = "keel.locale";
+const STORAGE_KEY = "aven.locale";
+const LEGACY_STORAGE_KEY = "keel.locale";
 
 function detect(): Locale {
   if (typeof window === "undefined") return "ko";
   try {
-    const v = window.localStorage.getItem(STORAGE_KEY);
+    const v = readStorage(STORAGE_KEY, LEGACY_STORAGE_KEY);
     if (v === "ko" || v === "en") return v;
   } catch {
     /* ignore */
@@ -32,7 +34,7 @@ export function getLocale(): Locale {
 
 export function setLocale(locale: Locale) {
   try {
-    window.localStorage.setItem(STORAGE_KEY, locale);
+    writeStorage(STORAGE_KEY, locale);
   } catch {
     /* ignore */
   }
@@ -57,7 +59,7 @@ export function t(ko: string, vars?: Vars): string {
   return vars ? s.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : s;
 }
 
-/** tr("{env}에 https:// 주소를 넣으세요", { env: <code>KEEL_PUBLIC_URL</code> }): 문장 안에 JSX가 들어갈 때. */
+/** tr("{env}에 https:// 주소를 넣으세요", { env: <code>AVEN_PUBLIC_URL</code> }): 문장 안에 JSX가 들어갈 때. */
 export function tr(ko: string, parts: Record<string, ReactNode>): ReactNode {
   const s = lookup(ko);
   const out: ReactNode[] = [];

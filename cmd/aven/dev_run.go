@@ -23,9 +23,12 @@ import (
 
 // 로컬 Docker 객체(컨테이너, 네트워크, 볼륨)에 붙이는 라벨. aven dev down/clean이 이것으로 찾는다.
 const (
-	devLabelProject = "keel.dev.project"
-	devLabelEnv     = "keel.dev.environment"
-	devLabelService = "keel.dev.service"
+	devLabelProject       = "aven.dev.project"
+	devLabelEnv           = "aven.dev.environment"
+	devLabelService       = "aven.dev.service"
+	devLegacyLabelProject = "keel.dev.project"
+	devLegacyLabelEnv     = "keel.dev.environment"
+	devLegacyLabelService = "keel.dev.service"
 )
 
 type devProcessSpec struct {
@@ -45,7 +48,25 @@ type devProcessSpec struct {
 	volumes []string
 }
 
-func devVolumeName(id string) string { return "keel-dev-" + strings.ReplaceAll(id, "_", "-") }
+func devVolumeName(id string) string { return "aven-dev-" + strings.ReplaceAll(id, "_", "-") }
+
+func devLegacyVolumeName(id string) string { return "keel-dev-" + strings.ReplaceAll(id, "_", "-") }
+
+// resolveDevVolume은 새 볼륨 이름을 쓴다. 예전 keel-dev- 볼륨만 있으면 그 데이터를 그대로 쓴다.
+func resolveDevVolume(docker, id string) string {
+	next, old := devVolumeName(id), devLegacyVolumeName(id)
+	if docker == "" || dockerVolumeExists(docker, next) || !dockerVolumeExists(docker, old) {
+		return next
+	}
+	fmt.Fprintf(os.Stderr, "aven: volume %s is in use; %s is the new name (the old name still works)\n", old, next)
+	return old
+}
+
+func dockerVolumeExists(docker, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, docker, "volume", "inspect", name).Run() == nil
+}
 
 // devDockerCLIKey는 docker CLI 자신이 읽는 환경 변수다. 이런 변수를 CLI 환경에 덮으면 CLI가 다른 데몬/설정을 쓰게 되므로
 // 컨테이너에는 -e KEY=VALUE로 넘기고 CLI 환경은 그대로 둔다.
@@ -88,15 +109,21 @@ func devProcessPlan(base string, l *link, services []*devService, docker, networ
 			return nil, fmt.Errorf("service %s has an invalid port mapping", svc.service.Name)
 		}
 		image := strPtrValue(svc.instance.Image)
-		name := fmt.Sprintf("keel-dev-%s-%s-%d", devSlug(l.Environment), devSlug(svc.service.Name), os.Getpid())
+		name := fmt.Sprintf("aven-dev-%s-%s-%d", devSlug(l.Environment), devSlug(svc.service.Name), os.Getpid())
 		labels := []string{devLabelProject + "=" + l.ProjectID, devLabelEnv + "=" + l.EnvironmentID}
+		host := devPrivateDomain(svc, l.Environment)
 		args := []string{
 			"run", "--rm", "--name", name, "--stop-timeout", "10",
-			"--network", network, "--network-alias", devPrivateDomain(svc, l.Environment), "--network-alias", svc.service.Name,
+			"--network", network, "--network-alias", host, "--network-alias", svc.service.Name,
 			"--add-host", "host.docker.internal:host-gateway",
 			"-p", fmt.Sprintf("127.0.0.1:%d:%d/tcp", svc.localPort, svc.containerPort),
 		}
-		for _, lb := range append(labels, devLabelService+"="+svc.service.ID) {
+		if strings.HasSuffix(host, ".aven.internal") {
+			args = append(args, "--network-alias", strings.TrimSuffix(host, ".aven.internal")+".keel.internal")
+		}
+		labels = append(labels,
+			devLegacyLabelProject+"="+l.ProjectID, devLegacyLabelEnv+"="+l.EnvironmentID, devLabelService+"="+svc.service.ID, devLegacyLabelService+"="+svc.service.ID)
+		for _, lb := range labels {
 			args = append(args, "--label", lb)
 		}
 		start := strPtrValue(svc.instance.StartCommand)
@@ -105,8 +132,9 @@ func devProcessPlan(base string, l *link, services []*devService, docker, networ
 		}
 		var vols []string
 		for _, v := range svc.volumes {
-			vols = append(vols, devVolumeName(v.ID))
-			args = append(args, "--mount", "type=volume,source="+devVolumeName(v.ID)+",target="+v.MountPath)
+			vol := resolveDevVolume(docker, v.ID)
+			vols = append(vols, vol)
+			args = append(args, "--mount", "type=volume,source="+vol+",target="+v.MountPath)
 		}
 		keys := make([]string, 0, len(svc.containerVars))
 		for k := range svc.containerVars {
@@ -392,7 +420,7 @@ func runDevSession(plan []devProcessSpec, docker, network string, out *os.File) 
 		if _, ok := <-sig; !ok {
 			return
 		}
-		fmt.Fprintln(os.Stderr, "\nkeel dev: stopping services (press Ctrl-C again to force)")
+		fmt.Fprintln(os.Stderr, "\naven dev: stopping services (press Ctrl-C again to force)")
 		cancel()
 		if _, ok := <-sig; ok {
 			close(force)
@@ -555,11 +583,40 @@ func devDocker() (string, error) {
 }
 
 func devFilters(projectID, envID string) []string {
-	f := []string{"--filter", "label=" + devLabelProject + "=" + projectID}
+	return devFiltersFor(devLabelProject, devLabelEnv, projectID, envID)
+}
+
+func devLegacyFilters(projectID, envID string) []string {
+	return devFiltersFor(devLegacyLabelProject, devLegacyLabelEnv, projectID, envID)
+}
+
+func devFiltersFor(projectKey, envKey, projectID, envID string) []string {
+	f := []string{"--filter", "label=" + projectKey + "=" + projectID}
 	if envID != "" {
-		f = append(f, "--filter", "label="+devLabelEnv+"="+envID)
+		f = append(f, "--filter", "label="+envKey+"="+envID)
 	}
 	return f
+}
+
+func devListMerged(docker string, base []string, projectID, envID string) ([]string, error) {
+	a, err := devDockerList(docker, append(append([]string{}, base...), devFilters(projectID, envID)...)...)
+	if err != nil {
+		return nil, err
+	}
+	b, err := devDockerList(docker, append(append([]string{}, base...), devLegacyFilters(projectID, envID)...)...)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range append(a, b...) {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 func devDockerList(docker string, args ...string) ([]string, error) {
@@ -576,14 +633,13 @@ func devDockerList(docker string, args ...string) ([]string, error) {
 
 // devLeftovers는 이 프로젝트/환경에서 아직 도는 aven dev 컨테이너 수다.
 func devLeftovers(docker, projectID, envID string) int {
-	ids, _ := devDockerList(docker, append([]string{"ps", "-q"}, devFilters(projectID, envID)...)...)
+	ids, _ := devListMerged(docker, []string{"ps", "-q"}, projectID, envID)
 	return len(ids)
 }
 
 // devDown은 aven dev가 만든 컨테이너와 네트워크(volumes면 볼륨까지)를 지운다. envID가 비면 프로젝트 전체다.
 func devDown(docker, projectID, envID string, volumes bool, w io.Writer) error {
-	filters := devFilters(projectID, envID)
-	ids, err := devDockerList(docker, append([]string{"ps", "-aq"}, filters...)...)
+	ids, err := devListMerged(docker, []string{"ps", "-aq"}, projectID, envID)
 	if err != nil {
 		return err
 	}
@@ -592,7 +648,7 @@ func devDown(docker, projectID, envID string, volumes bool, w io.Writer) error {
 		_ = exec.Command(docker, append([]string{"rm", "-f"}, ids...)...).Run()
 	}
 	fmt.Fprintf(w, "aven dev: stopped %d container(s)\n", len(ids))
-	nets, err := devDockerList(docker, append([]string{"network", "ls", "-q"}, filters...)...)
+	nets, err := devListMerged(docker, []string{"network", "ls", "-q"}, projectID, envID)
 	if err != nil {
 		return err
 	}
@@ -602,7 +658,7 @@ func devDown(docker, projectID, envID string, volumes bool, w io.Writer) error {
 	if !volumes {
 		return nil
 	}
-	vols, err := devDockerList(docker, append([]string{"volume", "ls", "-q"}, filters...)...)
+	vols, err := devListMerged(docker, []string{"volume", "ls", "-q"}, projectID, envID)
 	if err != nil {
 		return err
 	}

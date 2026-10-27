@@ -706,7 +706,7 @@ func TestTokenScopes(t *testing.T) {
 		Prefix string `json:"prefix"`
 		Scope  string `json:"scope"`
 	}](t, w)
-	if !strings.HasPrefix(created.Token, "keel_") || !strings.HasPrefix(created.Token, created.Prefix) || created.Scope != "environment" {
+	if !strings.HasPrefix(created.Token, "aven_") || !strings.HasPrefix(created.Token, created.Prefix) || created.Scope != "environment" {
 		t.Fatalf("token: %+v", created)
 	}
 	// 목록에는 토큰 값이 없다.

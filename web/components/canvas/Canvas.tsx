@@ -28,12 +28,14 @@ import { CanvasContextMenu, ServiceContextMenu, VolumeContextMenu } from "./Canv
 import { setPendingPlace, takePendingPlace } from "@/lib/uiState";
 import type { NewView } from "@/lib/nav";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
+import { readStorage, writeStorage } from "@/lib/legacyStorage";
 
 type Pos = { x: number; y: number };
 type View = { x: number; y: number; z: number };
 type Rect = { x: number; y: number; w: number; h: number };
 
-const VIEW_KEY = "keel.canvas.view.v3";
+const VIEW_KEY = "aven.canvas.view.v3";
+const LEGACY_VIEW_KEY = "keel.canvas.view.v3";
 const MIN_Z = 0.2;
 /** The first view of an environment never zooms out below this, even if that crops far-away cards. */
 const READABLE_Z = 0.65;
@@ -45,7 +47,7 @@ const GAP_Y = 72;
 function loadView(eid: string): View | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(`${VIEW_KEY}:${eid}`);
+    const raw = readStorage(`${VIEW_KEY}:${eid}`, `${LEGACY_VIEW_KEY}:${eid}`);
     return raw ? (JSON.parse(raw) as View) : null;
   } catch {
     return null;
@@ -227,7 +229,7 @@ export function Canvas({
     if (!view) return;
     const timer = setTimeout(() => {
       try {
-        window.localStorage.setItem(`${VIEW_KEY}:${envId}`, JSON.stringify(view));
+        writeStorage(`${VIEW_KEY}:${envId}`, JSON.stringify(view));
       } catch {
         /* ignore */
       }

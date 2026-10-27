@@ -1,5 +1,5 @@
 # aven-server image for running Aven on Aven (docs/selfhost.md).
-# Aven builds this image itself when the repository is deployed as the self service (KEEL_SELF_SERVICE).
+# Aven builds this image itself when the repository is deployed as the self service (AVEN_SELF_SERVICE).
 # A plain `docker build -t aven-server .` works too (bootstrap).
 
 ARG GO_VERSION=1.26
@@ -16,14 +16,17 @@ RUN npm run build
 
 FROM golang:${GO_VERSION}-bookworm AS go
 WORKDIR /src
-# VERSION wins; otherwise Aven passes the deployed commit as KEEL_GIT_COMMIT_SHA (short SHA), else "dev".
+# VERSION wins; otherwise Aven passes the deployed commit as AVEN_GIT_COMMIT_SHA (short SHA).
+# KEEL_GIT_COMMIT_SHA still works for images built by an older server.
 ARG VERSION=
+ARG AVEN_GIT_COMMIT_SHA=
 ARG KEEL_GIT_COMMIT_SHA=
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /src/web/out ./internal/webui/dist
-RUN v="${VERSION:-$(printf '%.7s' "$KEEL_GIT_COMMIT_SHA")}" \
+RUN if [ -z "$AVEN_GIT_COMMIT_SHA" ] && [ -n "$KEEL_GIT_COMMIT_SHA" ]; then echo "warning: KEEL_GIT_COMMIT_SHA is set; use AVEN_GIT_COMMIT_SHA (the old name still works)" >&2; fi \
+ && v="${VERSION:-$(printf '%.7s' "${AVEN_GIT_COMMIT_SHA:-$KEEL_GIT_COMMIT_SHA}")}" \
  && touch internal/webui/dist/.gitkeep \
  && make server cli agents clis VERSION="${v:-dev}" \
  && find bin -type l -delete
@@ -52,5 +55,5 @@ COPY --from=docker /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/loca
 COPY --from=go /src/bin/ /usr/local/bin/
 RUN ln -s aven-server /usr/local/bin/keel-server && ln -s aven /usr/local/bin/keel
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/aven/
-# The agent and CLI downloads are served from next to aven-server (KEEL_AGENT_BIN_DIR is overridden in the container).
+# The agent and CLI downloads are served from next to aven-server (AVEN_AGENT_BIN_DIR is overridden in the container).
 CMD ["aven-server"]

@@ -1,7 +1,7 @@
-/* In-memory fake aven v1 backend used only by `next dev` with NEXT_PUBLIC_KEEL_MOCK=1. */
+/* In-memory fake aven v1 backend used only by `next dev` with NEXT_PUBLIC_AVEN_MOCK=1. */
 
 import type {
-  KeelNode,
+  AvenNode,
   DetectedPort,
   DnsRecord,
   InstanceNetworking,
@@ -15,7 +15,7 @@ import type {
   DeploymentTrigger,
   Domain,
   Environment,
-  KeelEvent,
+  AvenEvent,
   MetricPoint,
   MetricRange,
   PREnvironmentSettings,
@@ -64,7 +64,7 @@ import type {
 } from "../api";
 import { SEALED_VALUE } from "../api";
 import { parseRaw, renderRaw } from "../dotenv";
-import type { AdminCapID, AnnouncementLevel, CanvasGroup, KeelBackup, UsageLimit, UsageSuspension } from "../api";
+import type { AdminCapID, AnnouncementLevel, CanvasGroup, AvenBackup, UsageLimit, UsageSuspension } from "../api";
 import type { Dashboard, Widget } from "../layouts";
 import type { BackupDestination, BackupDestinationInput } from "../api";
 import type { PostgresCheck, PostgresPooling, PostgresPoolingInput, PostgresUpgrade } from "../postgres";
@@ -109,7 +109,7 @@ type Store = {
   volumes: Volume[];
   backups: Backup[];
   shared: Record<string, Record<string, string>>;
-  events: KeelEvent[];
+  events: AvenEvent[];
   cronRuns: CronRun[];
   buildLogs: Record<string, string[]>;
   runtimeLogs: Record<string, { t: string; replica: string; stream: "stdout" | "stderr"; msg: string }[]>;
@@ -130,7 +130,7 @@ const S: Store = {
   runtimeLogs: {},
 };
 
-const NODES: KeelNode[] = [
+const NODES: AvenNode[] = [
   {
     id: "node_local",
     name: "local-node",
@@ -209,7 +209,7 @@ const registries: Record<string, { host: string; username: string; password: str
   prj_sample: [{ host: "ghcr.io", username: "demo-user", password: "x" }],
 };
 
-type Listener = (e: KeelEvent) => void;
+type Listener = (e: AvenEvent) => void;
 const eventListeners = new Set<Listener>();
 type DepListener = (d: Deployment, line?: string) => void;
 const depListeners = new Map<string, Set<DepListener>>();
@@ -225,8 +225,8 @@ export function onDeployment(id: string, fn: DepListener) {
   return () => set!.delete(fn);
 }
 
-function emit(e: Omit<KeelEvent, "id" | "created_at"> & { created_at?: string }) {
-  const ev: KeelEvent = { id: rid("evt"), created_at: iso(now()), ...e };
+function emit(e: Omit<AvenEvent, "id" | "created_at"> & { created_at?: string }) {
+  const ev: AvenEvent = { id: rid("evt"), created_at: iso(now()), ...e };
   S.events.unshift(ev);
   eventListeners.forEach((fn) => fn(ev));
   return ev;
@@ -259,11 +259,11 @@ function secret(n = 24) {
 
 function dbVars(kind: DatabaseKind, name: string): Record<string, string> {
   const pw = secret();
-  const tcp = "${{ KEEL_TCP_PROXY_DOMAIN }}:${{ KEEL_TCP_PROXY_PORT }}";
+  const tcp = "${{ AVEN_TCP_PROXY_DOMAIN }}:${{ AVEN_TCP_PROXY_PORT }}";
   switch (kind) {
     case "postgres":
       return {
-        PGHOST: "${{ KEEL_PRIVATE_DOMAIN }}",
+        PGHOST: "${{ AVEN_PRIVATE_DOMAIN }}",
         PGPORT: "5432",
         PGUSER: "postgres",
         PGPASSWORD: pw,
@@ -274,7 +274,7 @@ function dbVars(kind: DatabaseKind, name: string): Record<string, string> {
       };
     case "mysql":
       return {
-        MYSQLHOST: "${{ KEEL_PRIVATE_DOMAIN }}",
+        MYSQLHOST: "${{ AVEN_PRIVATE_DOMAIN }}",
         MYSQLPORT: "3306",
         MYSQLUSER: "root",
         MYSQLPASSWORD: pw,
@@ -285,7 +285,7 @@ function dbVars(kind: DatabaseKind, name: string): Record<string, string> {
       };
     case "redis":
       return {
-        REDISHOST: "${{ KEEL_PRIVATE_DOMAIN }}",
+        REDISHOST: "${{ AVEN_PRIVATE_DOMAIN }}",
         REDISPORT: "6379",
         REDISUSER: "default",
         REDISPASSWORD: pw,
@@ -294,7 +294,7 @@ function dbVars(kind: DatabaseKind, name: string): Record<string, string> {
       };
     case "mongo":
       return {
-        MONGOHOST: "${{ KEEL_PRIVATE_DOMAIN }}",
+        MONGOHOST: "${{ AVEN_PRIVATE_DOMAIN }}",
         MONGOPORT: "27017",
         MONGOUSER: "mongo",
         MONGOPASSWORD: pw,
@@ -332,7 +332,7 @@ function forkMockEnv(pid: string, env: Environment, from: string | undefined, pr
     const inst = newInstance(
       svc,
       env,
-      src ? { ...clone(src), id: rid("si"), environment_id: env.id, status: "idle", current_deployment_id: null, private_domain: `${svc.name}.${env.name}.keel.internal`, tcp_proxy: null, domains } : {},
+      src ? { ...clone(src), id: rid("si"), environment_id: env.id, status: "idle", current_deployment_id: null, private_domain: `${svc.name}.${env.name}.aven.internal`, tcp_proxy: null, domains } : {},
     );
     S.instances.push(inst);
     if (svc.database_kind)
@@ -369,7 +369,7 @@ function newInstance(svc: Service, env: Environment, over: Partial<ServiceInstan
     cron_schedule: null,
     sleep_when_idle: false,
     domains: [],
-    private_domain: `${svc.name}.${env.name}.keel.internal`,
+    private_domain: `${svc.name}.${env.name}.aven.internal`,
     tcp_proxy: null,
     variables: {},
     status: "idle",
@@ -427,20 +427,20 @@ function verifyTxt(host: string) {
     for (const c of `${round}:domain:${host}`) h = Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0;
     out += h.toString(16).padStart(8, "0");
   }
-  return { name: `_keel-verify.${host}`, value: `keel-verify=${out}` };
+  return { name: `_aven-verify.${host}`, value: `aven-verify=${out}` };
 }
 
 const COMMITS: [string, string][] = [
-  ["feat: 요청 로깅 미들웨어 추가", "keel-dev"],
-  ["fix: 세션 만료 시 401 대신 500이 나던 문제", "keel-dev"],
+  ["feat: 요청 로깅 미들웨어 추가", "aven-dev"],
+  ["fix: 세션 만료 시 401 대신 500이 나던 문제", "aven-dev"],
   ["chore(deps): bump next from 16.3.1 to 16.4.2", "dependabot[bot]"],
   ["refactor: db 커넥션 풀 설정 분리", "minji"],
-  ["feat(api): /v1/reports 엔드포인트", "keel-dev"],
+  ["feat(api): /v1/reports 엔드포인트", "aven-dev"],
   ["docs: README 배포 방법 갱신", "minji"],
-  ["perf: 홈 화면 쿼리 캐시", "keel-dev"],
-  ["fix: healthz가 DB 연결을 확인하도록", "keel-dev"],
+  ["perf: 홈 화면 쿼리 캐시", "aven-dev"],
+  ["fix: healthz가 DB 연결을 확인하도록", "aven-dev"],
   ["style: 린트 경고 정리", "minji"],
-  ["feat: 다크 모드 토글", "keel-dev"],
+  ["feat: 다크 모드 토글", "aven-dev"],
 ];
 
 function buildLogFor(svc: Service, inst: ServiceInstance, d: Deployment, failed?: string): string[] {
@@ -480,7 +480,7 @@ function buildLogFor(svc: Service, inst: ServiceInstance, d: Deployment, failed?
     add("#9 8.204 ✓ Compiled successfully", 3000);
     add("#10 exporting to image");
     add("#10 exporting layers 1.9s done", 1900);
-    add(`#10 naming to keel/${svc.name}:${d.commit_sha?.slice(0, 7)} done`);
+    add(`#10 naming to aven/${svc.name}:${d.commit_sha?.slice(0, 7)} done`);
     add("==> build complete in 24s");
   } else {
     add(`==> pulling ${inst.image}`, 200);
@@ -604,8 +604,8 @@ function seed() {
   const stg: Environment = { id: "env_stg", project_id: p.id, name: "staging", created_at: ago(60 * 24 * 12), ...STANDARD_ENV };
   const sb: Environment = { id: "env_sb_prod", project_id: p2.id, name: "production", created_at: p2.created_at, ...STANDARD_ENV };
   S.envs.push(prod, stg, sb);
-  S.shared[prod.id] = { APP_NAME: "keel-demo", SLACK_WEBHOOK: "https://example.com/webhooks/slack", TZ: "Asia/Seoul" };
-  S.shared[stg.id] = { APP_NAME: "keel-demo-staging", SLACK_WEBHOOK: "https://example.com/webhooks/slack-staging", TZ: "Asia/Seoul" };
+  S.shared[prod.id] = { APP_NAME: "aven-demo", SLACK_WEBHOOK: "https://example.com/webhooks/slack", TZ: "Asia/Seoul" };
+  S.shared[stg.id] = { APP_NAME: "aven-demo-staging", SLACK_WEBHOOK: "https://example.com/webhooks/slack-staging", TZ: "Asia/Seoul" };
   S.shared[sb.id] = {};
 
   const svcs: SeedSvc[] = [
@@ -750,7 +750,7 @@ function seed() {
             cert: { status: "valid", not_after: iso(now() + 71 * 864e5) },
             dns: [
               { type: "CNAME", name: "hello", value: "node-one.edge.example.com", status: "ok", current: "192.0.2.21, 192.0.2.22 (Cloudflare)" },
-              { type: "TXT", name: "_keel-verify.hello", value: verifyTxt("hello.example.org").value, status: "ok", current: verifyTxt("hello.example.org").value },
+              { type: "TXT", name: "_aven-verify.hello", value: verifyTxt("hello.example.org").value, status: "ok", current: verifyTxt("hello.example.org").value },
             ],
           },
           // Pending custom domain: CNAME still points at the old host, TXT not created yet.
@@ -764,7 +764,7 @@ function seed() {
             cert: { status: "pending" },
             dns: [
               { type: "CNAME", name: "hello", value: "node-one.edge.example.com", status: "mismatch", current: "previous.example.net" },
-              { type: "TXT", name: "_keel-verify.hello", value: verifyTxt("hello.example.com").value, status: "pending", current: null },
+              { type: "TXT", name: "_aven-verify.hello", value: verifyTxt("hello.example.com").value, status: "pending", current: null },
             ],
           },
         );
@@ -784,7 +784,7 @@ function seed() {
             cert: { status: "valid", not_after: iso(now() + 55 * 864e5) },
             dns: [
               { type: "CNAME", name: "whoami", value: NODE_INGRESS.node_remote.hostname, status: "ok", current: "192.0.2.23, 192.0.2.24 (Cloudflare)" },
-              { type: "TXT", name: "_keel-verify.whoami", value: verifyTxt("whoami.example.net").value, status: "pending", current: null },
+              { type: "TXT", name: "_aven-verify.whoami", value: verifyTxt("whoami.example.net").value, status: "pending", current: null },
             ],
           },
         ];
@@ -827,7 +827,7 @@ function seed() {
           commit_message: isRepo ? msg : null,
           commit_author: isRepo ? author : null,
           branch: isRepo ? inst.branch : null,
-          image: dd.st === "failed" && dd.error?.startsWith("build") ? null : isRepo ? `keel/${def.name}:${i}` : inst.image,
+          image: dd.st === "failed" && dd.error?.startsWith("build") ? null : isRepo ? `aven/${def.name}:${i}` : inst.image,
           builder_used: isRepo ? (inst.builder === "railpack" ? "railpack" : "dockerfile") : "image",
           replicas:
             dd.st === "live"
@@ -1102,24 +1102,24 @@ function injected(inst: ServiceInstance): Record<string, string> {
   const cur = inst.current_deployment_id ? S.deployments.find((d) => d.id === inst.current_deployment_id) : null;
   const vol = S.volumes.find((v) => v.service_instance_id === inst.id);
   const out: Record<string, string> = {
-    KEEL_SERVICE_NAME: svc.name,
-    KEEL_SERVICE_ID: svc.id,
-    KEEL_ENVIRONMENT_NAME: env.name,
-    KEEL_ENVIRONMENT_ID: env.id,
-    KEEL_PROJECT_NAME: p.name,
-    KEEL_PROJECT_ID: p.id,
-    KEEL_PRIVATE_DOMAIN: inst.private_domain,
+    AVEN_SERVICE_NAME: svc.name,
+    AVEN_SERVICE_ID: svc.id,
+    AVEN_ENVIRONMENT_NAME: env.name,
+    AVEN_ENVIRONMENT_ID: env.id,
+    AVEN_PROJECT_NAME: p.name,
+    AVEN_PROJECT_ID: p.id,
+    AVEN_PRIVATE_DOMAIN: inst.private_domain,
   };
   if (inst.port) out.PORT = String(inst.port);
-  if (inst.domains[0]) out.KEEL_PUBLIC_DOMAIN = inst.domains[0].host;
-  if (cur) out.KEEL_DEPLOYMENT_ID = cur.id;
-  if (cur?.commit_sha) out.KEEL_GIT_COMMIT_SHA = cur.commit_sha;
-  if (cur?.branch) out.KEEL_GIT_BRANCH = cur.branch;
+  if (inst.domains[0]) out.AVEN_PUBLIC_DOMAIN = inst.domains[0].host;
+  if (cur) out.AVEN_DEPLOYMENT_ID = cur.id;
+  if (cur?.commit_sha) out.AVEN_GIT_COMMIT_SHA = cur.commit_sha;
+  if (cur?.branch) out.AVEN_GIT_BRANCH = cur.branch;
   if (inst.tcp_proxy) {
-    out.KEEL_TCP_PROXY_DOMAIN = BASE;
-    out.KEEL_TCP_PROXY_PORT = String(inst.tcp_proxy.public_port);
+    out.AVEN_TCP_PROXY_DOMAIN = BASE;
+    out.AVEN_TCP_PROXY_PORT = String(inst.tcp_proxy.public_port);
   }
-  if (vol) out.KEEL_VOLUME_MOUNT_PATH = vol.mount_path;
+  if (vol) out.AVEN_VOLUME_MOUNT_PATH = vol.mount_path;
   return out;
 }
 
@@ -1233,7 +1233,7 @@ function startDeployment(inst: ServiceInstance, trigger: DeploymentTrigger, from
   const full = buildLogFor(svc, inst, { ...d, started_at: iso(now()) });
   const buildPart = full.filter((l) => !/==> (pre-deploy|starting|healthcheck|배포)/.test(l.slice(9)) && !/migrations:/.test(l));
   if (skipBuild && isRepo) {
-    at(500, () => pushLog(d, `==> reusing image ${d.image ?? `keel/${svc.name}`} (빌드 생략)`));
+    at(500, () => pushLog(d, `==> reusing image ${d.image ?? `aven/${svc.name}`} (빌드 생략)`));
   } else {
     at(400, () => setStatus(d, isRepo ? "building" : "deploying"));
     for (const l of buildPart) at(isRepo ? 260 : 400, () => pushLog(d, l.slice(9)));
@@ -1247,7 +1247,7 @@ function startDeployment(inst: ServiceInstance, trigger: DeploymentTrigger, from
   }
   at(500, () => {
     setStatus(d, "deploying");
-    if (!d.image) d.image = isRepo ? `keel/${svc.name}:${d.commit_sha?.slice(0, 7)}` : inst.image;
+    if (!d.image) d.image = isRepo ? `aven/${svc.name}:${d.commit_sha?.slice(0, 7)}` : inst.image;
     const nodesOf = (inst.placement ?? [{ node_id: inst.node_id, replicas: inst.replicas }]).flatMap((p) => Array.from({ length: p.replicas }, () => p.node_id));
     const count = inst.autoscale?.enabled ? Math.min(inst.autoscale.max_replicas, Math.max(inst.autoscale.min_replicas, inst.current_replicas || inst.replicas)) : inst.replicas;
     d.replicas = Array.from({ length: count }, (_, k) => ({ name: `${svc.name}-${k + 1}`, status: "starting" as const, restarts: 0, node_id: nodesOf[k % nodesOf.length] }));
@@ -1534,7 +1534,7 @@ route("POST", "/auth/login", (_, r) => {
 route("POST", "/auth/logout", () => undefined);
 route("PATCH", "/auth/me", (_, r) => {
   const b = (r.body ?? {}) as { name?: string; new_password?: string };
-  if (b.new_password && me().builtin) throw new HttpError(400, "기본 admin 계정의 비밀번호는 KEEL_ADMIN_PASSWORD 환경변수로 바꿉니다");
+  if (b.new_password && me().builtin) throw new HttpError(400, "기본 admin 계정의 비밀번호는 AVEN_ADMIN_PASSWORD 환경변수로 바꿉니다");
   if (b.name !== undefined) me().name = b.name.trim();
   return me();
 });
@@ -1632,7 +1632,7 @@ route("POST", "/tokens", (_, r) => {
   const env = b.environment_id ? getEnv(b.environment_id) : null;
   const scope: TokenScope = b.scope === "instance" ? "instance" : env ? "environment" : b.project_id ? "project" : "workspace";
   if (scope === "environment" && b.role === "admin") throw new HttpError(400, "environment 토큰의 역할은 member 또는 viewer입니다");
-  const token = `keel_${secret(40).toLowerCase()}`;
+  const token = `aven_${secret(40).toLowerCase()}`;
   const t: ApiToken = {
     id: rid("tok"),
     user_id: me().id,
@@ -1723,7 +1723,7 @@ const OWNER = {
   disabled: [] as AdminCapID[],
   maintenance: { enabled: false, message: "", block_logins: false, pause_webhooks: false, started_at: null as string | null, started_by: "" },
   announcement: { enabled: false, message: "", level: "info" as AnnouncementLevel, updated_at: null as string | null },
-  backups: [{ name: "aven-pre-permissions-20261022-094224.db", bytes: 261222400, modified_at: "2026-10-22T09:42:24Z" }] as KeelBackup[],
+  backups: [{ name: "aven-pre-permissions-20261022-094224.db", bytes: 261222400, modified_at: "2026-10-22T09:42:24Z" }] as AvenBackup[],
 };
 function requireOwner() {
   if (me().role !== "owner") throw new HttpError(403, "권한이 없습니다");
@@ -1741,7 +1741,7 @@ route("GET", "/owner", () => {
     counts: { sessions: USERS.length, api_tokens: 2, users: USERS.length },
     server: {
       version: "mock", node: "eu", go_version: "go1.26", pid: 4242, started_at: rel(-86400_000 * 2), uptime_seconds: 86400 * 2 + 3600,
-      systemd: true, data_dir: "/var/lib/keel", db_bytes: 261222400, public_url: "https://aven.example.com",
+      systemd: true, data_dir: "/var/lib/aven", db_name: "aven.db", db_bytes: 261222400, public_url: "https://aven.example.com",
       admin_password_set: true, legacy_api_token_set: false, github_webhook_secret_set: true, github_oauth_configured: true,
       legacy_agents_disabled: false, secure_cookie: true, trusted_proxies: 1, smtp_configured: true,
     },
@@ -1804,7 +1804,7 @@ route("POST", "/owner/sessions/revoke", () => { requireOwner(); return { revoked
 route("GET", "/owner/tokens", () => {
   requireOwner();
   return USERS.slice(0, 2).map((u, i) => ({
-    id: `tok_${i}`, user_id: u.id, name: i ? "github-actions" : "ops", prefix: `keel_${i}ab3`, scope: i ? "workspace" : "instance", workspace_id: null,
+    id: `tok_${i}`, user_id: u.id, name: i ? "github-actions" : "ops", prefix: `aven_${i}ab3`, scope: i ? "workspace" : "instance", workspace_id: null,
     project_id: null, environment_id: null, role: "admin", expires_at: null, last_used_at: rel(-7200_000), created_at: rel(-86400_000 * 9),
     email: u.email, user_name: u.name, user_role: u.role,
   }));
@@ -1827,7 +1827,7 @@ route("POST", "/owner/lockdown", (_p, r) => {
 route("GET", "/owner/backups", () => { requireOwner(); return OWNER.backups; });
 route("POST", "/owner/backups", () => {
   requireOwner();
-  const b = { name: `keel-owner-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15).replace("T", "-")}.db`, bytes: 262000000, modified_at: rel(0) };
+  const b = { name: `aven-owner-${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15).replace("T", "-")}.db`, bytes: 262000000, modified_at: rel(0) };
   OWNER.backups = [b, ...OWNER.backups];
   return b;
 });
@@ -2058,7 +2058,7 @@ route("PATCH", "/environments/{eid}", ([eid], r) => {
   if (!name || !/^[a-z0-9-]+$/.test(name)) throw new HttpError(400, "environment name must match [a-z0-9-]");
   if (S.envs.some((e) => e.project_id === env.project_id && e.name === name && e.id !== eid)) throw new HttpError(409, `environment "${name}" already exists`);
   env.name = name;
-  for (const i of S.instances.filter((x) => x.environment_id === eid)) i.private_domain = `${getService(i.service_id).name}.${name}.keel.internal`;
+  for (const i of S.instances.filter((x) => x.environment_id === eid)) i.private_domain = `${getService(i.service_id).name}.${name}.aven.internal`;
   return env;
 });
 route("DELETE", "/environments/{eid}", ([eid]) => {
@@ -2093,7 +2093,7 @@ route("PATCH", "/services/{sid}", ([sid], r) => {
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(b.name)) throw new HttpError(400, "name must match [a-z0-9-]");
     if (S.services.some((s) => s.project_id === svc.project_id && s.name === b.name && s.id !== sid)) throw new HttpError(409, `service "${b.name}" already exists`);
     svc.name = b.name;
-    for (const i of S.instances.filter((x) => x.service_id === sid)) i.private_domain = `${b.name}.${getEnv(i.environment_id).name}.keel.internal`;
+    for (const i of S.instances.filter((x) => x.service_id === sid)) i.private_domain = `${b.name}.${getEnv(i.environment_id).name}.aven.internal`;
   }
   if (b.icon !== undefined) svc.icon = b.icon;
   return svc;
@@ -2125,9 +2125,9 @@ route("GET", "/services/{sid}/instances/{eid}/admin", ([sid, eid]) => {
     node: null,
     containers: inst.current_deployment_id
       ? [{
-          name: `keel-${svc.name}-${inst.current_deployment_id.slice(-6)}`, role: "app", deployment_id: inst.current_deployment_id, replica: "0",
+          name: `aven-${svc.name}-${inst.current_deployment_id.slice(-6)}`, role: "app", deployment_id: inst.current_deployment_id, replica: "0",
           status: running ? "running" : "exited", running, exit_code: running ? 0 : 1, restart_count: 0,
-          started_at: inst.updated_at, ips: { "keel-net": ["fd00:6b::12", "10.30.0.12"] }, volumes: [],
+          started_at: inst.updated_at, ips: { "aven-net": ["fd00:6b::12", "10.30.0.12"] }, volumes: [],
         }]
       : [],
     holds: MOCK_SERVICE_HOLDS.filter((h) => h.target_id === sid),
@@ -2433,11 +2433,11 @@ function mockBucketVars(pw: string): Record<string, string> {
   const h = hash(pw).toString(16).padStart(10, "0");
   return {
     BUCKET: `bucket-${h.slice(0, 10)}`,
-    ACCESS_KEY_ID: `KEEL${(h + h).toUpperCase().slice(0, 16)}`,
+    ACCESS_KEY_ID: `AVEN${(h + h).toUpperCase().slice(0, 16)}`,
     SECRET_ACCESS_KEY: pw,
     REGION: "us-east-1",
-    ENDPOINT: "http://${{ KEEL_PRIVATE_DOMAIN }}:9000",
-    PUBLIC_ENDPOINT: "https://${{ KEEL_PUBLIC_DOMAIN }}",
+    ENDPOINT: "http://${{ AVEN_PRIVATE_DOMAIN }}:9000",
+    PUBLIC_ENDPOINT: "https://${{ AVEN_PUBLIC_DOMAIN }}",
     MINIO_ROOT_USER: "${{ ACCESS_KEY_ID }}",
     MINIO_ROOT_PASSWORD: "${{ SECRET_ACCESS_KEY }}",
     AWS_ACCESS_KEY_ID: "${{ ACCESS_KEY_ID }}",
@@ -2480,7 +2480,7 @@ route("GET", "/services/{sid}/instances/{eid}/bucket", ([sid, eid]) => {
   return {
     bucket: v.BUCKET ?? "",
     region: v.REGION ?? "us-east-1",
-    endpoint: `http://${svc.name}.${env?.name ?? "production"}.keel.internal:9000`,
+    endpoint: `http://${svc.name}.${env?.name ?? "production"}.aven.internal:9000`,
     public_endpoint: host ? `https://${host}` : null,
     access_key_id: v.ACCESS_KEY_ID ?? "",
     secret_access_key: v.SECRET_ACCESS_KEY ?? "",
@@ -2750,7 +2750,7 @@ function customDnsRecords(inst: ServiceInstance, host: string): DnsRecord[] {
   const n = NODES.find((x) => x.id === inst.node_id) ?? NODES[0];
   const ing = NODE_INGRESS[n.id] ?? NODE_INGRESS.node_local;
   const out: DnsRecord[] = [{ type: "CNAME", name: recordName(host), value: ing.hostname, status: "pending", current: null }];
-  out.push({ type: "TXT", name: recordName(host, "_keel-verify"), value: verifyTxt(host).value, status: "pending", current: null });
+  out.push({ type: "TXT", name: recordName(host, "_aven-verify"), value: verifyTxt(host).value, status: "pending", current: null });
   if (ing.mode === "direct") {
     if (n.address.ipv6) out.push({ type: "AAAA", name: recordName(host), value: n.address.ipv6, status: "pending", current: null });
     if (n.address.ipv4) out.push({ type: "A", name: recordName(host), value: n.address.ipv4, status: "pending", current: null });
@@ -2854,7 +2854,7 @@ route("GET", "/services/{sid}/instances/{eid}/networking", ([sid, eid]) => {
   const env = getEnv(eid);
   const n = NODES.find((x) => x.id === inst.node_id);
   const dns = inst.private_dns_name || svc.name;
-  const aliases = [...new Set([svc.name, `${svc.name}.${env.name}.keel.internal`, dns, `${dns}.${env.name}.keel.internal`])];
+  const aliases = [...new Set([svc.name, `${svc.name}.${env.name}.aven.internal`, `${svc.name}.${env.name}.keel.internal`, dns, `${dns}.${env.name}.aven.internal`, `${dns}.${env.name}.keel.internal`])];
   const idx = S.instances.filter((i) => i.environment_id === eid).findIndex((i) => i.id === inst.id) + 2;
   return {
     detected_ports: detectedPorts(inst),
@@ -2867,7 +2867,7 @@ route("GET", "/services/{sid}/instances/{eid}/networking", ([sid, eid]) => {
     tcp_proxy: tcpView(inst),
     private: {
       dns_name: dns,
-      fqdn: `${dns}.${env.name}.keel.internal`,
+      fqdn: `${dns}.${env.name}.aven.internal`,
       aliases,
       ipv4: Array.from({ length: Math.max(1, inst.replicas) }, (_, k) => `172.20.${(eid.length * 7) % 200}.${idx + k * 16}`),
       ipv6: Array.from({ length: Math.max(1, inst.replicas) }, (_, k) => `fd4b:6565:6c00:${(eid.length * 13).toString(16)}::${(idx + k * 16).toString(16)}`),
@@ -3337,7 +3337,7 @@ route("GET", "/system", () => ({
   mesh: { mode: "auto", port: 7443, private_address: NODES[0]?.address.private ?? null, enabled: meshCapable(NODES[0]) },
 }));
 /** v1.5 mock: a node is on the mesh when its private address is a private IPv4 (10/8, 100.64/10, 192.168/16). */
-function meshCapable(n?: KeelNode): boolean {
+function meshCapable(n?: AvenNode): boolean {
   const p = n?.address.private ?? "";
   return /^(10\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(p);
 }
@@ -3527,7 +3527,7 @@ function channelInput(c: NotificationChannel & { secret?: string }, b: Notificat
     if (!c.recipients.length) throw new HttpError(400, "email channels need 1-20 recipients");
   } else if (!c.url || !/^https?:\/\/[^/@]+/.test(c.url)) throw new HttpError(400, "url must be an http(s) URL without credentials");
   else if (/^https?:\/\/(localhost|127\.|10\.|192\.168\.|169\.254\.|\[::1\])/.test(c.url))
-    throw new HttpError(400, "사설·루프백·링크 로컬 주소로는 알림을 보낼 수 없습니다 (KEEL_NOTIFY_ALLOW_PRIVATE=1로 허용)");
+    throw new HttpError(400, "사설·루프백·링크 로컬 주소로는 알림을 보낼 수 없습니다 (AVEN_NOTIFY_ALLOW_PRIVATE=1로 허용)");
   c.secret_set = !!c.secret;
 }
 const viewCh = (c: NotificationChannel & { secret?: string }): NotificationChannel => {
@@ -3567,7 +3567,7 @@ function channelRoutes(prefix: string, pidOf: (m: string[]) => string | null) {
     const c = findChannel(pidOf(m), m[m.length - 1]);
     const ok = c.kind !== "email";
     const d: NotificationDelivery = { id: rid("dlv"), channel_id: c.id, event_id: rid("evt"), event_kind: "notification.test", status: ok ? "ok" : "failed",
-      attempts: 1, status_code: ok ? 200 : null, error: ok ? "" : "SMTP가 설정되지 않았습니다 (KEEL_SMTP_HOST)", duration_ms: 84, created_at: iso(now()) };
+      attempts: 1, status_code: ok ? 200 : null, error: ok ? "" : "SMTP가 설정되지 않았습니다 (AVEN_SMTP_HOST)", duration_ms: 84, created_at: iso(now()) };
     DELIVERIES.unshift(d);
     return { ok, attempts: 1, status_code: d.status_code, duration_ms: 84, error: ok ? null : d.error };
   });
@@ -3579,7 +3579,7 @@ function channelRoutes(prefix: string, pidOf: (m: string[]) => string | null) {
 channelRoutes("/projects/{pid}/notification-channels", (m) => (getProject(m[0]), m[0]));
 channelRoutes("/notification-channels", () => null);
 route("POST", "/system/smtp/test", () => {
-  throw new HttpError(503, "SMTP가 설정되지 않았습니다 (KEEL_SMTP_HOST, KEEL_SMTP_FROM)");
+  throw new HttpError(503, "SMTP가 설정되지 않았습니다 (AVEN_SMTP_HOST, AVEN_SMTP_FROM)");
 });
 route("GET", "/notifications", (_, r) => {
   const unread = r.query.get("unread") === "1";
@@ -4418,7 +4418,7 @@ const DESTS: (BackupDestination & { secret_key?: string })[] = [
     type: "s3",
     endpoint: "https://account-id.r2.cloudflarestorage.com",
     region: "auto",
-    bucket: "keel-backups",
+    bucket: "aven-backups",
     prefix: "demo/",
     access_key: "EXAMPLE_ACCESS_KEY",
     has_secret: true,

@@ -33,9 +33,11 @@ const (
 	ReplicaSpanLimit = 1000
 	RateWindow       = 10 * time.Second
 	// TokenHeader는 수신기가 요구하는 자격 증명 헤더다(OTEL_EXPORTER_OTLP_HEADERS로 주입).
-	TokenHeader = "X-Keel-Trace-Token"
+	TokenHeader       = "X-Aven-Trace-Token"
+	LegacyTokenHeader = "X-Keel-Trace-Token"
 
-	TraceIDHeader = "X-Keel-Trace-Id"
+	TraceIDHeader       = "X-Aven-Trace-Id"
+	LegacyTraceIDHeader = "X-Keel-Trace-Id"
 
 	grpcExportPath = "/opentelemetry.proto.collector.trace.v1.TraceService/Export"
 )
@@ -208,6 +210,9 @@ func (h *Receiver) serveGRPC(w http.ResponseWriter, r *http.Request) {
 
 func requestToken(r *http.Request) string {
 	if t := r.Header.Get(TokenHeader); t != "" {
+		return t
+	}
+	if t := r.Header.Get(LegacyTokenHeader); t != "" {
 		return t
 	}
 	if a := r.Header.Get("Authorization"); len(a) > 7 && strings.EqualFold(a[:7], "bearer ") {

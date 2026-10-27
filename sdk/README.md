@@ -5,7 +5,7 @@ TypeScript SDK for Aven feature flags. It keeps one environment's flags in memor
 ```ts
 import { flags } from "aven-flags";
 
-await flags.init(); // KEEL_URL + KEEL_TOKEN (project or environment API token)
+await flags.init(); // AVEN_URL + AVEN_TOKEN (project or environment API token; KEEL_URL and KEEL_TOKEN still work)
 
 const on = flags.getBoolean("checkout-v2", { key: userId, plan: user.plan }, false);
 const theme = flags.getString("ui-theme", { key: userId }, "classic");
@@ -22,10 +22,10 @@ The fallback is returned only when the flag can't be read (not loaded yet, missi
 
 ```ts
 await flags.init({
-  baseUrl: "https://aven.example.com", // default KEEL_URL
-  token: "keel_…",                      // default KEEL_TOKEN, then KEEL_API_TOKEN
-  authType: "project-token",            // or "account-token" (needs scope.projectId / KEEL_PROJECT_ID)
-  scope: { projectId: "prj_…", environmentId: "env_…" }, // environment default: KEEL_ENVIRONMENT_ID
+  baseUrl: "https://aven.example.com", // default AVEN_URL (KEEL_URL still works)
+  token: "aven_…",                      // default AVEN_TOKEN, then AVEN_API_TOKEN (KEEL_* still works)
+  authType: "project-token",            // or "account-token" (needs scope.projectId / AVEN_PROJECT_ID)
+  scope: { projectId: "prj_…", environmentId: "env_…" }, // environment default: AVEN_ENVIRONMENT_ID
   pollIntervalMs: 30_000,               // 0 disables polling
   onError: (err) => console.warn(err),  // failed background refresh; the last snapshot keeps serving
 });

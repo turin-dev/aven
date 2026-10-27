@@ -66,7 +66,7 @@ func TestTCPProxyEnsureBuildsOwnSpec(t *testing.T) {
 		t.Fatalf("ran %d", len(f.ran))
 	}
 	s := f.ran[0]
-	if s.Name != "keel-tcp-abcdefghijklm" || s.Image != node.TCPForwardImage || s.Labels[node.LabelRole] != node.RoleTCPProxy ||
+	if s.Name != "aven-tcp-abcdefghijklm" || s.Image != node.TCPForwardImage || s.Labels[node.LabelRole] != node.RoleTCPProxy ||
 		len(s.Publish) != 1 || s.Publish[0] != "[::]:25000:5432" {
 		t.Fatalf("spec: %+v", s)
 	}
@@ -441,7 +441,7 @@ func TestEventsOnlyManagedAndKeelLabels(t *testing.T) {
 		t.Fatalf("events: %+v", got)
 	}
 	for k := range got[0].Labels {
-		if !strings.HasPrefix(k, "keel.") {
+		if !strings.HasPrefix(k, "aven.") && !strings.HasPrefix(k, "keel.") {
 			t.Fatalf("non-keel label leaked: %q", k)
 		}
 	}

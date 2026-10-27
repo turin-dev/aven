@@ -56,7 +56,7 @@ func TestForwarderSpecAliases(t *testing.T) {
 	local := map[int]netip.AddrPort{5432: netip.AddrPortFrom(gw, 40001)}
 	im := Import{EnvID: envA, EnvName: "production", Service: "db", Ports: []int{5432}, Node: nodB}
 	s := ForwarderSpec(im, local)
-	if !slices.Equal(s.Aliases, []string{"db", "db.production.keel.internal"}) {
+	if !slices.Equal(s.Aliases, []string{"db", "db.production.aven.internal", "db.production.keel.internal"}) {
 		t.Fatalf("aliases: %v", s.Aliases)
 	}
 	if _, ok := s.Labels[labelMeshAliases]; ok {
@@ -64,7 +64,7 @@ func TestForwarderSpecAliases(t *testing.T) {
 	}
 	im.Aliases = []string{"pg", "pg.production.keel.internal", "db"}
 	s = ForwarderSpec(im, local)
-	if !slices.Equal(s.Aliases, []string{"db", "db.production.keel.internal", "pg", "pg.production.keel.internal"}) {
+	if !slices.Equal(s.Aliases, []string{"db", "db.production.aven.internal", "db.production.keel.internal", "pg", "pg.production.keel.internal"}) {
 		t.Fatalf("custom aliases: %v", s.Aliases)
 	}
 	if s.Labels[labelMeshAliases] != "pg,pg.production.keel.internal" {

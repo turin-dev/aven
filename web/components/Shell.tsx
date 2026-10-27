@@ -348,7 +348,7 @@ export function RenameEnvironmentDialog({
           submit();
         }}
       >
-        <p>{tr("비공개 도메인({domain})도 함께 바뀝니다.", { domain: <span className="font-mono">{t("서비스")}.{name || t("환경")}.keel.internal</span> })}</p>
+        <p>{tr("비공개 도메인({domain})도 함께 바뀝니다.", { domain: <span className="font-mono">{t("서비스")}.{name || t("환경")}.aven.internal</span> })}</p>
         <Input mono autoFocus value={name} onChange={(e) => setName(e.target.value.toLowerCase())} aria-label={t("새 환경 이름")} />
         {error ? <ErrorBox error={error} /> : null}
       </form>

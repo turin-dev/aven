@@ -988,15 +988,15 @@ export function SandboxesView({
           <span>
             {tr("TypeScript SDK는 저장소의 {dir}에 있습니다. 필요한 변수:", { dir: <code className="font-mono">sdk/</code> })}
           </span>
-          {["KEEL_URL", "KEEL_TOKEN"].map((k) => (
+          {["AVEN_URL", "AVEN_TOKEN"].map((k) => (
             <code key={k} className="rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-xs text-gray-700">
               {k}
             </code>
           ))}
           <code className="flex items-center gap-1 rounded-md bg-gray-100 py-0.5 pl-1.5 pr-0.5 font-mono text-xs text-gray-700">
-            KEEL_ENVIRONMENT_ID={eid}
+            AVEN_ENVIRONMENT_ID={eid}
           </code>
-          <CopyButton value={`KEEL_ENVIRONMENT_ID=${eid}`} label={t("KEEL_ENVIRONMENT_ID 복사")} />
+          <CopyButton value={`AVEN_ENVIRONMENT_ID=${eid}`} label={t("AVEN_ENVIRONMENT_ID 복사")} />
         </div>
       </Section>
 

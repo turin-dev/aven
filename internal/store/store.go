@@ -1323,7 +1323,7 @@ func (s *Store) CreateVolume(ctx context.Context, v *Volume) error {
 
 func (s *Store) createVolume(ctx context.Context, v *Volume) error {
 	v.ID = NewID("vol")
-	v.DockerName = "keel-" + strings.ReplaceAll(v.ID, "_", "-")
+	v.DockerName = "aven-" + strings.ReplaceAll(v.ID, "_", "-")
 	v.CreatedAt = time.Now().UTC()
 	if v.BackupKeep <= 0 {
 		v.BackupKeep = 7

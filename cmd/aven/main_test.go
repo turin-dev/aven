@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/turin-dev/aven/internal/compat"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,10 +105,10 @@ func TestRunEnv(t *testing.T) {
 
 // TestHelperProcess는 runLocal이 실행하는 자식이다(KEEL_HELPER=1일 때만).
 func TestHelperProcess(t *testing.T) {
-	if os.Getenv("KEEL_HELPER") != "1" {
+	if compat.Env("HELPER") != "1" {
 		return
 	}
-	if os.Getenv("DATABASE_URL") != "postgres://remote" || os.Getenv("KEEL_SERVICE_ID") != "svc_1" {
+	if os.Getenv("DATABASE_URL") != "postgres://remote" || compat.Env("SERVICE_ID") != "svc_1" {
 		os.Exit(9)
 	}
 	os.Exit(42)

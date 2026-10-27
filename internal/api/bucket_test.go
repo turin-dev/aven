@@ -154,7 +154,7 @@ func TestBucketServiceVariables(t *testing.T) {
 	}
 	v := bf.dep.Env
 	host := bf.in.Domains[0].Host
-	if v["ENDPOINT"] != "http://files.production.keel.internal:9000" || v["PUBLIC_ENDPOINT"] != "https://"+host || v["REGION"] != "us-east-1" {
+	if v["ENDPOINT"] != "http://files.production.aven.internal:9000" || v["PUBLIC_ENDPOINT"] != "https://"+host || v["REGION"] != "us-east-1" {
 		t.Errorf("endpoints: %v", v)
 	}
 	if v["MINIO_ROOT_USER"] != v["ACCESS_KEY_ID"] || v["AWS_SECRET_ACCESS_KEY"] != v["SECRET_ACCESS_KEY"] || v["AWS_S3_BUCKET_NAME"] != v["BUCKET"] || v["AWS_ENDPOINT_URL"] != v["ENDPOINT"] || len(v["SECRET_ACCESS_KEY"]) != 32 {
@@ -321,7 +321,7 @@ func TestBucketInfoMasksCredentialsForViewer(t *testing.T) {
 	if v["masked"] != true || v["secret_access_key"] != MaskedValue || v["access_key_id"] != MaskedValue || strings.Contains(string(raw), bf.dep.Env["SECRET_ACCESS_KEY"]) {
 		t.Errorf("viewer info leaks credentials: %s", raw)
 	}
-	if v["bucket"] != bf.dep.Env["BUCKET"] || v["endpoint"] != "http://files.production.keel.internal:9000" {
+	if v["bucket"] != bf.dep.Env["BUCKET"] || v["endpoint"] != "http://files.production.aven.internal:9000" {
 		t.Errorf("viewer info: %v", v)
 	}
 }

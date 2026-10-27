@@ -7,14 +7,15 @@ import { useMe, useProject, useProjects, useWorkspaces } from "./queries";
 import { withCtx } from "./nav";
 import { selectWorkspaceID, rememberedSelection } from "./workspaceSelection";
 import { t } from "./i18n";
+import { writeStorage } from "./legacyStorage";
 
-const PROJECT_KEY = "keel.project.v1";
-const WORKSPACE_KEY = "keel.workspace.v1";
+const PROJECT_KEY = "aven.project.v1";
+const WORKSPACE_KEY = "aven.workspace.v1";
 
 /**
  * Current project, environment and workspace.
  *
- * The workspace comes from `?ws=` (remembered in localStorage under `keel.workspace.v1`); if a project is
+ * The workspace comes from `?ws=` (remembered in localStorage under `aven.workspace.v1`, falling back to `keel.workspace.v1`); if a project is
  * selected via `?project=` that belongs to another workspace, the workspace follows the project. It falls back
  * to the current project's workspace, then the user's personal workspace, then the default, then the first.
  *
@@ -69,22 +70,14 @@ export function useWorkspace() {
 
   useEffect(() => {
     if (pid && pidParam === pid) {
-      try {
-        window.localStorage.setItem(PROJECT_KEY, pid);
-      } catch {
-        /* ignore */
-      }
+      writeStorage(PROJECT_KEY, pid);
     }
   }, [pid, pidParam]);
 
   // Remember the resolved workspace so it survives reloads without a `?ws=` param.
   useEffect(() => {
     if (!wsid || !allProjects.data || !wsList.length) return;
-    try {
-      window.localStorage.setItem(WORKSPACE_KEY, wsid);
-    } catch {
-      /* ignore */
-    }
+    writeStorage(WORKSPACE_KEY, wsid);
   }, [wsid, allProjects.data, wsList.length]);
 
   const project = useProject(pid);

@@ -64,7 +64,7 @@ func TestBuildRoutesEdgeHostsThroughEngine(t *testing.T) {
 	ob, _ := json.Marshal(origin.Routes)
 	os := string(ob)
 	// origin 서버는 cdn 호스트의 경로 규칙과 replica를 그대로 갖고, basic auth는 다시 하지 않는다.
-	for _, want := range []string{`"host":["cdn.example.com"]`, `"dial":"keel-web-1:8080"`, `"dial":"keel-api-1:3000"`, `"round_robin"`, `"X-Forwarded-For":["{http.request.header.X-Keel-Client-Ip}"]`, `"delete":["X-Keel-Client-Ip","X-Keel-Client-Proto"]`} {
+	for _, want := range []string{`"host":["cdn.example.com"]`, `"dial":"keel-web-1:8080"`, `"dial":"keel-api-1:3000"`, `"round_robin"`, `"X-Forwarded-For":["{http.request.header.X-Aven-Client-Ip}"]`, `"delete":["X-Aven-Client-Ip","X-Aven-Client-Proto"]`} {
 		if !strings.Contains(os, want) {
 			t.Errorf("origin missing %s: %s", want, os)
 		}
@@ -74,10 +74,10 @@ func TestBuildRoutesEdgeHostsThroughEngine(t *testing.T) {
 			t.Errorf("origin should not contain %s: %s", bad, os)
 		}
 	}
-	main := cfg.Apps.HTTP.Servers["keel"]
+	main := cfg.Apps.HTTP.Servers["aven"]
 	mb, _ := json.Marshal(main.Routes)
 	ms := string(mb)
-	for _, want := range []string{`"dial":"unix//run/keel/edge.sock"`, `"X-Keel-Client-Ip":["{http.request.remote.host}"]`, `"X-Keel-Client-Proto":["{http.request.header.X-Forwarded-Proto}"]`, `"authentication"`, `"dial":"keel-plain-1:80"`, `"dial":"keel-off-1:80"`} {
+	for _, want := range []string{`"dial":"unix//run/aven/edge.sock"`, `"X-Aven-Client-Ip":["{http.request.remote.host}"]`, `"X-Aven-Client-Proto":["{http.request.header.X-Forwarded-Proto}"]`, `"authentication"`, `"dial":"keel-plain-1:80"`, `"dial":"keel-off-1:80"`} {
 		if !strings.Contains(ms, want) {
 			t.Errorf("main missing %s", want)
 		}

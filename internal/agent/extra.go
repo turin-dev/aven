@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/config"
 	"github.com/turin-dev/aven/internal/node"
 	"github.com/turin-dev/aven/internal/proxy"
@@ -28,7 +29,7 @@ import (
 var (
 	instanceRe = regexp.MustCompile(`^ins_[a-z2-7]{4,40}$`)
 	projectRe  = regexp.MustCompile(`^[a-zA-Z0-9_]{1,64}$`)
-	targetRe   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?\.[a-zA-Z0-9]([a-zA-Z0-9_-]{0,62}[a-zA-Z0-9])?\.keel\.internal$`)
+	targetRe   = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?\.[a-zA-Z0-9]([a-zA-Z0-9_-]{0,62}[a-zA-Z0-9])?\.(?:aven|keel)\.internal$`)
 	uploadIDRe = regexp.MustCompile(`^[a-f0-9]{24}$`)
 )
 
@@ -55,7 +56,10 @@ func ValidateTCPProxy(r agentprotocol.TCPProxyRequest) error {
 		return fmt.Errorf("network %q is not allowed (only aven environment networks)", r.Network)
 	}
 	if !targetRe.MatchString(r.Target) {
-		return fmt.Errorf("tcp proxy target %q is not allowed (only <service>.<env>.keel.internal)", r.Target)
+		return fmt.Errorf("tcp proxy target %q is not allowed (only <service>.<env>.aven.internal)", r.Target)
+	}
+	if strings.HasSuffix(r.Target, ".keel.internal") {
+		compat.NoteLegacyDNS()
 	}
 	if r.PublicPort < minTCPPublicPort || r.PublicPort > 65535 {
 		return fmt.Errorf("public port must be %d..65535", minTCPPublicPort)
@@ -66,7 +70,10 @@ func ValidateTCPProxy(r agentprotocol.TCPProxyRequest) error {
 	return nil
 }
 
-func tcpName(instanceID string) string { return "keel-tcp-" + strings.TrimPrefix(instanceID, "ins_") }
+func tcpName(instanceID string) (next, prev string) {
+	base := strings.TrimPrefix(instanceID, "ins_")
+	return "aven-tcp-" + base, "keel-tcp-" + base
+}
 
 // bindPrefix는 publish 주소 앞에 붙는 bind 주소다(agent 설정; 서버는 정하지 못한다).
 func (h *Handler) tcpPublish(public, container int) string {
@@ -85,17 +92,26 @@ func (h *Handler) tcpEnsure(ctx context.Context, r agentprotocol.TCPProxyRequest
 	if err := ValidateTCPProxy(r); err != nil {
 		return err
 	}
-	name := tcpName(r.InstanceID)
+	next, prev := tcpName(r.InstanceID)
 	sig := fmt.Sprintf("%d:%d:%s", r.PublicPort, r.ContainerPort, r.Target)
-	states, err := h.Docker.InspectMany(ctx, []string{name})
+	states, err := h.Docker.InspectMany(ctx, []string{next, prev})
 	if err != nil {
 		return err
+	}
+	name := next
+	if states[prev] != nil && states[next] == nil {
+		name = prev
+		compat.NoteLegacyResource("tcp-proxy", "container "+prev, "container "+next)
 	}
 	if st := states[name]; st != nil {
 		if st.Labels[node.LabelManaged] != "true" || st.Labels[node.LabelRole] != node.RoleTCPProxy {
 			return fmt.Errorf("container %s is not a aven TCP proxy", name)
 		}
-		if st.Labels["keel.tcp"] == sig && st.Running {
+		got := st.Labels["aven.tcp"]
+		if got == "" {
+			got = st.Labels["keel.tcp"]
+		}
+		if got == sig && st.Running {
 			return nil
 		}
 		if err := h.Docker.Remove(ctx, name, 1); err != nil {
@@ -105,7 +121,7 @@ func (h *Handler) tcpEnsure(ctx context.Context, r agentprotocol.TCPProxyRequest
 	return h.Docker.Run(ctx, node.RunSpec{
 		Name: name, Image: node.TCPForwardImage, Network: r.Network, Restart: "unless-stopped",
 		Labels: map[string]string{node.LabelManaged: "true", node.LabelRole: node.RoleTCPProxy, node.LabelInstance: r.InstanceID,
-			node.LabelEnv: r.EnvID, node.LabelProject: r.ProjectID, "keel.tcp": sig},
+			node.LabelEnv: r.EnvID, node.LabelProject: r.ProjectID, "aven.tcp": sig, "keel.tcp": sig},
 		Publish: []string{h.tcpPublish(r.PublicPort, r.ContainerPort)},
 		Cmd: []string{fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", r.ContainerPort),
 			fmt.Sprintf("TCP:%s:%d", r.Target, r.ContainerPort)},
@@ -116,26 +132,32 @@ func (h *Handler) tcpRemove(ctx context.Context, r agentprotocol.TCPRemoveReques
 	if !instanceRe.MatchString(r.InstanceID) {
 		return fmt.Errorf("instance %q is not allowed", r.InstanceID)
 	}
-	name := tcpName(r.InstanceID)
-	states, err := h.Docker.InspectMany(ctx, []string{name})
+	next, prev := tcpName(r.InstanceID)
+	states, err := h.Docker.InspectMany(ctx, []string{next, prev})
 	if err != nil {
 		return err
 	}
-	st := states[name]
-	if st == nil {
-		return nil
+	var last error
+	for _, name := range []string{next, prev} {
+		st := states[name]
+		if st == nil {
+			continue
+		}
+		if st.Labels[node.LabelManaged] != "true" || st.Labels[node.LabelRole] != node.RoleTCPProxy {
+			return fmt.Errorf("container %s is not a aven TCP proxy", name)
+		}
+		if err := h.Docker.Remove(ctx, name, 1); err != nil {
+			last = err
+		}
 	}
-	if st.Labels[node.LabelManaged] != "true" || st.Labels[node.LabelRole] != node.RoleTCPProxy {
-		return fmt.Errorf("container %s is not a aven TCP proxy", name)
-	}
-	return h.Docker.Remove(ctx, name, 1)
+	return last
 }
 
 // keelLabels는 aven.* 라벨만 남긴다(이벤트로 서버에 보내는 라벨).
 func keelLabels(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range in {
-		if strings.HasPrefix(k, "keel.") && labelKeyRe.MatchString(k) && labelValRe.MatchString(v) {
+		if (strings.HasPrefix(k, "aven.") || strings.HasPrefix(k, "keel.")) && labelKeyRe.MatchString(k) && labelValRe.MatchString(v) {
 			out[k] = v
 		}
 	}

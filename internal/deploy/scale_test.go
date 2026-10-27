@@ -280,13 +280,13 @@ func TestDesiredMeshSkipsLocalReplicas(t *testing.T) {
 func TestReplicaIndexAndAssign(t *testing.T) {
 	d := &store.Deployment{ID: "dep_abcdefgh1234", NodeID: "node_local"}
 	assignContainers("web", d, pl("node_local", 2, "nod_b", 1))
-	if fmt.Sprint(d.Containers) != "[keel-web-abcdefgh-1 keel-web-abcdefgh-2]" || len(d.Extra) != 1 || d.Extra[0].Containers[0] != "keel-web-abcdefgh-3" {
+	if fmt.Sprint(d.Containers) != "[aven-web-abcdefgh-1 aven-web-abcdefgh-2]" || len(d.Extra) != 1 || d.Extra[0].Containers[0] != "aven-web-abcdefgh-3" {
 		t.Fatalf("%v %+v", d.Containers, d.Extra)
 	}
-	if replicaIndex("keel-web-abcdefgh-3") != 2 || replicaIndex("weird") != 0 {
+	if replicaIndex("aven-web-abcdefgh-3") != 2 || replicaIndex("keel-web-abcdefgh-3") != 2 || replicaIndex("weird") != 0 {
 		t.Fatal("replicaIndex")
 	}
-	if d.NodeOf("keel-web-abcdefgh-3") != "nod_b" || d.NodeOf("keel-web-abcdefgh-1") != "node_local" || len(d.AllContainers()) != 3 {
+	if d.NodeOf("aven-web-abcdefgh-3") != "nod_b" || d.NodeOf("aven-web-abcdefgh-1") != "node_local" || len(d.AllContainers()) != 3 {
 		t.Fatal("NodeOf/AllContainers")
 	}
 }
@@ -583,7 +583,7 @@ func TestScaleReplicasAcrossNodesAndDrainOrder(t *testing.T) {
 	f := newScaleFixture(t)
 	d := f.live(t)
 	tag := strings.TrimPrefix(d.ID, "dep_")[:8]
-	name := func(i int) string { return fmt.Sprintf("keel-web-%s-%d", tag, i) }
+	name := func(i int) string { return fmt.Sprintf("aven-web-%s-%d", tag, i) }
 
 	// 2 → 4: 노드마다 하나씩 늘어난다(placement 1:1).
 	res, err := f.m.ScaleReplicas(ctx, f.in, 4, "test")

@@ -45,11 +45,11 @@ export type ExecResult = {
 export type FileEntry = { name: string; path: string; type: "file" | "dir" | "symlink"; size: number; mod_time: string };
 
 export type ClientOptions = {
-  /** Aven server URL (default: KEEL_URL). */
+  /** Aven server URL (default: AVEN_URL; KEEL_URL still works). */
   url?: string;
-  /** API token (default: KEEL_TOKEN). */
+  /** API token (default: AVEN_TOKEN; KEEL_TOKEN still works). */
   token?: string;
-  /** Environment ID (default: KEEL_ENVIRONMENT_ID). */
+  /** Environment ID (default: AVEN_ENVIRONMENT_ID; KEEL_ENVIRONMENT_ID still works). */
   environmentId?: string;
 };
 
@@ -99,6 +99,18 @@ export class SandboxNotFoundError extends AvenError {
 type Env = Record<string, string | undefined>;
 const processEnv = (): Env => (globalThis as { process?: { env?: Env } }).process?.env ?? {};
 
+const warnedEnv = new Set<string>();
+
+function legacyEnv(env: Env, suffix: string): string | undefined {
+  const old = env[`KEEL_${suffix}`];
+  if (!old) return undefined;
+  if (!warnedEnv.has(suffix)) {
+    warnedEnv.add(suffix);
+    console.warn(`KEEL_${suffix} is set; use AVEN_${suffix} instead (the old name still works)`);
+  }
+  return old;
+}
+
 export class AvenClient {
   readonly url: string;
   readonly environmentId: string;
@@ -106,17 +118,17 @@ export class AvenClient {
 
   constructor(options: ClientOptions = {}) {
     const env = processEnv();
-    const url = options.url ?? env.KEEL_URL;
-    const token = options.token ?? env.KEEL_TOKEN;
-    if (!url) throw new Error("Aven URL is required (options.url or KEEL_URL)");
-    if (!token) throw new Error("Aven API token is required (options.token or KEEL_TOKEN)");
+    const url = options.url ?? env.AVEN_URL ?? legacyEnv(env, "URL");
+    const token = options.token ?? env.AVEN_TOKEN ?? legacyEnv(env, "TOKEN");
+    if (!url) throw new Error("Aven URL is required (options.url or AVEN_URL; KEEL_URL still works)");
+    if (!token) throw new Error("Aven API token is required (options.token or AVEN_TOKEN; KEEL_TOKEN still works)");
     this.url = url.replace(/\/+$/, "");
     this.token = token;
-    this.environmentId = options.environmentId ?? env.KEEL_ENVIRONMENT_ID ?? "";
+    this.environmentId = options.environmentId ?? env.AVEN_ENVIRONMENT_ID ?? legacyEnv(env, "ENVIRONMENT_ID") ?? "";
   }
 
   requireEnvironment(): string {
-    if (!this.environmentId) throw new Error("environment ID is required (options.environmentId or KEEL_ENVIRONMENT_ID)");
+    if (!this.environmentId) throw new Error("environment ID is required (options.environmentId or AVEN_ENVIRONMENT_ID; KEEL_ENVIRONMENT_ID still works)");
     return this.environmentId;
   }
 

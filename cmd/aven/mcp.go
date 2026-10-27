@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/http"
 	"os"
@@ -28,14 +29,14 @@ func cmdMCP(c *config, args []string) {
 	}
 	if len(args) > 0 {
 		if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-			fmt.Println("usage: aven mcp                 serve the hosted Aven MCP endpoint over stdio (uses KEEL_TOKEN or the aven login session)\n       aven mcp install [--agent claude-code|cursor|vscode]...   write MCP client config in the current directory")
+			fmt.Println("usage: aven mcp                 serve the hosted Aven MCP endpoint over stdio (uses AVEN_TOKEN or the aven login session; KEEL_TOKEN still works)\n       aven mcp install [--agent claude-code|cursor|vscode]...   write MCP client config in the current directory")
 			return
 		}
 		usage()
 	}
-	auth := mcpAuth{token: os.Getenv("KEEL_TOKEN"), cookie: c.Cookie}
+	auth := mcpAuth{token: compat.Env("TOKEN"), cookie: c.Cookie}
 	if auth.token == "" && auth.cookie == "" {
-		die("aven mcp needs credentials: run aven login <url>, or set KEEL_TOKEN to an API token (aven tokens create --name mcp --project <project> --role member)")
+		die("aven mcp needs credentials: run aven login <url>, or set AVEN_TOKEN to an API token (aven tokens create --name mcp --project <project> --role member; KEEL_TOKEN still works)")
 	}
 	if err := runMCPProxy(c, auth, os.Stdin, os.Stdout, os.Stderr, http.DefaultClient); err != nil {
 		die("mcp: %v", err)
@@ -51,7 +52,7 @@ func (a mcpAuth) apply(r *http.Request) {
 	if a.token != "" {
 		r.Header.Set("Authorization", "Bearer "+a.token)
 	} else if a.cookie != "" {
-		r.AddCookie(&http.Cookie{Name: "keel_session", Value: a.cookie})
+		r.AddCookie(&http.Cookie{Name: "aven_session", Value: a.cookie})
 	}
 }
 
@@ -62,7 +63,7 @@ func runMCPProxy(c *config, auth mcpAuth, in io.Reader, out, errOut io.Writer, c
 		return errors.New("not logged in (run: aven login <url>)")
 	}
 	if auth.token == "" && auth.cookie == "" {
-		return errors.New("no credentials (run: aven login <url> or set KEEL_TOKEN)")
+		return errors.New("no credentials (run: aven login <url> or set AVEN_TOKEN)")
 	}
 	if client == nil {
 		client = http.DefaultClient
@@ -126,7 +127,7 @@ func runMCPProxy(c *config, auth mcpAuth, in io.Reader, out, errOut io.Writer, c
 				apiErr.Error = http.StatusText(resp.StatusCode)
 			}
 			if resp.StatusCode == http.StatusUnauthorized {
-				apiErr.Error += " (run: aven login <url>, or check KEEL_TOKEN)"
+				apiErr.Error += " (run: aven login <url>, or check AVEN_TOKEN)"
 			}
 			fmt.Fprintf(errOut, "aven: mcp endpoint returned HTTP %d: %s\n", resp.StatusCode, apiErr.Error)
 			writeProxyError(out, message.ID, -32000, fmt.Sprintf("HTTP %d: %s", resp.StatusCode, apiErr.Error))

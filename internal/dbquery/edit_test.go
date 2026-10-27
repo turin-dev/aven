@@ -113,19 +113,20 @@ func TestCleanupCommands(t *testing.T) {
 	}
 	script := c.Cmd[len(c.Cmd)-1]
 	env := strings.Join(c.Env, " ")
-	if !strings.Contains(script, `grep -qx "KEEL_DATA_TAG=$KILL_TAG"`) || !strings.Contains(script, "kill -TERM") || !strings.Contains(script, "exec $T psql") {
+	if !strings.Contains(script, `grep -qx "AVEN_DATA_TAG=$KILL_TAG"`) || !strings.Contains(script, `grep -qx "KEEL_DATA_TAG=$KILL_TAG"`) || !strings.Contains(script, "kill -TERM") || !strings.Contains(script, "exec $T psql") {
 		t.Errorf("script %s", script)
 	}
-	if !strings.Contains(env, "KILL_TAG="+tag) || strings.Contains(env, "KEEL_DATA_TAG=") || !strings.Contains(env, "PGAPPNAME=keel-data ") && !strings.HasSuffix(env, "PGAPPNAME=keel-data") {
+	// 정리 프로세스 자신은 kill grep에 걸리면 안 된다.
+	if !strings.Contains(env, "KILL_TAG="+tag) || strings.Contains(env, "KEEL_DATA_TAG=") || strings.Contains(env, "AVEN_DATA_TAG=") || !strings.Contains(env, "PGAPPNAME=aven-data") {
 		t.Errorf("env %s", env)
 	}
-	if !strings.Contains(string(c.Stdin), "pg_cancel_backend(pid)") || !strings.Contains(string(c.Stdin), "application_name = 'keel-data-"+tag+"'") ||
+	if !strings.Contains(string(c.Stdin), "pg_cancel_backend(pid)") || !strings.Contains(string(c.Stdin), "application_name IN ('aven-data-"+tag+"', 'keel-data-"+tag+"')") ||
 		!strings.Contains(string(c.Stdin), "pid <> pg_backend_pid()") {
 		t.Errorf("pg stdin %s", c.Stdin)
 	}
 	my := Target{Kind: "mysql", Tag: tag}
 	c, _ = my.Cleanup(tag)
-	if string(c.Stdin) != "SELECT ID AS id FROM information_schema.PROCESSLIST WHERE INFO LIKE '%keel-data:"+tag+"%' AND ID <> CONNECTION_ID();\n" {
+	if !strings.Contains(string(c.Stdin), "aven-data:"+tag) || !strings.Contains(string(c.Stdin), "keel-data:"+tag) || !strings.Contains(string(c.Stdin), "CONNECTION_ID()") {
 		t.Errorf("mysql find %q", c.Stdin)
 	}
 	if got := MySQLKillQuery(ParseIDs(SQLResult("mysql", []byte("id\n17\n42\n"), false))); got != "KILL QUERY 17;\nKILL QUERY 42;\n" {
@@ -142,7 +143,7 @@ func TestCleanupCommands(t *testing.T) {
 			t.Errorf("find %q accepted", bad)
 		}
 	}
-	if c, err := (Target{Kind: "redis"}).Cleanup(tag); err != nil || !strings.Contains(c.Cmd[2], "KEEL_DATA_TAG") || len(c.Stdin) != 0 {
+	if c, err := (Target{Kind: "redis"}).Cleanup(tag); err != nil || !strings.Contains(c.Cmd[2], "AVEN_DATA_TAG") || !strings.Contains(c.Cmd[2], "KEEL_DATA_TAG") || len(c.Stdin) != 0 {
 		t.Errorf("redis cleanup %v %v", c, err)
 	}
 }
@@ -151,19 +152,19 @@ func TestTaggedCommands(t *testing.T) {
 	tag := "abcdef012345abcdef012345"
 	c, _ := Target{Kind: "postgres", Tag: tag}.SQL("SELECT 1")
 	env := strings.Join(c.Env, " ")
-	if !strings.Contains(env, "PGAPPNAME=keel-data-"+tag) || !strings.Contains(env, "KEEL_DATA_TAG="+tag) || string(c.Stdin) != "SELECT 1" {
+	if !strings.Contains(env, "PGAPPNAME=aven-data-"+tag) || !strings.Contains(env, "AVEN_DATA_TAG="+tag) || !strings.Contains(env, "KEEL_DATA_TAG="+tag) || string(c.Stdin) != "SELECT 1" {
 		t.Errorf("pg %s %q", env, c.Stdin)
 	}
 	c, _ = Target{Kind: "mysql", Tag: tag}.SQL("SELECT SLEEP(100)")
-	if string(c.Stdin) != "/* keel-data:"+tag+" */\nSELECT SLEEP(100)" || !strings.Contains(c.Cmd[2], "--comments") {
+	if string(c.Stdin) != "/* aven-data:"+tag+" */\nSELECT SLEEP(100)" || !strings.Contains(c.Cmd[2], "--comments") {
 		t.Errorf("mysql %q %s", c.Stdin, c.Cmd[2])
 	}
 	c, _ = Target{Kind: "mysql", Tag: tag}.SQL(MySQLSessionPrelude + "UPDATE t SET a = 1;")
-	if string(c.Stdin) != MySQLSessionPrelude+"/* keel-data:"+tag+" */\nUPDATE t SET a = 1;" {
+	if string(c.Stdin) != MySQLSessionPrelude+"/* aven-data:"+tag+" */\nUPDATE t SET a = 1;" {
 		t.Errorf("mysql edit %q", c.Stdin)
 	}
 	c, _ = Target{Kind: "mysql", Tag: tag}.SQL("DELIMITER //\nCREATE PROCEDURE p() BEGIN END//")
-	if strings.Contains(string(c.Stdin), "keel-data") {
+	if strings.Contains(string(c.Stdin), "aven-data") || strings.Contains(string(c.Stdin), "keel-data") {
 		t.Errorf("delimiter script tagged: %q", c.Stdin)
 	}
 	c, _ = Target{Kind: "redis", RESP3: true}.Redis(0, "PING")

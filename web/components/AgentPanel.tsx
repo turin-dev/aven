@@ -15,7 +15,7 @@ import { Button, EmptyState, IconButton, Menu, MenuItem, Spinner, cx, errorMessa
 
 const OPEN_EVENT = "keel:agent-open";
 type OpenDetail = { prompt?: string; serviceId?: string; environmentId?: string };
-export function openKeelAgent(detail: OpenDetail = {}) {
+export function openAvenAgent(detail: OpenDetail = {}) {
   window.dispatchEvent(new CustomEvent<OpenDetail>(OPEN_EVENT, { detail }));
 }
 /* ── message model ───────────────────────────────────────────────────── */
@@ -222,13 +222,13 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
   return (
     <aside
       role="dialog"
-      aria-label="Keel Agent"
+      aria-label="Aven Agent"
       className="fixed bottom-3 right-3 top-[60px] z-[60] flex w-[min(440px,calc(100vw-24px))] animate-modal-scale-in flex-col overflow-hidden rounded-xl border border-neutral bg-background shadow-lg"
     >
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-gray-200 pl-4 pr-2">
         <Sparkles className="size-4 text-pink-500" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold leading-4">Keel Agent</div>
+          <div className="text-sm font-semibold leading-4">Aven Agent</div>
           {configured && <div className="truncate text-xs leading-4 text-gray-500">{settings.data?.model}</div>}
         </div>
         <Menu
@@ -287,11 +287,11 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
         ) : !configured ? (
           <EmptyState
             icon={<Sparkles className="size-5" />}
-            title={t("Keel Agent가 아직 연결되지 않았습니다")}
+            title={t("Aven Agent가 아직 연결되지 않았습니다")}
             action={
               caps.instanceAdmin && (
                 <Link href="/admin/?section=agent" onClick={onClose} className="text-sm font-medium text-pink-500 hover:underline">
-                  {t("설정 > Keel Agent로 이동")}
+                  {t("설정 > Aven Agent로 이동")}
                 </Link>
               )
             }
@@ -373,7 +373,7 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
                   if (!busy && !pending) send(input);
                 }
               }}
-              aria-label={t("Keel Agent에게 메시지")}
+              aria-label={t("Aven Agent에게 메시지")}
               placeholder={pending ? t("먼저 위 작업을 승인하거나 거절하세요") : t("메시지를 입력하세요 (Shift+Enter 줄바꿈)")}
               disabled={!!pending}
               className="max-h-40 min-h-[24px] flex-1 resize-none bg-transparent text-sm leading-6 text-foreground placeholder-gray-500 outline-none disabled:cursor-not-allowed"

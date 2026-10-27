@@ -2,6 +2,7 @@ package iac
 
 import (
 	"encoding/json"
+	"github.com/turin-dev/aven/internal/compat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +16,7 @@ func needJS(t *testing.T) {
 	if _, _, err := Runner("x.ts"); err != nil {
 		t.Skip(err)
 	}
-	if _, err := exec.LookPath("bun"); err != nil && os.Getenv("KEEL_IAC_RUNNER") == "" {
+	if _, err := exec.LookPath("bun"); err != nil && compat.Env("IAC_RUNNER") == "" {
 		// node needs type stripping (22.6+) for aven.ts
 		out, err := exec.Command("node", "--no-warnings", "--experimental-strip-types", "-e", "1").CombinedOutput()
 		if err != nil {
@@ -79,7 +80,7 @@ func TestRenderTSRoundTrip(t *testing.T) {
 		wb, _ := json.MarshalIndent(w, "", " ")
 		t.Fatalf("round trip differs\n--- got\n%s\n--- want\n%s\n--- source\n%s", gb, wb, src)
 	}
-	for _, s := range []string{`import { defineAven, functionService, git, github, image, postgres, preserve, project, service } from "./keel-iac.mjs";`,
+	for _, s := range []string{`import { defineAven, functionService, git, github, image, postgres, preserve, project, service } from "./aven-iac.mjs";`,
 		`export const partial = "api";`, `source: github("acme/app", { branch: "dev" }),`, `const worker2 = service("worker-2"`, `"weird-key": "a\"b\nc",`} {
 		if !strings.Contains(string(src), s) {
 			t.Errorf("source lacks %s:\n%s", s, src)

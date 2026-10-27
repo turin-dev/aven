@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,7 +22,7 @@ func (w devTestLogWriter) Write(p []byte) (int, error) {
 }
 
 func TestDevShutdownChild(t *testing.T) {
-	if os.Getenv("KEEL_DEV_SHUTDOWN_CHILD") != "1" {
+	if compat.Env("DEV_SHUTDOWN_CHILD") != "1" {
 		return
 	}
 	stop := make(chan os.Signal, 1)

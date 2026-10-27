@@ -46,15 +46,15 @@
         ]
       },
       "clusterWiring": {
-        "peerHostsVariable": "KEEL_HA_PEERS",
+        "peerHostsVariable": "AVEN_HA_PEERS",
         "peerHostFormat": "{host}:27017",
-        "replicaNodeNameVariable": "KEEL_HA_NODE_NAME"
+        "replicaNodeNameVariable": "AVEN_HA_NODE_NAME"
       },
       "variables": {
-        "KEEL_HA_KEYFILE": "${{ secret(64) }}",
-        "KEEL_HA_REPLSET": "rs0"
+        "AVEN_HA_KEYFILE": "${{ secret(64) }}",
+        "AVEN_HA_REPLSET": "rs0"
       },
-      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$KEEL_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${KEEL_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
+      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$AVEN_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${AVEN_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
       "private_ports": [
         27017
       ]
@@ -67,11 +67,11 @@
       },
       "clusterRole": "replica",
       "variables": {
-        "KEEL_HA_KEYFILE": "${{mongo.KEEL_HA_KEYFILE}}",
-        "KEEL_HA_REPLSET": "${{mongo.KEEL_HA_REPLSET}}",
+        "AVEN_HA_KEYFILE": "${{mongo.AVEN_HA_KEYFILE}}",
+        "AVEN_HA_REPLSET": "${{mongo.AVEN_HA_REPLSET}}",
         "MONGOUSER": "${{mongo.MONGOUSER}}",
         "MONGOPASSWORD": "${{mongo.MONGOPASSWORD}}",
-        "MONGOHOST": "${{KEEL_PRIVATE_DOMAIN}}",
+        "MONGOHOST": "${{AVEN_PRIVATE_DOMAIN}}",
         "MONGOPORT": "27017",
         "MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{MONGOHOST}}:${{MONGOPORT}}/?directConnection=true&authSource=admin"
       },
@@ -80,7 +80,7 @@
           "mount_path": "/data/db"
         }
       ],
-      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$KEEL_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${KEEL_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
+      "start_command": "set -eu\nKEY=/tmp/keel-ha-mongo.key\n( umask 077; printf '%s' \"$AVEN_HA_KEYFILE\" > \"$KEY\" )\nchown mongodb:mongodb \"$KEY\" 2>/dev/null || chown 999:999 \"$KEY\"\nchmod 400 \"$KEY\"\nexec docker-entrypoint.sh mongod --replSet \"${AVEN_HA_REPLSET:-rs0}\" --keyFile \"$KEY\" --bind_ip_all",
       "port": 27017,
       "healthcheck_type": "tcp",
       "healthcheck_timeout_s": 3600,

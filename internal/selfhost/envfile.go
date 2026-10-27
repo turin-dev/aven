@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 // 서버 설정(env 파일): 대시보드에서 aven-server 자신의 KEEL_* 설정을 읽고 고친다.
@@ -27,74 +29,74 @@ type ConfigKey struct {
 
 // ConfigKeys는 aven-server가 읽는 설정이다(cmd/aven-server, internal의 os.Getenv("KEEL_…")).
 var ConfigKeys = []ConfigKey{
-	{Name: "KEEL_PUBLIC_URL", Group: "general"},
-	{Name: "KEEL_BASE_DOMAIN", Group: "general"},
-	{Name: "KEEL_ACME_EMAIL", Group: "general"},
-	{Name: "KEEL_SUPERADMINS", Group: "general"},
-	{Name: "KEEL_ADMIN_PASSWORD", Group: "general", Secret: true},
-	{Name: "KEEL_API_TOKEN", Group: "general", Secret: true},
-	{Name: "KEEL_DEBUG", Group: "general"},
+	{Name: "AVEN_PUBLIC_URL", Group: "general"},
+	{Name: "AVEN_BASE_DOMAIN", Group: "general"},
+	{Name: "AVEN_ACME_EMAIL", Group: "general"},
+	{Name: "AVEN_SUPERADMINS", Group: "general"},
+	{Name: "AVEN_ADMIN_PASSWORD", Group: "general", Secret: true},
+	{Name: "AVEN_API_TOKEN", Group: "general", Secret: true},
+	{Name: "AVEN_DEBUG", Group: "general"},
 
-	{Name: "KEEL_LISTEN", Group: "network"},
-	{Name: "KEEL_LISTEN_UNIX", Group: "network"},
-	{Name: "KEEL_TRUSTED_PROXIES", Group: "network"},
-	{Name: "KEEL_INSECURE_COOKIE", Group: "network"},
-	{Name: "KEEL_TLS", Group: "network"},
-	{Name: "KEEL_TLS_CERT", Group: "network"},
-	{Name: "KEEL_TLS_KEY", Group: "network"},
-	{Name: "KEEL_HTTP_PORT", Group: "network"},
-	{Name: "KEEL_HTTPS_PORT", Group: "network"},
-	{Name: "KEEL_PROXY_BIND", Group: "network"},
-	{Name: "KEEL_PUBLIC_IPV4", Group: "network"},
-	{Name: "KEEL_PUBLIC_IPV6", Group: "network"},
-	{Name: "KEEL_IPV6_POOL", Group: "network"},
-	{Name: "KEEL_IPV6_IFACE", Group: "network"},
-	{Name: "KEEL_INGRESS_MODE", Group: "network"},
-	{Name: "KEEL_INGRESS_HOSTNAME", Group: "network"},
-	{Name: "KEEL_TCP_PROXY_DOMAIN", Group: "network"},
-	{Name: "KEEL_TCP_PORT_MIN", Group: "network"},
-	{Name: "KEEL_TCP_PORT_MAX", Group: "network"},
-	{Name: "KEEL_PRIVATE_ADDRESS", Group: "network"},
-	{Name: "KEEL_MESH", Group: "network"},
-	{Name: "KEEL_MESH_PORT", Group: "network"},
-	{Name: "KEEL_EXTERNAL_UPSTREAMS", Group: "network"},
-	{Name: "KEEL_PROXY_NETWORKS", Group: "network"},
-	{Name: "KEEL_SELF_ROUTE", Group: "network"},
-	{Name: "KEEL_NETWORK_LOGS", Group: "network"},
+	{Name: "AVEN_LISTEN", Group: "network"},
+	{Name: "AVEN_LISTEN_UNIX", Group: "network"},
+	{Name: "AVEN_TRUSTED_PROXIES", Group: "network"},
+	{Name: "AVEN_INSECURE_COOKIE", Group: "network"},
+	{Name: "AVEN_TLS", Group: "network"},
+	{Name: "AVEN_TLS_CERT", Group: "network"},
+	{Name: "AVEN_TLS_KEY", Group: "network"},
+	{Name: "AVEN_HTTP_PORT", Group: "network"},
+	{Name: "AVEN_HTTPS_PORT", Group: "network"},
+	{Name: "AVEN_PROXY_BIND", Group: "network"},
+	{Name: "AVEN_PUBLIC_IPV4", Group: "network"},
+	{Name: "AVEN_PUBLIC_IPV6", Group: "network"},
+	{Name: "AVEN_IPV6_POOL", Group: "network"},
+	{Name: "AVEN_IPV6_IFACE", Group: "network"},
+	{Name: "AVEN_INGRESS_MODE", Group: "network"},
+	{Name: "AVEN_INGRESS_HOSTNAME", Group: "network"},
+	{Name: "AVEN_TCP_PROXY_DOMAIN", Group: "network"},
+	{Name: "AVEN_TCP_PORT_MIN", Group: "network"},
+	{Name: "AVEN_TCP_PORT_MAX", Group: "network"},
+	{Name: "AVEN_PRIVATE_ADDRESS", Group: "network"},
+	{Name: "AVEN_MESH", Group: "network"},
+	{Name: "AVEN_MESH_PORT", Group: "network"},
+	{Name: "AVEN_EXTERNAL_UPSTREAMS", Group: "network"},
+	{Name: "AVEN_PROXY_NETWORKS", Group: "network"},
+	{Name: "AVEN_SELF_ROUTE", Group: "network"},
+	{Name: "AVEN_NETWORK_LOGS", Group: "network"},
 
-	{Name: "KEEL_GITHUB_CLIENT_ID", Group: "github"},
-	{Name: "KEEL_GITHUB_CLIENT_SECRET", Group: "github", Secret: true},
-	{Name: "KEEL_GITHUB_WEBHOOK_SECRET", Group: "github", Secret: true},
-	{Name: "KEEL_GITHUB_TOKEN", Group: "github", Secret: true},
-	{Name: "KEEL_GITHUB_API_URL", Group: "github"},
-	{Name: "KEEL_ALLOW_FILE_REPO", Group: "github"},
+	{Name: "AVEN_GITHUB_CLIENT_ID", Group: "github"},
+	{Name: "AVEN_GITHUB_CLIENT_SECRET", Group: "github", Secret: true},
+	{Name: "AVEN_GITHUB_WEBHOOK_SECRET", Group: "github", Secret: true},
+	{Name: "AVEN_GITHUB_TOKEN", Group: "github", Secret: true},
+	{Name: "AVEN_GITHUB_API_URL", Group: "github"},
+	{Name: "AVEN_ALLOW_FILE_REPO", Group: "github"},
 
-	{Name: "KEEL_SMTP_HOST", Group: "smtp"},
-	{Name: "KEEL_SMTP_PORT", Group: "smtp"},
-	{Name: "KEEL_SMTP_USERNAME", Group: "smtp"},
-	{Name: "KEEL_SMTP_PASSWORD", Group: "smtp", Secret: true},
-	{Name: "KEEL_SMTP_FROM", Group: "smtp"},
-	{Name: "KEEL_SMTP_TLS", Group: "smtp"},
+	{Name: "AVEN_SMTP_HOST", Group: "smtp"},
+	{Name: "AVEN_SMTP_PORT", Group: "smtp"},
+	{Name: "AVEN_SMTP_USERNAME", Group: "smtp"},
+	{Name: "AVEN_SMTP_PASSWORD", Group: "smtp", Secret: true},
+	{Name: "AVEN_SMTP_FROM", Group: "smtp"},
+	{Name: "AVEN_SMTP_TLS", Group: "smtp"},
 
-	{Name: "KEEL_OTLP_ENDPOINT", Group: "advanced"},
-	{Name: "KEEL_OTLP_LISTEN", Group: "advanced"},
-	{Name: "KEEL_TRACE_RETENTION", Group: "advanced"},
-	{Name: "KEEL_RAILPACK_FRONTEND", Group: "advanced"},
-	{Name: "KEEL_IAC_RUNNER", Group: "advanced"},
-	{Name: "KEEL_CADDY_BIN", Group: "advanced"},
-	{Name: "KEEL_NOTIFY_ALLOW_PRIVATE", Group: "advanced"},
-	{Name: "KEEL_AGENT_LEGACY_BEARER", Group: "advanced"},
-	{Name: "KEEL_SELF_REPO", Group: "advanced"},
-	{Name: "KEEL_SELF_BRANCH", Group: "advanced"},
-	{Name: "KEEL_SELF_PROJECT", Group: "advanced"},
-	{Name: "KEEL_SELF_UPDATE_INTERVAL", Group: "advanced"},
+	{Name: "AVEN_OTLP_ENDPOINT", Group: "advanced"},
+	{Name: "AVEN_OTLP_LISTEN", Group: "advanced"},
+	{Name: "AVEN_TRACE_RETENTION", Group: "advanced"},
+	{Name: "AVEN_RAILPACK_FRONTEND", Group: "advanced"},
+	{Name: "AVEN_IAC_RUNNER", Group: "advanced"},
+	{Name: "AVEN_CADDY_BIN", Group: "advanced"},
+	{Name: "AVEN_NOTIFY_ALLOW_PRIVATE", Group: "advanced"},
+	{Name: "AVEN_AGENT_LEGACY_BEARER", Group: "advanced"},
+	{Name: "AVEN_SELF_REPO", Group: "advanced"},
+	{Name: "AVEN_SELF_BRANCH", Group: "advanced"},
+	{Name: "AVEN_SELF_PROJECT", Group: "advanced"},
+	{Name: "AVEN_SELF_UPDATE_INTERVAL", Group: "advanced"},
 
-	{Name: "KEEL_DATA", Group: "fixed", Fixed: true},
-	{Name: "KEEL_GATEWAY_SECRET_FILE", Group: "fixed", Fixed: true},
-	{Name: "KEEL_AGENT_BIN_DIR", Group: "fixed", Fixed: true},
-	{Name: "KEEL_RAILPACK_BIN", Group: "fixed", Fixed: true},
-	{Name: "KEEL_SELF_ENV_FILE", Group: "fixed", Fixed: true},
-	{Name: "KEEL_SELF_SERVICE", Group: "fixed", Fixed: true},
+	{Name: "AVEN_DATA", Group: "fixed", Fixed: true},
+	{Name: "AVEN_GATEWAY_SECRET_FILE", Group: "fixed", Fixed: true},
+	{Name: "AVEN_AGENT_BIN_DIR", Group: "fixed", Fixed: true},
+	{Name: "AVEN_RAILPACK_BIN", Group: "fixed", Fixed: true},
+	{Name: "AVEN_SELF_ENV_FILE", Group: "fixed", Fixed: true},
+	{Name: "AVEN_SELF_SERVICE", Group: "fixed", Fixed: true},
 }
 
 // secretPattern은 카탈로그에 없는 키 중 이름으로 비밀값을 짐작한다.
@@ -103,6 +105,7 @@ var secretPattern = regexp.MustCompile(`(PASSWORD|SECRET|TOKEN|_KEY$)`)
 var keyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 
 func lookupKey(name string) ConfigKey {
+	name = compat.CanonicalEnv(name)
 	for _, k := range ConfigKeys {
 		if k.Name == name {
 			return k
@@ -171,10 +174,26 @@ var ErrConfig = errors.New("서버 설정")
 
 // Apply는 키를 바꾸거나(set) 지운다(unset). 바꿀 수 없는 키나 형식이 잘못된 값은 거부한다.
 func (f *EnvFile) Apply(set map[string]string, unset []string) error {
+	canonSet := map[string]string{}
 	for k, v := range set {
-		if err := validateEntry(k, v); err != nil {
+		ck := compat.CanonicalEnv(k)
+		if err := validateEntry(ck, v); err != nil {
 			return err
 		}
+		if _, exists := canonSet[ck]; exists {
+			return fmt.Errorf("%w: %s와 %s를 같이 바꿀 수 없습니다", ErrConfig, ck, compat.LegacyEnv(ck))
+		}
+		if k != ck {
+			compat.WarnOnce("envfile:"+k, "%s is set; use %s instead (the old name still works)", k, ck)
+		}
+		canonSet[k] = v
+		canonSet[ck] = v
+		delete(canonSet, k)
+		canonSet[ck] = v
+	}
+	set = map[string]string{}
+	for k, v := range canonSet {
+		set[compat.CanonicalEnv(k)] = v
 	}
 	for _, k := range unset {
 		if !keyPattern.MatchString(k) {
@@ -183,13 +202,18 @@ func (f *EnvFile) Apply(set map[string]string, unset []string) error {
 		if lookupKey(k).Fixed {
 			return fmt.Errorf("%w: %s는 대시보드에서 바꿀 수 없습니다", ErrConfig, k)
 		}
-		if k == "KEEL_ADMIN_PASSWORD" {
-			return fmt.Errorf("%w: KEEL_ADMIN_PASSWORD는 지울 수 없습니다(서버가 시작하지 못합니다)", ErrConfig)
+		if compat.CanonicalEnv(k) == "AVEN_ADMIN_PASSWORD" {
+			return fmt.Errorf("%w: AVEN_ADMIN_PASSWORD는 지울 수 없습니다(서버가 시작하지 못합니다)", ErrConfig)
 		}
 	}
 	drop := map[string]bool{}
 	for _, k := range unset {
 		drop[k] = true
+		drop[compat.CanonicalEnv(k)] = true
+		drop[compat.LegacyEnv(compat.CanonicalEnv(k))] = true
+	}
+	for k := range set {
+		drop[compat.LegacyEnv(k)] = true
 	}
 	done := map[string]bool{}
 	out := f.lines[:0:0]
@@ -243,14 +267,14 @@ func validateEntry(k, v string) error {
 	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
 		return fmt.Errorf("%w: %s 값에서 따옴표를 빼세요", ErrConfig, k)
 	}
-	switch k {
-	case "KEEL_ADMIN_PASSWORD":
+	switch compat.CanonicalEnv(k) {
+	case "AVEN_ADMIN_PASSWORD":
 		if len(v) < 8 {
-			return fmt.Errorf("%w: KEEL_ADMIN_PASSWORD는 8자 이상이어야 합니다", ErrConfig)
+			return fmt.Errorf("%w: AVEN_ADMIN_PASSWORD는 8자 이상이어야 합니다", ErrConfig)
 		}
-	case "KEEL_PUBLIC_URL":
+	case "AVEN_PUBLIC_URL":
 		if v != "" && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "http://") {
-			return fmt.Errorf("%w: KEEL_PUBLIC_URL은 http:// 또는 https://로 시작해야 합니다", ErrConfig)
+			return fmt.Errorf("%w: AVEN_PUBLIC_URL은 http:// 또는 https://로 시작해야 합니다", ErrConfig)
 		}
 	}
 	return nil
@@ -283,6 +307,12 @@ func (f *EnvFile) Entries(running func(string) (string, bool)) []ConfigEntry {
 	var out []ConfigEntry
 	add := func(k ConfigKey) {
 		v, set := vals[k.Name]
+		if !set {
+			if lv, ok := vals[compat.LegacyEnv(k.Name)]; ok {
+				v, set = lv, true
+				compat.WarnOnce("envfile:"+compat.LegacyEnv(k.Name), "%s is set; use %s instead (the old name still works)", compat.LegacyEnv(k.Name), k.Name)
+			}
+		}
 		e := ConfigEntry{Name: k.Name, Group: k.Group, Secret: k.Secret, Fixed: k.Fixed, Set: set}
 		if set && !k.Secret {
 			e.Value = v
@@ -290,10 +320,14 @@ func (f *EnvFile) Entries(running func(string) (string, bool)) []ConfigEntry {
 		// self 컨테이너가 덮어쓰는 키(Fixed)는 프로세스 값이 파일과 달라도 대기 중인 변경이 아니다.
 		if !k.Fixed {
 			cur, ok := running(k.Name)
+			if !ok {
+				cur, ok = running(compat.LegacyEnv(k.Name))
+			}
 			e.Pending = ok != set || cur != v
 		}
 		out = append(out, e)
 		seen[k.Name] = true
+		seen[compat.LegacyEnv(k.Name)] = true
 	}
 	for _, k := range ConfigKeys {
 		add(k)

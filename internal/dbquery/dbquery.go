@@ -55,7 +55,7 @@ type Target struct {
 // tagEnv는 Tag가 있으면 클라이언트 프로세스를 찾는 환경변수를 붙인다.
 func (t Target) tagEnv(c Command) Command {
 	if t.Tag != "" {
-		c.Env = append(c.Env, kv("KEEL_DATA_TAG", t.Tag))
+		c.Env = append(c.Env, kv("AVEN_DATA_TAG", t.Tag), kv("KEEL_DATA_TAG", t.Tag))
 	}
 	return c
 }
@@ -63,9 +63,9 @@ func (t Target) tagEnv(c Command) Command {
 // appName은 postgres application_name이다.
 func (t Target) appName() string {
 	if t.Tag == "" {
-		return "keel-data"
+		return "aven-data"
 	}
-	return "keel-data-" + t.Tag
+	return "aven-data-" + t.Tag
 }
 
 var delimiterRe = regexp.MustCompile(`(?im)^\s*delimiter\s`)
@@ -81,7 +81,7 @@ func (t Target) mysqlTagged(query string) string {
 	if strings.HasPrefix(query, MySQLSessionPrelude) {
 		pre, query = MySQLSessionPrelude, strings.TrimPrefix(query, MySQLSessionPrelude)
 	}
-	return pre + "/* keel-data:" + t.Tag + " */\n" + query
+	return pre + "/* aven-data:" + t.Tag + " */\n" + query
 }
 
 var defaultPorts = map[string]int{"postgres": 5432, "mysql": 3306, "mariadb": 3306, "redis": 6379, "mongo": 27017}

@@ -159,7 +159,7 @@ func TestSandboxLifecycle(t *testing.T) {
 	var p store.Sandbox
 	json.Unmarshal(f.do("POST", base, map[string]any{"network": "private", "idle_timeout_minutes": 0, "image": "node:22"}, 201), &p)
 	ps := f.fake.specs[p.ContainerName]
-	if ps.Network != "keel-"+f.env.ID || len(ps.Aliases) != 1 || ps.Aliases[0] != sandboxSlug(p.ID) || p.ExpiresAt != nil {
+	if ps.Network != "aven-"+f.env.ID || len(ps.Aliases) != 1 || ps.Aliases[0] != sandboxSlug(p.ID) || p.ExpiresAt != nil {
 		t.Fatalf("private sandbox: %+v %+v", p, ps)
 	}
 
@@ -179,7 +179,7 @@ func TestSandboxLifecycle(t *testing.T) {
 		t.Fatalf("exec result: %+v", res)
 	}
 	last := f.fake.execs[len(f.fake.execs)-1]
-	if want := []string{"sh", "-c", sandboxExecWrapper, "keel-exec", "5", "/app", "sh", "-lc", "echo hi | wc -c"}; strings.Join(last.Cmd, "\x00") != strings.Join(want, "\x00") {
+	if want := []string{"sh", "-c", sandboxExecWrapper, "aven-exec", "5", "/app", "sh", "-lc", "echo hi | wc -c"}; strings.Join(last.Cmd, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("exec argv: %q", last.Cmd)
 	}
 	if len(last.Env) != 1 || last.Env[0] != "CI=1" {
@@ -236,7 +236,7 @@ func TestSandboxLifecycle(t *testing.T) {
 	// checkpoint에서 만들기(이름으로).
 	var fromCP store.Sandbox
 	json.Unmarshal(f.do("POST", base, map[string]any{"checkpoint": "after-deps"}, 201), &fromCP)
-	if !strings.HasPrefix(fromCP.Image, "keel/sandbox:scp-") || fromCP.CheckpointName == nil || *fromCP.CheckpointName != "after-deps" {
+	if !strings.HasPrefix(fromCP.Image, "aven/sandbox:scp-") || fromCP.CheckpointName == nil || *fromCP.CheckpointName != "after-deps" {
 		t.Fatalf("from checkpoint: %+v", fromCP)
 	}
 	f.do("PATCH", "/api/sandbox-checkpoints/"+cp.ID, map[string]string{"name": "node-base"}, 200)
@@ -330,10 +330,10 @@ func TestSandboxIdleExpiryAndSweep(t *testing.T) {
 }
 
 func TestSandboxNames(t *testing.T) {
-	if got := sandboxContainerName("sbx_abcdefghijkl2"); got != "keel-sbx-sbx-abcdefghijkl2" {
+	if got := sandboxContainerName("sbx_abcdefghijkl2"); got != "aven-sbx-sbx-abcdefghijkl2" {
 		t.Fatalf("container = %q", got)
 	}
-	if got := sandboxSnapshotImage("scp_abcdefghijkl2"); got != "keel/sandbox:scp-abcdefghijkl2" {
+	if got := sandboxSnapshotImage("scp_abcdefghijkl2"); got != "aven/sandbox:scp-abcdefghijkl2" {
 		t.Fatalf("image = %q", got)
 	}
 	for _, p := range []string{"/tmp/a", "/"} {
