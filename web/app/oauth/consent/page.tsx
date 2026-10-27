@@ -20,7 +20,7 @@ export default function OAuthConsentPage() {
   useEffect(() => {
     const m = /(?:^|[#&])request=([^&]+)/.exec(window.location.hash);
     setRequestID(m ? decodeURIComponent(m[1]) : "");
-    document.title = t("앱 연결 · aven");
+    document.title = t("앱 연결 · Aven");
   }, []);
   if (requestID === null) return <Shell><Loading /></Shell>;
   if (!requestID) return <ConsentError message={t("OAuth 요청을 찾을 수 없습니다. 앱에서 다시 연결해 주세요.")} />;
@@ -188,7 +188,7 @@ function ConsentError({ message }: { message: string }) {
         <h1 className="text-lg font-semibold">{t("접근 요청을 처리할 수 없습니다")}</h1>
         <p className="text-sm text-gray-600">{message}</p>
         <a href="/" className="inline-block text-sm font-medium text-pink-600 hover:underline">
-          {t("Aven로 돌아가기")}
+          {t("Aven으로 돌아가기")}
         </a>
       </div>
     </Shell>

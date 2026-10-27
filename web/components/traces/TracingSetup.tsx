@@ -117,7 +117,7 @@ export function TracingSetup({
         <summary className="cursor-pointer select-none text-foreground">{t("앱에서 span 보내기")}</summary>
         <div className="mt-2 space-y-2">
           <p>
-            {tr("OpenTelemetry SDK는 aven이 넣는 변수({endpoint}, {headers}, {service} 등)를 그대로 읽습니다. endpoint를 코드에 적지 마세요. 직접 {endpointVar}를 정하면 aven은 변수를 넣지 않습니다.", {
+            {tr("OpenTelemetry SDK는 Aven이 넣는 변수({endpoint}, {headers}, {service} 등)를 그대로 읽습니다. endpoint를 코드에 적지 마세요. 직접 {endpointVar}를 정하면 Aven은 변수를 넣지 않습니다.", {
               endpoint: <code className="font-mono text-xs">OTEL_EXPORTER_OTLP_ENDPOINT</code>,
               headers: <code className="font-mono text-xs">OTEL_EXPORTER_OTLP_HEADERS</code>,
               service: <code className="font-mono text-xs">OTEL_SERVICE_NAME</code>,

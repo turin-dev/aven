@@ -41,7 +41,7 @@ export default function InvitePage() {
         <div className="flex flex-1 flex-col items-center justify-center space-y-4 py-8">
           <AvenMark className="size-16" />
           <div className="flex flex-col items-center space-y-1 text-center">
-            <h1 className="text-lg font-medium">{t("aven 초대 수락")}</h1>
+            <h1 className="text-lg font-medium">{t("Aven 초대 수락")}</h1>
             <p className="text-base text-gray-500">{t("이름과 비밀번호를 정하면 계정이 만들어집니다")}</p>
           </div>
         </div>

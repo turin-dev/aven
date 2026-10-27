@@ -230,7 +230,7 @@ export function ServiceContextMenu({
       { label: t("서비스 열기"), icon: <Box className="size-[16px]" />, onSelect: () => go({ svc: svc.id, tab: "deployments", dep: null }) },
       { label: t("배포"), icon: <Rocket className="size-[16px]" />, onSelect: openTab("deployments") },
       { label: t("변수"), icon: <Braces className="size-[16px]" />, onSelect: openTab("variables") },
-      { label: t("지표"), icon: <Activity className="size-[16px]" />, onSelect: openTab("metrics") },
+      { label: t("지표|tab"), icon: <Activity className="size-[16px]" />, onSelect: openTab("metrics") },
       ...(svc.source_type === "database"
         ? [{ label: t("데이터"), icon: <Database className="size-[16px]" />, onSelect: openTab("data") } as MenuEntry]
         : []),

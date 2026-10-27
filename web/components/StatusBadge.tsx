@@ -183,7 +183,7 @@ export const TRIGGER_LABEL: Record<string, string> = {
   redeploy: t("재배포"),
   rollback: t("롤백"),
   github: "GitHub",
-  variables: t("변수 변경"),
+  variables: t("변수 변경|trigger"),
   cli: "CLI",
   template: t("템플릿|item"),
   image_update: t("이미지 업데이트"),

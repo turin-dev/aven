@@ -26,7 +26,7 @@ export function SystemStatus() {
       <div className="rounded-lg border border-gray-200 bg-secondaryBg px-4">
         <StatusRow label="Docker" ok={d ? d.docker === "ok" : null} detail={!d ? t("확인 중") : d.docker === "ok" ? t("정상") : t("응답 없음 ({status}). docker 서비스를 확인하세요.", { status: d.docker })} />
         <StatusRow label={t("프록시")} ok={d ? d.proxy === "ok" : null} detail={!d ? t("확인 중") : d.proxy === "ok" ? t("정상") : t("응답 없음 ({status}). 프록시 포트와 로그를 확인하세요.", { status: d.proxy })} />
-        <StatusRow label={t("aven 버전")} detail={d?.version ?? "…"} mono />
+        <StatusRow label={t("Aven 버전")} detail={d?.version ?? "…"} mono />
         <StatusRow label={t("노드")} detail={d?.node ?? "…"} mono />
         <StatusRow label={t("기본 도메인")} ok={d ? !!d.base_domain : null} detail={d ? (d.base_domain ?? t("설정 안 됨 (KEEL_BASE_DOMAIN). 도메인 자동 생성을 쓸 수 없습니다.")) : "…"} mono={!!d?.base_domain} />
         <StatusRow label={t("공개 IPv6")} detail={d ? (d.public_ipv6 ?? t("없음")) : "…"} mono />

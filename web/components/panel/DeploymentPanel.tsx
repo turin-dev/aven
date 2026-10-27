@@ -27,7 +27,7 @@ import { NetworkDiagnostics } from "./NetworkDiagnostics";
 import { ServiceNetworkLogs } from "./ServiceNetworkLogs";
 import { ApiError } from "@/lib/api";
 import { Button, CopyButton, ErrorBox, IconButton, Spinner, cx, useConfirm, useEscape } from "../ui";
-import { DeploymentMenu, ReplicaChips, Stepper, depTitle, fmtClock, stepsFor, useTicker } from "./DeploymentsTab";
+import { DeploymentMenu, ReplicaChips, Stepper, depTitle, fmtClock, stepsFor, useTicker, viaText } from "./DeploymentsTab";
 import { HeaderTabs, escCloses, tabId, tabPanelId } from "./deployments/HeaderTabs";
 import { panelCls } from "./ServicePanel";
 import { t, tr } from "@/lib/i18n";
@@ -278,11 +278,14 @@ export function DeploymentPanel({
               {depTitle(d)}
             </p>
             <p className="min-w-0 truncate text-sm text-gray-500">
-              <time className="tabular-nums" dateTime={d.created_at} title={fmtTime(d.created_at)}>
-                {fmtRelative(d.created_at)}
-              </time>
-              {" via "}
-              {TRIGGER_LABEL[d.trigger] ?? d.trigger}
+              {tr("{time} · {trigger}", {
+                time: (
+                  <time className="tabular-nums" dateTime={d.created_at} title={fmtTime(d.created_at)}>
+                    {fmtRelative(d.created_at)}
+                  </time>
+                ),
+                trigger: viaText(d),
+              })}
               {d.started_at && (
                 <span className="tabular-nums">
                   {" · "}

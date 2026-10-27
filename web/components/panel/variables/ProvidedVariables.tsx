@@ -28,7 +28,7 @@ export function ProvidedVariables({
         className="group flex w-full cursor-pointer items-center gap-x-2 rounded-lg px-6 py-4 pl-0 pt-0 text-left text-neutral-secondary focus-visible:text-pink-500 focus-visible:outline-none"
       >
         <ChevronRight aria-hidden className={cx("size-4 shrink-0 transition-transform", open ? "rotate-90" : "rotate-0")} />
-        <p className="text-sm">{t("aven이 추가한 변수 {count}개", { count: keys.length })}</p>
+        <p className="text-sm">{t("Aven이 추가한 변수 {count}개", { count: keys.length })}</p>
       </button>
       {open && (
         <div id={id} className="animate-fade-in pb-2">
