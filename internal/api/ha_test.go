@@ -506,7 +506,7 @@ func TestHAMongoReplicaSet(t *testing.T) {
 		return `{"isWritablePrimary":true}`, nil
 	}
 	f.srv.HAOnce(f.ctx)
-	if !f.exec.sent("docs", `"docs.production.aven.internal:27017","docs-replica-1.production.aven.internal:27017"`) {
+	if !f.exec.sent("docs", `"docs.production.keel.internal:27017","docs-replica-1.production.keel.internal:27017"`) {
 		t.Errorf("reconcile hosts: %+v", f.exec.calls)
 	}
 	// revert는 주 노드인 root만 남기도록 replica set을 줄인다.

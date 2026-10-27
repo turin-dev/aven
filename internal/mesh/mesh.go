@@ -92,7 +92,7 @@ type Import struct {
 
 // AllAliases는 forwarder 컨테이너에 붙일 이름이다: 서비스 이름 alias 두 개와 Aliases(중복 제외).
 func (i Import) AllAliases() []string {
-	out := []string{i.Service, PrivateDomain(i.Service, i.EnvName), compat.LegacyPrivateHost(i.Service, i.EnvName)}
+	out := []string{i.Service, PrivateDomain(i.Service, i.EnvName), compat.PrivateHost(i.Service, i.EnvName)}
 	for _, a := range i.Aliases {
 		if !slices.Contains(out, a) {
 			out = append(out, a)
@@ -130,8 +130,8 @@ func (i Import) Candidates() []string {
 func (e Export) key() string { return e.EnvID + "/" + e.Service }
 func (i Import) key() string { return i.EnvID + "/" + i.Service }
 
-// PrivateDomain은 deploy.PrivateDomain과 같다(mesh가 deploy를 import하지 않으려고 따로 둔다).
-func PrivateDomain(service, env string) string { return compat.PrivateHost(service, env) }
+// PrivateDomain은 deploy.PrivateDomain과 같다(mesh가 deploy를 import하지 않으려고 따로 둔다): 대표 주소는 keel.internal.
+func PrivateDomain(service, env string) string { return compat.LegacyPrivateHost(service, env) }
 
 // EnvNetwork는 deploy.EnvNetwork와 같다.
 func EnvNetwork(envID string) string { return compat.Prefix + "-" + envID }

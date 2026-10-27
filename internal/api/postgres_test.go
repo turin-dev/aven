@@ -334,7 +334,7 @@ func TestPostgresPoolingLifecycle(t *testing.T) {
 	}
 	// 해석하면 PgBouncer 주소가 나온다
 	res, err := f.mgr.Resolve(ctx, f.dbIn(), nil)
-	if err != nil || !strings.Contains(res.Vars["DATABASE_URL"], "@pg-pgbouncer.production.aven.internal:5432/aven") {
+	if err != nil || !strings.Contains(res.Vars["DATABASE_URL"], "@pg-pgbouncer.production.keel.internal:5432/aven") {
 		t.Fatalf("resolved %v %v", res.Vars["DATABASE_URL"], err)
 	}
 	deps, _ := f.st.ListDeployments(ctx, webIn.ID, 5)

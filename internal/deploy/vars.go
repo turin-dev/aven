@@ -39,12 +39,14 @@ func (m *Manager) Load(ctx context.Context, instanceID string) (*Target, error) 
 	return &Target{Project: p, Env: env, Service: svc, Instance: in}, nil
 }
 
-// PrivateDomain은 환경 네트워크 안의 서비스 주소다.
-func PrivateDomain(service, env string) string { return compat.PrivateHost(service, env) }
+// PrivateDomain은 환경 네트워크 안의 서비스 주소다(<svc>.<env>.keel.internal). 주입 변수, DB 백업, TCP proxy,
+// HA 멤버 주소가 이 값을 쓴다. 아직 다시 배포하지 않은 컨테이너와 옛 agent의 forwarder에는 .keel.internal alias만
+// 있고, HA replica set 설정에도 이 이름이 저장돼 있으므로 대표 주소는 keel.internal로 둔다.
+func PrivateDomain(service, env string) string { return compat.LegacyPrivateHost(service, env) }
 
-// LegacyPrivateDomain은 예전 설치가 쓰던 .keel.internal 주소다.
-func LegacyPrivateDomain(service, env string) string {
-	return compat.LegacyPrivateHost(service, env)
+// AvenPrivateDomain은 새 이름 <svc>.<env>.aven.internal이다. 새로 배포한 컨테이너에 alias로만 붙는다.
+func AvenPrivateDomain(service, env string) string {
+	return compat.PrivateHost(service, env)
 }
 
 // PrivateDNSName은 사설 네트워크의 대표 이름이다: 설정한 private_dns_name, 없으면 서비스 이름.
@@ -56,11 +58,11 @@ func PrivateDNSName(service, dns string) string {
 }
 
 // PrivateAliases는 환경 네트워크에서 서비스 컨테이너에 붙는 이름이다.
-// <svc>.<env>.aven.internal과 예전 <svc>.<env>.keel.internal을 함께 붙여 기존 호스트 이름이 계속 해석되게 한다.
+// 대표 주소 <svc>.<env>.keel.internal과 새 이름 <svc>.<env>.aven.internal을 함께 붙인다.
 func PrivateAliases(service, env, dns string) []string {
-	out := []string{service, PrivateDomain(service, env), LegacyPrivateDomain(service, env)}
+	out := []string{service, PrivateDomain(service, env), AvenPrivateDomain(service, env)}
 	if dns != "" && dns != service {
-		out = append(out, dns, PrivateDomain(dns, env), LegacyPrivateDomain(dns, env))
+		out = append(out, dns, PrivateDomain(dns, env), AvenPrivateDomain(dns, env))
 	}
 	return out
 }

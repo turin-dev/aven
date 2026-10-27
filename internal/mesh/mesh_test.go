@@ -336,7 +336,7 @@ func TestForwarderSpecAndSignature(t *testing.T) {
 	if len(s.Publish) != 0 || len(s.Mounts) != 0 || s.Image != node.TCPForwardImage || s.Network != "aven-"+envA {
 		t.Fatalf("spec: %+v", s)
 	}
-	if s.Labels[node.LabelRole] != node.RoleMeshProxy || s.Aliases[0] != "db" || s.Aliases[1] != "db.production.aven.internal" || s.Aliases[2] != "db.production.keel.internal" {
+	if s.Labels[node.LabelRole] != node.RoleMeshProxy || s.Aliases[0] != "db" || s.Aliases[1] != "db.production.keel.internal" || s.Aliases[2] != "db.production.aven.internal" {
 		t.Fatalf("labels/aliases: %+v %v", s.Labels, s.Aliases)
 	}
 	if !strings.Contains(s.Cmd[1], "TCP-LISTEN:5432,fork,reuseaddr TCP4:172.18.0.1:40001") || !strings.HasSuffix(s.Cmd[1], "wait") {
