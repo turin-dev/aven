@@ -1,5 +1,6 @@
 // Package node는 한 노드의 Docker 엔진을 다룬다.
-// docker/git CLI를 직접 호출하는 로컬 드라이버다. keel.managed=true 라벨이 없는 리소스는 절대 건드리지 않는다.
+// docker/git CLI를 직접 호출하는 로컬 드라이버다. aven.managed=true 라벨이 없는 리소스는 절대 건드리지 않는다.
+// 예전 설치의 keel.managed 라벨도 같은 리소스로 읽는다.
 package node
 
 import (
@@ -18,31 +19,91 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 const (
-	NetworkName     = "keel" // proxy 기본 네트워크(레거시 v0 호환)
-	LabelManaged    = "keel.managed"
-	LabelProject    = "keel.project"
-	LabelEnv        = "keel.environment"
-	LabelService    = "keel.service"
-	LabelInstance   = "keel.instance"
-	LabelDeploy     = "keel.deployment"
-	LabelReplica    = "keel.replica"
-	LabelRole       = "keel.role" // app | cron | predeploy | tcpproxy | helper | proxy
-	LabelLegacyApp  = "keel.app"
-	LabelVolumeID   = "keel.volume"
-	LabelSandbox    = "keel.sandbox"
-	RoleApp         = "app"
-	RoleCron        = "cron"
-	RolePreDeploy   = "predeploy"
-	RoleTCPProxy    = "tcpproxy"
-	RoleHelper      = "helper"
-	RoleSandbox     = "sandbox"
-	RoleMeshProxy   = "meshproxy" // 다른 노드의 서비스로 가는 mesh forwarder(포트 publish 없음, agent/서버가 직접 관리)
-	HelperImage     = "busybox:stable"
-	TCPForwardImage = "alpine/socat:1.8.0.3"
+	NetworkName       = "aven" // proxy 기본 네트워크
+	LegacyNetworkName = "keel" // 예전 설치의 기본 네트워크
+	LabelManaged      = "aven.managed"
+	LabelProject      = "aven.project"
+	LabelEnv          = "aven.environment"
+	LabelService      = "aven.service"
+	LabelInstance     = "aven.instance"
+	LabelDeploy       = "aven.deployment"
+	LabelReplica      = "aven.replica"
+	LabelRole         = "aven.role" // app | cron | predeploy | tcpproxy | helper | proxy
+	LabelLegacyApp    = "aven.app"
+	LabelVolumeID     = "aven.volume"
+	LabelSandbox      = "aven.sandbox"
+	RoleApp           = "app"
+	RoleCron          = "cron"
+	RolePreDeploy     = "predeploy"
+	RoleTCPProxy      = "tcpproxy"
+	RoleHelper        = "helper"
+	RoleSandbox       = "sandbox"
+	RoleMeshProxy     = "meshproxy" // 다른 노드의 서비스로 가는 mesh forwarder(포트 publish 없음, agent/서버가 직접 관리)
+	HelperImage       = "busybox:stable"
+	TCPForwardImage   = "alpine/socat:1.8.0.3"
 )
+
+// LegacyLabel is the keel.* spelling of an aven.* label key.
+func LegacyLabel(key string) string {
+	if strings.HasPrefix(key, "aven.") {
+		return "keel." + strings.TrimPrefix(key, "aven.")
+	}
+	return ""
+}
+
+// ReadLabel returns the aven.* label, or the keel.* label when the new one is absent.
+func ReadLabel(labels map[string]string, key string) string {
+	if labels == nil {
+		return ""
+	}
+	if v, ok := labels[key]; ok {
+		return v
+	}
+	if leg := LegacyLabel(key); leg != "" {
+		if v, ok := labels[leg]; ok {
+			if v != "" {
+				compat.NoteLegacyResource("label:"+leg, "label "+leg, "label "+key)
+			}
+			return v
+		}
+	}
+	return ""
+}
+
+// NormalizeLabels copies keel.* labels onto aven.* when the new key is absent,
+// so callers that index LabelManaged still see existing containers.
+func NormalizeLabels(in map[string]string) map[string]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]string, len(in)+4)
+	for k, v := range in {
+		out[k] = v
+	}
+	for k, v := range in {
+		if !strings.HasPrefix(k, "keel.") {
+			continue
+		}
+		nk := "aven." + strings.TrimPrefix(k, "keel.")
+		if _, exists := out[nk]; exists {
+			continue
+		}
+		out[nk] = v
+		if v != "" {
+			compat.NoteLegacyResource("label:"+k, "label "+k, "label "+nk)
+		}
+	}
+	return out
+}
+
+func managedTrue(labels map[string]string) bool {
+	return ReadLabel(labels, LabelManaged) == "true"
+}
 
 type Docker struct {
 	Bin string // 기본 "docker"
@@ -133,12 +194,54 @@ func (d *Docker) Version(ctx context.Context) string {
 
 // ---------------- networks ----------------
 
+// ActiveBridge is the proxy's default bridge: "aven", or "keel" when an
+// existing install still has that network and "aven" does not.
+func (d *Docker) ActiveBridge(ctx context.Context) string {
+	if d.networkExists(ctx, NetworkName) {
+		return NetworkName
+	}
+	if d.networkExists(ctx, LegacyNetworkName) {
+		compat.NoteLegacyResource("bridge", "docker network "+LegacyNetworkName, "docker network "+NetworkName)
+		return LegacyNetworkName
+	}
+	return NetworkName
+}
+
+func (d *Docker) networkExists(ctx context.Context, name string) bool {
+	_, err := run(ctx, nil, nil, d.bin(), "network", "inspect", name)
+	return err == nil
+}
+
 // EnsureNetwork는 IPv6가 켜진 aven bridge 네트워크를 만든다(이미 있으면 그대로 둔다).
 func (d *Docker) EnsureNetwork(ctx context.Context) error {
-	return d.EnsureNamedNetwork(ctx, NetworkName, nil)
+	return d.EnsureNamedNetwork(ctx, d.ActiveBridge(ctx), nil)
+}
+
+// ResolveNetwork returns name when that network exists. When the caller asked
+// for an aven name and only the keel name exists, the keel name is returned
+// so new containers join the bridge existing installs already use.
+func (d *Docker) ResolveNetwork(ctx context.Context, name string) string {
+	if name == "" || name == "host" || name == "none" || strings.HasPrefix(name, "container:") {
+		return name
+	}
+	alt := compat.AltResource(name)
+	if alt == "" {
+		return name
+	}
+	if d.networkExists(ctx, name) {
+		return name
+	}
+	if d.networkExists(ctx, alt) {
+		if strings.HasPrefix(name, compat.Prefix+"-") || name == compat.Prefix {
+			compat.NoteLegacyResource("network:"+alt, "docker network "+alt, "docker network "+name)
+		}
+		return alt
+	}
+	return name
 }
 
 func (d *Docker) EnsureNamedNetwork(ctx context.Context, name string, labels map[string]string) error {
+	name = d.ResolveNetwork(ctx, name)
 	if _, err := run(ctx, nil, nil, d.bin(), "network", "inspect", name); err == nil {
 		return nil
 	}
@@ -165,11 +268,11 @@ func (d *Docker) Connect(ctx context.Context, network, container string) error {
 
 // RemoveNetwork는 aven이 만든 네트워크만 지운다. 붙어 있는 proxy는 먼저 뗀다.
 func (d *Docker) RemoveNetwork(ctx context.Context, name string, detach ...string) error {
-	s, err := run(ctx, nil, nil, d.bin(), "network", "inspect", "--format", "{{index .Labels \""+LabelManaged+"\"}}", name)
-	if err != nil {
-		return nil // 없음
-	}
-	if strings.TrimSpace(s) != "true" {
+	ok, err := d.objectManaged(ctx, "network", name)
+	if err != nil || !ok {
+		if err != nil {
+			return nil // 없음
+		}
 		return fmt.Errorf("network %s is not managed by aven", name)
 	}
 	for _, c := range detach {
@@ -208,7 +311,7 @@ func ParseNetworkInfo(b []byte) (*NetworkInfo, error) {
 	if err := json.Unmarshal(bytes.TrimSpace(b), &res); err != nil {
 		return nil, fmt.Errorf("network inspect: bad output: %w", err)
 	}
-	if res.Labels[LabelManaged] != "true" {
+	if !managedTrue(res.Labels) {
 		return nil, errors.New("network is not managed by aven")
 	}
 	out := &NetworkInfo{}
@@ -232,13 +335,37 @@ func ParseNetworkInfo(b []byte) (*NetworkInfo, error) {
 	return out, nil
 }
 
+// objectManaged는 kind(network|volume) 리소스가 aven.managed 또는 keel.managed 인지다.
+// 리소스가 없으면 (false, err).
+func (d *Docker) objectManaged(ctx context.Context, kind, name string) (bool, error) {
+	s, err := run(ctx, nil, nil, d.bin(), kind, "inspect", "--format", "{{json .Labels}}", name)
+	if err != nil {
+		return false, err
+	}
+	var labels map[string]string
+	if json.Unmarshal([]byte(strings.TrimSpace(s)), &labels) != nil {
+		return false, nil
+	}
+	return managedTrue(labels), nil
+}
+
 // ManagedNetworks는 aven 라벨이 붙은 네트워크 이름을 돌려준다.
 func (d *Docker) ManagedNetworks(ctx context.Context) ([]string, error) {
-	s, err := run(ctx, nil, nil, d.bin(), "network", "ls", "--filter", "label="+LabelManaged+"=true", "--format", "{{.Name}}")
-	if err != nil {
-		return nil, err
+	seen := map[string]bool{}
+	var out []string
+	for _, label := range []string{LabelManaged, LegacyLabel(LabelManaged)} {
+		s, err := run(ctx, nil, nil, d.bin(), "network", "ls", "--filter", "label="+label+"=true", "--format", "{{.Name}}")
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range splitLines(s) {
+			if !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
 	}
-	return splitLines(s), nil
+	return out, nil
 }
 
 func splitLines(s string) []string {
@@ -317,7 +444,7 @@ func (d *Docker) BuildTarget(ctx context.Context, contextDir, dockerfile, tag, t
 	return d.BuildSecrets(ctx, contextDir, dockerfile, tag, target, labels, buildArgs, nil, out)
 }
 
-// BuildSecrets는 BuildTarget에 BuildKit build secret을 더한다. secret은 `--secret id=NAME,env=KEEL_SECRET_NAME`으로 넘기므로
+// BuildSecrets는 BuildTarget에 BuildKit build secret을 더한다. secret은 `--secret id=NAME,env=AVEN_SECRET_NAME`으로 넘기므로
 // 값은 argv, 이미지 레이어, `docker history`에 남지 않는다(Dockerfile은 `RUN --mount=type=secret,id=NAME`으로 읽는다).
 func (d *Docker) BuildSecrets(ctx context.Context, contextDir, dockerfile, tag, target string, labels, buildArgs, secrets map[string]string, out func(string)) error {
 	args := []string{"build", "--progress=plain", "-t", tag, "-f", dockerfile}
@@ -336,8 +463,8 @@ func (d *Docker) BuildSecrets(ctx context.Context, contextDir, dockerfile, tag, 
 		env = append(env, k+"="+buildArgs[k])
 	}
 	for _, k := range sortedKeys(secrets) {
-		args = append(args, "--secret", "id="+k+",env=KEEL_SECRET_"+k)
-		env = append(env, "KEEL_SECRET_"+k+"="+secrets[k])
+		args = append(args, "--secret", "id="+k+",env=AVEN_SECRET_"+k)
+		env = append(env, "AVEN_SECRET_"+k+"="+secrets[k])
 	}
 	args = append(args, contextDir)
 	_, err := run(ctx, env, out, d.bin(), args...)
@@ -390,8 +517,8 @@ func (d *Docker) RailpackBuild(ctx context.Context, railpack, frontend, srcDir, 
 	h := fnv(vars)
 	bargs = append(bargs, "--build-arg", "secrets-hash="+h)
 	for _, k := range sortedKeys(vars) {
-		bargs = append(bargs, "--secret", "id="+k+",env=KEEL_SECRET_"+k)
-		env = append(env, "KEEL_SECRET_"+k+"="+vars[k])
+		bargs = append(bargs, "--secret", "id="+k+",env=AVEN_SECRET_"+k)
+		env = append(env, "AVEN_SECRET_"+k+"="+vars[k])
 	}
 	bargs = append(bargs, srcDir)
 	build := func(builder string) error {
@@ -403,10 +530,11 @@ func (d *Docker) RailpackBuild(ctx context.Context, railpack, frontend, srcDir, 
 		if out != nil {
 			out("기본 builder가 merge op를 지원하지 않습니다(containerd image store가 아님). docker-container builder " + RailpackBuilder + "로 다시 빌드합니다")
 		}
-		if err := d.ensureRailpackBuilder(ctx); err != nil {
-			return nil, err
+		builder, berr := d.railpackBuilder(ctx)
+		if berr != nil {
+			return nil, berr
 		}
-		err = build(RailpackBuilder)
+		err = build(builder)
 	}
 	if err != nil {
 		return nil, err
@@ -415,7 +543,9 @@ func (d *Docker) RailpackBuild(ctx context.Context, railpack, frontend, srcDir, 
 }
 
 // RailpackBuilder는 기본 builder로 railpack 빌드를 못 할 때 쓰는 docker-container driver buildx builder 이름이다.
-const RailpackBuilder = "keel-railpack"
+// 예전 설치의 keel-railpack builder가 있으면 그 이름을 그대로 쓴다.
+const RailpackBuilder = "aven-railpack"
+const legacyRailpackBuilder = "keel-railpack"
 
 // needsContainerBuilder는 기본(docker driver) builder가 railpack frontend의 merge op를 거부했는지 본다.
 // containerd image store를 쓰지 않는 daemon(Docker 28 이하, 업그레이드한 호스트)의 기본 builder가 그렇다.
@@ -424,18 +554,22 @@ func needsContainerBuilder(err error) bool {
 	return strings.Contains(s, "mergeop") || strings.Contains(s, "containerd image store")
 }
 
-// ensureRailpackBuilder는 RailpackBuilder가 없으면 만든다(BuildKit 컨테이너는 첫 빌드 때 뜬다).
-func (d *Docker) ensureRailpackBuilder(ctx context.Context) error {
+// railpackBuilder는 aven-railpack를 쓰고, 없으면 예전 keel-railpack를 재사용한다. 둘 다 없으면 aven-railpack를 만든다.
+func (d *Docker) railpackBuilder(ctx context.Context) (string, error) {
 	if _, err := run(ctx, nil, nil, d.bin(), "buildx", "inspect", RailpackBuilder); err == nil {
-		return nil
+		return RailpackBuilder, nil
+	}
+	if _, err := run(ctx, nil, nil, d.bin(), "buildx", "inspect", legacyRailpackBuilder); err == nil {
+		compat.NoteLegacyResource("buildx-builder", legacyRailpackBuilder, RailpackBuilder)
+		return legacyRailpackBuilder, nil
 	}
 	if _, err := run(ctx, nil, nil, d.bin(), "buildx", "create", "--name", RailpackBuilder, "--driver", "docker-container"); err != nil {
 		// 동시에 다른 빌드가 만들었을 수 있다
 		if _, ierr := run(ctx, nil, nil, d.bin(), "buildx", "inspect", RailpackBuilder); ierr != nil {
-			return fmt.Errorf("railpack용 buildx builder를 만들지 못했습니다: %w", err)
+			return "", fmt.Errorf("railpack용 buildx builder를 만들지 못했습니다: %w", err)
 		}
 	}
-	return nil
+	return RailpackBuilder, nil
 }
 
 type RailpackInfo struct {
@@ -573,7 +707,16 @@ func (d *Docker) RemoveImage(ctx context.Context, image string) {
 
 // CommitSandbox snapshots a running Aven sandbox's writable layer into an internal image.
 func (d *Docker) CommitSandbox(ctx context.Context, container, image string) error {
-	tag := strings.TrimPrefix(image, "keel/sandbox:")
+	tag := image
+	for _, p := range []string{"aven/sandbox:", "keel/sandbox:"} {
+		if strings.HasPrefix(image, p) {
+			if p == "keel/sandbox:" {
+				compat.NoteLegacyResource("image-prefix", "image "+p, "image aven/sandbox:")
+			}
+			tag = strings.TrimPrefix(image, p)
+			break
+		}
+	}
 	if len(tag) < 4 || len(tag) > 80 || strings.Trim(tag, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
 		return fmt.Errorf("invalid sandbox snapshot image")
 	}
@@ -581,7 +724,7 @@ func (d *Docker) CommitSandbox(ctx context.Context, container, image string) err
 	if err != nil {
 		return err
 	}
-	if st.Labels[LabelManaged] != "true" || st.Labels[LabelRole] != RoleSandbox {
+	if ReadLabel(st.Labels, LabelManaged) != "true" || ReadLabel(st.Labels, LabelRole) != RoleSandbox {
 		return fmt.Errorf("container %s is not a Aven sandbox", container)
 	}
 	if !st.Running {
@@ -686,6 +829,7 @@ func (s RunSpec) args(detach bool) ([]string, []string) {
 
 // Run은 컨테이너를 백그라운드로 띄운다.
 func (d *Docker) Run(ctx context.Context, s RunSpec) error {
+	s.Network = d.ResolveNetwork(ctx, s.Network)
 	args, env := s.args(true)
 	_, err := run(ctx, env, nil, d.bin(), args...)
 	return err
@@ -693,6 +837,7 @@ func (d *Docker) Run(ctx context.Context, s RunSpec) error {
 
 // Create는 컨테이너를 만들기만 한다(시작하지 않음).
 func (d *Docker) Create(ctx context.Context, s RunSpec) error {
+	s.Network = d.ResolveNetwork(ctx, s.Network)
 	args, env := s.args(false)
 	args[0] = "create"
 	_, err := run(ctx, env, nil, d.bin(), args...)
@@ -746,7 +891,22 @@ type ContainerState struct {
 }
 
 // IP는 network에서 컨테이너 주소를 돌려준다(IPv6 우선).
-func (c *ContainerState) IP(network string) []string { return c.IPs[network] }
+// 예전 설치의 네트워크 이름(keel-…)도 같은 환경으로 읽는다.
+func (c *ContainerState) IP(network string) []string {
+	if c == nil || c.IPs == nil {
+		return nil
+	}
+	if ips := c.IPs[network]; len(ips) > 0 {
+		return ips
+	}
+	if alt := compat.AltResource(network); alt != "" {
+		if ips := c.IPs[alt]; len(ips) > 0 {
+			compat.NoteLegacyResource("network-prefix", "docker network "+alt, "docker network "+network)
+			return ips
+		}
+	}
+	return nil
+}
 
 var ErrNoContainer = errors.New("no such container")
 
@@ -807,7 +967,7 @@ func (d *Docker) InspectMany(ctx context.Context, names []string) (map[string]*C
 	}
 	for _, r := range res {
 		cs := &ContainerState{Name: strings.TrimPrefix(r.Name, "/"), Running: r.State.Running, Status: r.State.Status,
-			ExitCode: r.State.ExitCode, RestartCount: r.RestartCount, IPs: map[string][]string{}, Labels: r.Config.Labels}
+			ExitCode: r.State.ExitCode, RestartCount: r.RestartCount, IPs: map[string][]string{}, Labels: NormalizeLabels(r.Config.Labels)}
 		cs.StartedAt, _ = time.Parse(time.RFC3339Nano, r.State.StartedAt)
 		for _, mt := range r.Mounts {
 			if mt.Type == "volume" && mt.Name != "" {
@@ -857,24 +1017,27 @@ func (d *Docker) Restart(ctx context.Context, name string, graceSeconds int) err
 
 // ListManaged는 aven이 만든 컨테이너 이름 → 라벨 맵을 돌려준다.
 func (d *Docker) ListManaged(ctx context.Context) (map[string]map[string]string, error) {
-	s, err := run(ctx, nil, nil, d.bin(), "ps", "-a", "--filter", "label="+LabelManaged+"=true",
-		"--format", "{{.Names}}\t{{.Labels}}")
-	if err != nil {
-		return nil, err
-	}
 	out := map[string]map[string]string{}
-	for _, line := range strings.Split(s, "\n") {
-		name, labels, ok := strings.Cut(line, "\t")
-		if !ok {
-			continue
+	for _, label := range []string{LabelManaged, LegacyLabel(LabelManaged)} {
+		s, err := run(ctx, nil, nil, d.bin(), "ps", "-a", "--filter", "label="+label+"=true",
+			"--format", "{{.Names}}\t{{.Labels}}")
+		if err != nil {
+			return nil, err
 		}
-		m := map[string]string{}
-		for _, kv := range strings.Split(labels, ",") {
-			if k, v, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(k, "keel.") {
-				m[k] = v
+		for _, line := range strings.Split(s, "\n") {
+			name, labels, ok := strings.Cut(line, "\t")
+			if !ok || out[name] != nil {
+				continue
 			}
+			m := map[string]string{}
+			for _, kv := range strings.Split(labels, ",") {
+				k, v, ok := strings.Cut(kv, "=")
+				if ok && (strings.HasPrefix(k, "aven.") || strings.HasPrefix(k, "keel.")) {
+					m[k] = v
+				}
+			}
+			out[name] = NormalizeLabels(m)
 		}
-		out[name] = m
 	}
 	return out, nil
 }
@@ -964,7 +1127,9 @@ type ContainerEvent struct {
 
 // Events는 aven 컨테이너의 die/start 이벤트를 넘긴다. ctx가 끝날 때까지 돈다.
 func (d *Docker) Events(ctx context.Context, out func(ContainerEvent)) error {
-	cmd := exec.CommandContext(ctx, d.bin(), "events", "--filter", "type=container", "--filter", "label="+LabelManaged+"=true",
+	// Docker label filters are AND, so aven.managed and keel.managed cannot be
+	// requested together. Unmanaged events are dropped below.
+	cmd := exec.CommandContext(ctx, d.bin(), "events", "--filter", "type=container",
 		"--filter", "event=die", "--filter", "event=start", "--format", "{{json .}}")
 	cmd.WaitDelay = 2 * time.Second
 	so, err := cmd.StdoutPipe()
@@ -985,7 +1150,10 @@ func (d *Docker) Events(ctx context.Context, out func(ContainerEvent)) error {
 		if json.Unmarshal(sc.Bytes(), &ev) != nil {
 			continue
 		}
-		a := ev.Actor.Attributes
+		a := NormalizeLabels(ev.Actor.Attributes)
+		if !managedTrue(a) {
+			continue
+		}
 		out(ContainerEvent{Action: ev.Action, Name: a["name"], Labels: a, Exit: a["exitCode"]})
 	}
 	return cmd.Wait()
@@ -1008,11 +1176,11 @@ func (d *Docker) EnsureVolume(ctx context.Context, name string, labels map[strin
 
 // RemoveVolume은 aven 라벨이 있는 볼륨만 지운다.
 func (d *Docker) RemoveVolume(ctx context.Context, name string) error {
-	s, err := run(ctx, nil, nil, d.bin(), "volume", "inspect", "--format", "{{index .Labels \""+LabelManaged+"\"}}", name)
-	if err != nil {
-		return nil
-	}
-	if strings.TrimSpace(s) != "true" {
+	ok, err := d.objectManaged(ctx, "volume", name)
+	if err != nil || !ok {
+		if err != nil {
+			return nil
+		}
 		return fmt.Errorf("volume %s is not managed by aven", name)
 	}
 	_, err = run(ctx, nil, nil, d.bin(), "volume", "rm", "-f", name)
@@ -1035,7 +1203,7 @@ func (d *Docker) VolumeSizes(ctx context.Context) (map[string]int64, error) {
 	}
 	out := map[string]int64{}
 	for _, v := range vols {
-		if strings.Contains(v.Labels, LabelManaged+"=true") {
+		if strings.Contains(v.Labels, LabelManaged+"=true") || strings.Contains(v.Labels, LegacyLabel(LabelManaged)+"=true") {
 			out[v.Name] = ParseSize(v.Size)
 		}
 	}
@@ -1190,6 +1358,7 @@ func (d *Docker) VolumeMountpoint(ctx context.Context, name string) (string, err
 // stderr는 줄 단위로 넘긴다. 종료 코드를 돌려주고, ctx가 끝나도 컨테이너는 지운다.
 func (d *Docker) RunStream(ctx context.Context, s RunSpec, stdin io.Reader, stdout io.Writer, stderr func(string)) (int, error) {
 	s.Restart = ""
+	s.Network = d.ResolveNetwork(ctx, s.Network)
 	args, env := s.args(false)
 	pre := []string{"run", "--rm"}
 	if stdin != nil {

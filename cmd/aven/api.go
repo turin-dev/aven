@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/http"
 	"os"
@@ -129,10 +130,10 @@ func runAPI(c *config, args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	r.Header.Set("Content-Type", "application/json")
-	if t := os.Getenv("KEEL_TOKEN"); t != "" {
+	if t := compat.Env("TOKEN"); t != "" {
 		r.Header.Set("Authorization", "Bearer "+t)
 	} else if c.Cookie != "" {
-		r.AddCookie(&http.Cookie{Name: "keel_session", Value: c.Cookie})
+		r.AddCookie(&http.Cookie{Name: "aven_session", Value: c.Cookie})
 	}
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {

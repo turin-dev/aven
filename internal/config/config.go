@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -83,6 +84,9 @@ func Find(dir string) (string, *File, error) {
 		}
 		if err != nil {
 			return name, nil, err
+		}
+		if name == "keel.json" || name == "keel.toml" {
+			compat.WarnOnce("config-file:"+name, "%s is in use; aven.json / aven.toml is the new name (the old file still works)", name)
 		}
 		f, err := Parse(name, b)
 		return name, f, err

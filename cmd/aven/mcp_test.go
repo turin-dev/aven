@@ -59,7 +59,7 @@ func TestMCPProxyUsesLoginSessionAndSkipsNotifications(t *testing.T) {
 		if r.Header.Get("Authorization") != "" {
 			t.Errorf("unexpected Authorization header without KEEL_TOKEN")
 		}
-		if c, err := r.Cookie("keel_session"); err != nil || c.Value != "sess" {
+		if c, err := r.Cookie("aven_session"); err != nil || c.Value != "sess" {
 			t.Errorf("session cookie not forwarded: %v", err)
 		}
 		if r.Header.Get("Mcp-Method") == "notifications/initialized" {

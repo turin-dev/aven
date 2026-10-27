@@ -1074,11 +1074,11 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                   label={t("빌드 위치")}
                   keywords="build node 노드 원격"
                   badge={<Changed on={stage.changed("build_node")} />}
-                  description={t("원격 노드에 배포하는 서비스를 어디서 빌드할지 정합니다. keel 서버 노드에서 빌드하면 이미지를 압축해 배포 노드로 보냅니다.")}
+                  description={t("원격 노드에 배포하는 서비스를 어디서 빌드할지 정합니다. aven 서버 노드에서 빌드하면 이미지를 압축해 배포 노드로 보냅니다.")}
                 >
                   <Select aria-label={t("빌드 위치")} value={draft.build_node ?? ""} onChange={(e) => stage.set("build_node", e.target.value as "" | "local")}>
                     <option value="">{t("배포 노드")}</option>
-                    <option value="local">{t("keel 서버 노드")}</option>
+                    <option value="local">{t("aven 서버 노드")}</option>
                   </Select>
                 </Item>
                 )}
@@ -1122,11 +1122,12 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                   <BuildSecretsEditor value={draft.build_secrets ?? []} variableNames={Object.keys(inst.variables)} onChange={(v) => stage.set("build_secrets", v.length ? v : [])} />
                 </Item>
                 )}
-                <Item label={t("설정 파일")} keywords="config as code keel.json railway.json">
+                <Item label={t("설정 파일")} keywords="config as code aven.json keel.json railway.json">
                   <p className="text-sm text-gray-600">
-                    {tr("저장소에 {keel} 또는 {railway}이 있으면 배포할 때 그 값이 여기 설정보다 우선합니다.", {
-                      keel: <span className="font-mono text-foreground">keel.json</span>,
+                    {tr("저장소에 {aven} 또는 {railway}이 있으면 배포할 때 그 값이 여기 설정보다 우선합니다. {keel}도 계속 적용됩니다.", {
+                      aven: <span className="font-mono text-foreground">aven.json</span>,
                       railway: <span className="font-mono text-foreground">railway.json</span>,
+                      keel: <span className="font-mono text-foreground">keel.json</span>,
                     })}
                   </p>
                 </Item>

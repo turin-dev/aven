@@ -1,4 +1,4 @@
-/* Dev-only fake sandbox API for the mock backend (NEXT_PUBLIC_KEEL_MOCK=1). */
+/* Dev-only fake sandbox API for the mock backend (NEXT_PUBLIC_AVEN_MOCK=1). */
 
 import type { Sandbox, SandboxCheckpoint } from "../sandboxes";
 import { HttpError, route } from "./server";
@@ -38,7 +38,7 @@ function make(eid: string, o: Opts, image: string, fs: Fs, extra: Partial<Sandbo
     project_id: "prj_mock",
     environment_id: eid,
     node_id: "node_local",
-    container_name: `keel-sbx-${id.replace("_", "-")}`,
+    container_name: `aven-sbx-${id.replace("_", "-")}`,
     network_mode: o.network ?? "isolated",
     image,
     status: "running",
@@ -63,7 +63,7 @@ route("POST", "/environments/{eid}/sandboxes", ([eid], r) => {
   if (body.checkpoint) {
     const cp = [...checkpoints.values()].find((c) => c.c.environment_id === eid && (c.c.name === body.checkpoint || c.c.id === body.checkpoint));
     if (!cp) throw new HttpError(400, "checkpoint not found in this environment");
-    return [201, make(eid, body, `keel/sandbox:${cp.c.id.replace("_", "-")}`, cp.fs, { checkpoint_name: cp.c.name })];
+    return [201, make(eid, body, `aven/sandbox:${cp.c.id.replace("_", "-")}`, cp.fs, { checkpoint_name: cp.c.name })];
   }
   return [201, make(eid, body, body.image || "ubuntu:24.04", baseFs())];
 });
@@ -81,7 +81,7 @@ route("POST", "/sandboxes/{id}/heartbeat", ([id]) => {
 route("POST", "/sandboxes/{id}/fork", ([id], r) => {
   const b = get(id);
   const s = make(b.s.environment_id, (r.body ?? {}) as Opts, "", b.fs, { parent_id: id });
-  s.image = `keel/sandbox:${s.id.replace("_", "-")}`;
+  s.image = `aven/sandbox:${s.id.replace("_", "-")}`;
   return [201, s];
 });
 route("POST", "/sandboxes/{id}/exec", ([id], r) => {

@@ -82,7 +82,7 @@ func TestRemoteDBBackupRoundTripThroughAgent(t *testing.T) {
 		t.Fatalf("got %d bytes, want %d", buf.Len(), len(d.out))
 	}
 	// 원격 helper는 agent가 같은 스크립트 표로 만든다: 서버가 정한 host 대신 컨테이너 주소를 쓴다.
-	if d.spec.Name != "keel-dbb-abcdefgh234" || d.spec.Env["DBHOST"] != "172.20.0.5" || d.spec.Env["PGPASSWORD"] != "pw$ecret" ||
+	if d.spec.Name != "aven-dbb-abcdefgh234" || d.spec.Env["DBHOST"] != "172.20.0.5" || d.spec.Env["PGPASSWORD"] != "pw$ecret" ||
 		d.spec.Env["DBNAME"] != "app" || d.spec.Cmd[1] != tool.Script || d.spec.Image != "postgres:17-alpine" {
 		t.Fatalf("spec: %+v", d.spec)
 	}
@@ -95,7 +95,7 @@ func TestRemoteDBRestoreRoundTripThroughAgent(t *testing.T) {
 	if _, err := m.streamIn(context.Background(), dt, "abcdefgh234", tool, nil, bytes.NewReader(data), nil); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(d.stdin, data) || d.spec.Name != "keel-dbr-abcdefgh234" || !strings.Contains(d.spec.Cmd[1], "pg_restore") {
+	if !bytes.Equal(d.stdin, data) || d.spec.Name != "aven-dbr-abcdefgh234" || !strings.Contains(d.spec.Cmd[1], "pg_restore") {
 		t.Fatalf("stdin=%d spec=%+v", len(d.stdin), d.spec)
 	}
 	// redis: 멈춘 DB의 볼륨에 놓는다

@@ -1,8 +1,8 @@
 "use client";
 
-/* Private networking, modeled on Railway's dashboard: endpoint row (green check, `<name>.<env>.keel.internal` + "IPv4 & IPv6" pill,
+/* Private networking, modeled on Railway's dashboard: endpoint row (green check, `<name>.<env>.aven.internal` + "IPv4 & IPv6" pill,
    hover copy/edit, and a rename action) with the sliding rename panel
-   (dnsName input + suffix, live "Endpoint name available!"). keel's cross-node mesh ports sit below the list and only
+   (dnsName input + suffix, live "Endpoint name available!"). Cross-node mesh ports sit below the list and only
    show when the environment runs on two or more nodes. */
 
 import { useEffect, useMemo, useState } from "react";
@@ -37,7 +37,7 @@ export function PrivateNetworking({
 }) {
   const [editing, setEditing] = useState(false);
   const name = draft.private_dns_name || svc.name;
-  const suffix = view.private.fqdn.startsWith(`${view.private.dns_name}.`) ? view.private.fqdn.slice(view.private.dns_name.length) : `.${env.name}.keel.internal`;
+  const suffix = view.private.fqdn.startsWith(`${view.private.dns_name}.`) ? view.private.fqdn.slice(view.private.dns_name.length) : `.${env.name}.aven.internal`;
   const fqdn = `${name}${suffix}`;
   const v4 = view.private.ipv4 ?? [];
   const v6 = view.private.ipv6 ?? [];

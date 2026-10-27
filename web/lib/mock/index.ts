@@ -92,7 +92,7 @@ class FakeExecSocket {
 
   constructor(url: string) {
     this.url = url;
-    this.replica = new URL(url).searchParams.get("replica") || "keel-mock-1";
+    this.replica = new URL(url).searchParams.get("replica") || "aven-mock-1";
     setTimeout(() => {
       this.readyState = 1;
       this.onopen?.(new Event("open"));
@@ -169,8 +169,8 @@ class FakeExecSocket {
 }
 
 export function install() {
-  if (typeof window === "undefined" || (window as unknown as { __keelMock?: boolean }).__keelMock) return;
-  (window as unknown as { __keelMock?: boolean }).__keelMock = true;
+  if (typeof window === "undefined" || (window as unknown as { __avenMock?: boolean }).__avenMock) return;
+  (window as unknown as { __avenMock?: boolean }).__avenMock = true;
   const orig = window.fetch.bind(window);
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -199,5 +199,5 @@ export function install() {
   } as unknown as typeof WebSocket;
   Object.assign(PatchedWS, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
   window.WebSocket = PatchedWS;
-  console.info("%ckeel mock backend active", "color:#b367e4");
+  console.info("%caven mock backend active", "color:#b367e4");
 }

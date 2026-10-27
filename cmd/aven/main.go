@@ -1,4 +1,4 @@
-// aven login <url>                     비밀번호로 로그인(KEEL_PASSWORD 또는 프롬프트). KEEL_TOKEN이 있으면 Bearer 사용
+// aven login <url>                     비밀번호로 로그인(AVEN_PASSWORD 또는 프롬프트, KEEL_PASSWORD도 동작). AVEN_TOKEN이 있으면 Bearer 사용
 // aven link [-p project] [-e env] [-s service]   현재 디렉터리를 서비스에 연결
 // aven dev [up|down|clean|configure] [-e env]   프로젝트 서비스를 로컬에서 실행
 // aven up [-d]                         현재 디렉터리를 tar.gz로 올려 배포하고 빌드 로그를 따라간다
@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"io/fs"
 	"mime/multipart"
@@ -62,12 +63,13 @@ func loadCfg() *config {
 		json.Unmarshal(b, c)
 	} else if b, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(cfgPath())), "keel", "config.json")); err == nil {
 		// Logins made by the keel CLI keep working until the next save writes the aven path.
+		compat.WarnOnce("cli-config", "config %s is in use; %s is the new path (the old path still works)", filepath.Join(filepath.Dir(filepath.Dir(cfgPath())), "keel", "config.json"), cfgPath())
 		json.Unmarshal(b, c)
 	}
 	if c.Links == nil {
 		c.Links = map[string]*link{}
 	}
-	if u := os.Getenv("KEEL_URL"); u != "" {
+	if u := compat.Env("URL"); u != "" {
 		c.URL = u
 	}
 	return c
@@ -201,8 +203,8 @@ func main() {
 
 const helpText = `aven: command line for aven-server (see docs/cli.md)
 
-  login [--email you@x] <url>      log in (KEEL_PASSWORD or prompt, KEEL_TOTP for 2FA; no email = built-in admin;
-                                   KEEL_TOKEN uses Bearer: KEEL_API_TOKEN or a keel_ API token)
+  login [--email you@x] <url>      log in (AVEN_PASSWORD or prompt, AVEN_TOTP for 2FA; no email = built-in admin;
+                                   AVEN_TOKEN uses Bearer: AVEN_API_TOKEN or an aven_ API token; KEEL_* still works)
   logout                           end the saved session
   whoami                           show the logged-in user, role and server
   tokens [list]                    list your API tokens
@@ -213,9 +215,9 @@ const helpText = `aven: command line for aven-server (see docs/cli.md)
   link [-p project] [-e env] [-s service]
                                    link this directory (also --project/--environment/--service)
   config import [--file path] [--format ts|json|yaml] [--include-variables] [--force] [--json] [-e env]
-                                   write the linked environment to .keel/aven.ts (alias: pull)
+                                   write the linked environment to .aven/aven.ts (alias: pull; .keel still works)
   config plan [--file path] [-e env] [--json] [--show-values] [--detailed-exit-code] [--out plan.json]
-                                   diff .keel/aven.ts|json|yaml against the environment (alias: preview)
+                                   diff .aven/aven.ts|json|yaml against the environment (alias: preview; .keel still works)
   config apply [--file path] [-e env] [-y] [--confirm-destructive] [--deploy] [--json] [--plan plan.json]
                                    apply the plan as staged changes (--deploy: also deploy them)
   import dokploy scan|plan|apply|verify [--node srv=node] [--skip proj/name] [--move proj/name=proj]
@@ -242,7 +244,7 @@ const helpText = `aven: command line for aven-server (see docs/cli.md)
   scale [<n>]                      show or change the replica count now (no redeploy)
   scale --auto --max n [--min n] [--cpu %] [--memory %] [--rps n] | --off
                                    horizontal autoscaling
-  flag list [--full]               feature flags (project from KEEL_TOKEN or link; -e env, --scope project:<id>, --json)
+  flag list [--full]               feature flags (project from AVEN_TOKEN or link; -e env, --scope project:<id>, --json)
   flag set <name> <value> [--when expr] [--rule-id id] [--type bool|string|number|json] [--force]
                                    set the default, or add/replace a targeting rule with --when
   flag unset <name> --rule-id id   remove a targeting rule
@@ -318,7 +320,7 @@ const helpText = `aven: command line for aven-server (see docs/cli.md)
   templates export <key>           print a template definition (JSON)
   templates export-env [--secrets generate|inputs] [-e env] > file.json
                                    generate a template definition from the linked environment
-  mcp                              serve the hosted MCP endpoint over stdio (KEEL_TOKEN or the aven login session)
+  mcp                              serve the hosted MCP endpoint over stdio (AVEN_TOKEN or the aven login session)
   mcp install [--agent claude-code|cursor|vscode]...
                                    add the aven MCP server to the MCP client config in this directory
   agent [-p prompt] [--json] [-y]  chat with Aven Agent (interactive without -p; -y approves actions)
@@ -347,10 +349,10 @@ func (c *config) req(method, path string, body io.Reader, ctype string) (*http.R
 	if ctype != "" {
 		r.Header.Set("Content-Type", ctype)
 	}
-	if t := os.Getenv("KEEL_TOKEN"); t != "" {
+	if t := compat.Env("TOKEN"); t != "" {
 		r.Header.Set("Authorization", "Bearer "+t)
 	} else if c.Cookie != "" {
-		r.AddCookie(&http.Cookie{Name: "keel_session", Value: c.Cookie})
+		r.AddCookie(&http.Cookie{Name: "aven_session", Value: c.Cookie})
 	}
 	return http.DefaultClient.Do(r)
 }
@@ -451,18 +453,18 @@ func cmdLogin(c *config, args []string) {
 		die("url must start with http:// or https://")
 	}
 	c.URL = strings.TrimRight(raw, "/")
-	if os.Getenv("KEEL_TOKEN") != "" {
+	if compat.Env("TOKEN") != "" {
 		if err := c.call("GET", "/auth/me", nil, nil); err != nil {
 			die("%v", err)
 		}
 		c.save()
-		fmt.Println("logged in with KEEL_TOKEN")
+		fmt.Println("logged in with " + tokenEnvName())
 		return
 	}
 	if email == "" {
-		email = os.Getenv("KEEL_EMAIL")
+		email = compat.Env("EMAIL")
 	}
-	pw := os.Getenv("KEEL_PASSWORD")
+	pw := compat.Env("PASSWORD")
 	if pw == "" {
 		fmt.Fprint(os.Stderr, "password: ")
 		pw = readSecret()
@@ -490,7 +492,7 @@ func cmdLogin(c *config, args []string) {
 	}
 	resp, msg := post()
 	if resp.StatusCode == 401 && msg == "totp_required" {
-		code := os.Getenv("KEEL_TOTP")
+		code := compat.Env("TOTP")
 		if code == "" {
 			fmt.Fprint(os.Stderr, secondFactorPrompt(methods))
 			code = readSecret()
@@ -501,7 +503,7 @@ func cmdLogin(c *config, args []string) {
 	}
 	if resp.StatusCode != 204 {
 		if resp.StatusCode == 403 && msg == "sso_required" {
-			die("this account must sign in with SAML SSO.\nopen %s/login in a browser, choose SSO, create an API token in Settings, then run: KEEL_TOKEN=<token> aven login %s", c.URL, c.URL)
+			die("this account must sign in with SAML SSO.\nopen %s/login in a browser, choose SSO, create an API token in Settings, then run: AVEN_TOKEN=<token> aven login %s", c.URL, c.URL)
 		}
 		if msg != "" {
 			die("login failed: %s (%s)", resp.Status, msg)
@@ -510,6 +512,9 @@ func cmdLogin(c *config, args []string) {
 	}
 	for _, ck := range resp.Cookies() {
 		if ck.Name == "keel_session" {
+			compat.NoteLegacyResource("session-cookie", "cookie keel_session", "cookie aven_session")
+		}
+		if ck.Name == "aven_session" || ck.Name == "keel_session" {
 			c.Cookie = ck.Value
 		}
 	}

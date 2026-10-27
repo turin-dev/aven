@@ -483,7 +483,7 @@ func validateAction(a Action, where string) error {
 		default:
 			return fmt.Errorf("%s.params.target: must be response or request", where)
 		}
-		if h := http.CanonicalHeaderKey(p.Name); h == "Host" || h == "Content-Length" || h == "Transfer-Encoding" || h == "Connection" || strings.HasPrefix(h, "X-Keel-") {
+		if h := http.CanonicalHeaderKey(p.Name); h == "Host" || h == "Content-Length" || h == "Transfer-Encoding" || h == "Connection" || strings.HasPrefix(h, "X-Keel-") || strings.HasPrefix(h, "X-Aven-") {
 			return fmt.Errorf("%s.params.name: %s cannot be set by a rule", where, h)
 		}
 	case "":

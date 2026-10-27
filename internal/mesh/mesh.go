@@ -21,12 +21,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 const (
 	DefaultPort = 7443
 	// ALPN은 mesh 연결의 TLS ALPN 값이다(다른 TLS 서비스와 섞이지 않게).
-	ALPN = "keel-mesh/1"
+	ALPN       = "aven-mesh/1"
+	LegacyALPN = "keel-mesh/1"
 	// MaxHeaderBytes는 mTLS 뒤 요청 헤더(JSON 한 줄)의 상한이다.
 	MaxHeaderBytes = 1024
 
@@ -89,7 +92,7 @@ type Import struct {
 
 // AllAliases는 forwarder 컨테이너에 붙일 이름이다: 서비스 이름 alias 두 개와 Aliases(중복 제외).
 func (i Import) AllAliases() []string {
-	out := []string{i.Service, PrivateDomain(i.Service, i.EnvName)}
+	out := []string{i.Service, PrivateDomain(i.Service, i.EnvName), compat.PrivateHost(i.Service, i.EnvName)}
 	for _, a := range i.Aliases {
 		if !slices.Contains(out, a) {
 			out = append(out, a)
@@ -98,13 +101,22 @@ func (i Import) AllAliases() []string {
 	return out
 }
 
-// validAlias는 import 별칭이 <label> 또는 <label>.<env>.keel.internal 꼴인지다.
+// validAlias는 import 별칭이 <label>, <label>.<env>.aven.internal, 또는 예전
+// <label>.<env>.keel.internal 꼴인지다.
 func validAlias(a, envName string) bool {
 	if aliasLabelRe.MatchString(a) {
 		return true
 	}
-	label, ok := strings.CutSuffix(a, "."+envName+".keel.internal")
-	return ok && aliasLabelRe.MatchString(label)
+	for _, suffix := range []string{".aven.internal", ".keel.internal"} {
+		label, ok := strings.CutSuffix(a, "."+envName+suffix)
+		if ok && aliasLabelRe.MatchString(label) {
+			if suffix == ".keel.internal" {
+				compat.NoteLegacyDNS()
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // Candidates는 import의 failover 후보 노드다(Nodes, 없으면 Node 하나).
@@ -118,14 +130,26 @@ func (i Import) Candidates() []string {
 func (e Export) key() string { return e.EnvID + "/" + e.Service }
 func (i Import) key() string { return i.EnvID + "/" + i.Service }
 
-// PrivateDomain은 deploy.PrivateDomain과 같다(mesh가 deploy를 import하지 않으려고 따로 둔다).
-func PrivateDomain(service, env string) string { return service + "." + env + ".keel.internal" }
+// PrivateDomain은 deploy.PrivateDomain과 같다(mesh가 deploy를 import하지 않으려고 따로 둔다): 대표 주소는 keel.internal.
+func PrivateDomain(service, env string) string { return compat.LegacyPrivateHost(service, env) }
 
 // EnvNetwork는 deploy.EnvNetwork와 같다.
-func EnvNetwork(envID string) string { return "keel-" + envID }
+func EnvNetwork(envID string) string { return compat.Prefix + "-" + envID }
 
 // ContainerName은 (환경, 서비스) forwarder 컨테이너 이름이다.
 func ContainerName(envID, service string) string {
+	return "aven-mesh-" + strings.ToLower(strings.TrimPrefix(envID, "env_")) + "-" + service
+}
+
+// noteALPN logs once when a peer still negotiates the Keel mesh ALPN.
+func noteALPN(proto string) {
+	if proto == LegacyALPN {
+		compat.NoteLegacyResource("mesh-alpn", "ALPN "+LegacyALPN, "ALPN "+ALPN)
+	}
+}
+
+// LegacyContainerName은 예전 설치의 forwarder 이름이다.
+func LegacyContainerName(envID, service string) string {
 	return "keel-mesh-" + strings.ToLower(strings.TrimPrefix(envID, "env_")) + "-" + service
 }
 

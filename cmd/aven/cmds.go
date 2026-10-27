@@ -636,16 +636,18 @@ func (c *config) resolvedVars(l *link) map[string]string {
 	return out
 }
 
-// runEnv는 base 환경에 서비스 변수와 KEEL_* 연결 정보를 덮는다. 서버가 준 KEEL_* 값이 있으면 그것이 우선이다.
+// runEnv는 base 환경에 서비스 변수와 AVEN_* 연결 정보를 덮는다. KEEL_*도 같이 넣는다. 서버가 준 값이 있으면 그것이 우선이다.
 // fold면 Windows처럼 이름의 대소문자를 구분하지 않는다.
 func runEnv(base []string, vars map[string]string, l *link, fold bool) []string {
 	all := map[string]string{}
-	for k, v := range map[string]string{
-		"KEEL_PROJECT_ID": l.ProjectID, "KEEL_ENVIRONMENT_ID": l.EnvironmentID, "KEEL_SERVICE_ID": l.ServiceID,
-		"KEEL_PROJECT_NAME": l.Project, "KEEL_ENVIRONMENT_NAME": l.Environment, "KEEL_SERVICE_NAME": l.Service,
-	} {
-		if v != "" {
-			all[k] = v
+	for _, prefix := range []string{"AVEN_", "KEEL_"} {
+		for k, v := range map[string]string{
+			prefix + "PROJECT_ID": l.ProjectID, prefix + "ENVIRONMENT_ID": l.EnvironmentID, prefix + "SERVICE_ID": l.ServiceID,
+			prefix + "PROJECT_NAME": l.Project, prefix + "ENVIRONMENT_NAME": l.Environment, prefix + "SERVICE_NAME": l.Service,
+		} {
+			if v != "" {
+				all[k] = v
+			}
 		}
 	}
 	for k, v := range vars {
@@ -731,7 +733,7 @@ func cmdShell(c *config, args []string) {
 	} else if sh == "" {
 		sh = "/bin/sh"
 	}
-	env := append(runEnv(os.Environ(), vars, l, runtime.GOOS == "windows"), "KEEL_SHELL=1")
+	env := append(runEnv(os.Environ(), vars, l, runtime.GOOS == "windows"), "AVEN_SHELL=1", "KEEL_SHELL=1")
 	fmt.Fprintf(os.Stderr, "aven: subshell with %d variables of %s (%s); type exit to leave\n", len(vars), l.Service, l.Environment)
 	os.Exit(runLocal(env, sh))
 }
@@ -778,8 +780,8 @@ func dbClient(kind, raw string) (bin string, args, env []string, err error) {
 			args = append(args, "--user", user)
 		}
 	case "mongo":
-		env = []string{"KEEL_MONGO_URL=" + raw}
-		args = []string{"--nodb", "--shell", "--eval", "db = connect(process.env.KEEL_MONGO_URL)"}
+		env = []string{"AVEN_MONGO_URL=" + raw, "KEEL_MONGO_URL=" + raw}
+		args = []string{"--nodb", "--shell", "--eval", "db = connect(process.env.AVEN_MONGO_URL || process.env.KEEL_MONGO_URL)"}
 	}
 	return d.bin, args, env, nil
 }
@@ -962,14 +964,25 @@ func whoamiLine(me meInfo, base, how string) string {
 	return fmt.Sprintf("%s @ %s (%s)", who, base, how)
 }
 
+// tokenEnvName is the credential variable that is set: AVEN_TOKEN, else KEEL_TOKEN.
+func tokenEnvName() string {
+	if os.Getenv("AVEN_TOKEN") != "" {
+		return "AVEN_TOKEN"
+	}
+	if os.Getenv("KEEL_TOKEN") != "" {
+		return "KEEL_TOKEN"
+	}
+	return ""
+}
+
 func cmdWhoami(c *config, _ []string) {
 	var me meInfo
 	if err := c.call("GET", "/auth/me", nil, &me); err != nil {
 		die("%v", err)
 	}
 	how := "session"
-	if os.Getenv("KEEL_TOKEN") != "" {
-		how = "KEEL_TOKEN"
+	if name := tokenEnvName(); name != "" {
+		how = name
 	}
 	fmt.Println(whoamiLine(me, c.URL, how))
 }
@@ -1130,8 +1143,8 @@ func cmdLogout(c *config, _ []string) {
 		die("%v", err)
 	}
 	fmt.Println("logged out")
-	if os.Getenv("KEEL_TOKEN") != "" {
-		fmt.Fprintln(os.Stderr, "aven: KEEL_TOKEN is still set in the environment and will keep authenticating")
+	if name := tokenEnvName(); name != "" {
+		fmt.Fprintf(os.Stderr, "aven: %s is still set in the environment and will keep authenticating\n", name)
 	}
 }
 

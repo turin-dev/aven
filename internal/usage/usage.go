@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/events"
 	"github.com/turin-dev/aven/internal/store"
 )
@@ -219,14 +220,14 @@ func PricingFromEnv(getenv func(string) string) (*Pricing, error) {
 	for _, f := range []struct {
 		key string
 		dst *float64
-	}{{"KEEL_PRICE_VCPU_HOUR", &p.VCPUHour}, {"KEEL_PRICE_GB_RAM_HOUR", &p.GBRAMHour}, {"KEEL_PRICE_GB_EGRESS", &p.GBEgress}, {"KEEL_PRICE_GB_DISK_MONTH", &p.GBDiskMonth}} {
-		v := getenv(f.key)
+	}{{"PRICE_VCPU_HOUR", &p.VCPUHour}, {"PRICE_GB_RAM_HOUR", &p.GBRAMHour}, {"PRICE_GB_EGRESS", &p.GBEgress}, {"PRICE_GB_DISK_MONTH", &p.GBDiskMonth}} {
+		v := compat.From(getenv, f.key)
 		if v == "" {
 			continue
 		}
 		x, err := strconv.ParseFloat(v, 64)
 		if err != nil || x < 0 {
-			return nil, fmt.Errorf("%s must be a non-negative number", f.key)
+			return nil, fmt.Errorf("%s must be a non-negative number", compat.Describe(f.key))
 		}
 		*f.dst, set = x, true
 	}

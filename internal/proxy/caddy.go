@@ -23,18 +23,29 @@ import (
 	"github.com/turin-dev/aven/internal/edge"
 )
 
-const ContainerName = "keel-proxy"
-
-// wake handler용 unix socket. aven-server와 keel-proxy가 같은 docker volume을 나눠 쓴다
-// (컨테이너 → 호스트 TCP는 호스트 방화벽에 막힐 수 있어서 쓰지 않는다).
 const (
-	WakeVolume = "keel-proxy-wake"
-	WakeDir    = "/run/keel"
-	WakeSocket = WakeDir + "/wake.sock"
+	ContainerName       = "aven-proxy"
+	LegacyContainerName = "keel-proxy"
+)
+
+// wake handler용 unix socket. aven-server와 aven-proxy가 같은 docker volume을 나눠 쓴다
+// (컨테이너 → 호스트 TCP는 호스트 방화벽에 막힐 수 있어서 쓰지 않는다).
+// 예전 설치의 keel-proxy가 이미 떠 있으면 그 컨테이너·볼륨·마운트 경로를 그대로 쓴다.
+const (
+	WakeVolume       = "aven-proxy-wake"
+	LegacyWakeVolume = "keel-proxy-wake"
+	WakeDir          = "/run/aven"
+	LegacyWakeDir    = "/run/keel"
+	WakeSocket       = WakeDir + "/wake.sock"
 	// AdminSocket은 Caddy 관리 API다. 공유 볼륨 안의 unix socket이라 같은 네트워크의 컨테이너(aven 앱, 외부 네트워크)는
 	// 닿지 못하고 호스트의 aven-server/aven-agent(root)만 쓴다. 예전에는 컨테이너 안 0.0.0.0:2019였는데 Host 헤더만 검사했다.
 	AdminSocket = WakeDir + "/caddy-admin.sock"
 	WakeDial    = "unix/" + WakeSocket
+
+	DataVolume         = "aven-caddy-data"
+	LegacyDataVolume   = "keel-caddy-data"
+	ConfigVolume       = "aven-caddy-config"
+	LegacyConfigVolume = "keel-caddy-config"
 )
 
 // 와일드카드 도메인(*.example.com)의 on-demand TLS 허가 확인(ask).
@@ -43,7 +54,7 @@ const (
 // wake handler(aven-server / aven-agent)가 일반 wake 요청과 구분한다. 외부(:80/:443)에서는 닿지 않는다.
 const (
 	TLSAskListen = "127.0.0.1:5380"
-	TLSAskHost   = "keel-tls-ask.invalid"
+	TLSAskHost   = "aven-tls-ask.invalid"
 	TLSAskPath   = "/api/internal/tls-ask"
 )
 
@@ -137,7 +148,8 @@ type Route struct {
 	InstanceID string         `json:",omitempty"`
 	Edge       *edge.Settings `json:",omitempty"`
 
-	// CheckToken이 있으면 이 호스트의 DomainCheckPath 요청에 "keel-domain-check=<token>"으로 답한다(도메인 소유 확인, netcheck).
+	// CheckToken이 있으면 이 호스트의 DomainCheckPath 요청에 "aven-domain-check=<token>"으로 답한다(도메인 소유 확인, netcheck).
+	// 예전 /.well-known/keel/domain-check 도 같은 토큰으로 답한다.
 	// auth, 리다이렉트, 엣지, 경로 규칙보다 먼저 처리한다. omitempty: 옛 agent는 모르는 필드를 거부한다(서버가 빼고 다시 보낸다).
 	CheckToken string `json:",omitempty"`
 	// Unverified면 아직 소유가 확인되지 않은 신규 도메인이다. 자동 TLS 호스트는 미리 인증서를 받지 않고 on-demand 정책에 두며,
@@ -146,16 +158,24 @@ type Route struct {
 }
 
 // DomainCheckPath는 도메인 소유 확인 경로다(netcheck.CheckPath와 같다).
-const DomainCheckPath = "/.well-known/keel/domain-check"
+const DomainCheckPath = "/.well-known/aven/domain-check"
+
+// LegacyDomainCheckPath는 예전 확인 경로다(netcheck.LegacyCheckPath와 같다).
+const LegacyDomainCheckPath = "/.well-known/keel/domain-check"
 
 // DomainCheckBody는 DomainCheckPath의 응답 본문이다(netcheck.CheckBody와 같다).
-func DomainCheckBody(token string) string { return "keel-domain-check=" + token }
+func DomainCheckBody(token string) string { return "aven-domain-check=" + token }
 
-// domainCheckHandler는 DomainCheckPath 요청에만 토큰으로 답하고 나머지는 다음 handler로 넘기는 subroute다.
+// LegacyDomainCheckBody는 예전 확인 본문이다(netcheck.LegacyCheckBody와 같다).
+func LegacyDomainCheckBody(token string) string { return "keel-domain-check=" + token }
+
+// domainCheckHandler는 확인 경로 요청에만 토큰으로 답하고 나머지는 다음 handler로 넘긴다.
+// 본문에 새 값과 예전 값을 함께 넣어, 아직 keel-domain-check= 를 찾는 확인도 통과한다.
 func domainCheckHandler(token string) map[string]any {
 	return map[string]any{"handler": "subroute", "routes": []map[string]any{{
-		"match": []map[string]any{{"path": []string{DomainCheckPath}}},
-		"handle": []map[string]any{{"handler": "static_response", "status_code": 200, "body": DomainCheckBody(token),
+		"match": []map[string]any{{"path": []string{DomainCheckPath, LegacyDomainCheckPath}}},
+		"handle": []map[string]any{{"handler": "static_response", "status_code": 200,
+			"body":    DomainCheckBody(token) + "\n" + LegacyDomainCheckBody(token),
 			"headers": map[string][]string{"Content-Type": {"text/plain; charset=utf-8"}, "Cache-Control": {"no-store"}}}},
 		"terminal": true,
 	}}}
@@ -173,7 +193,7 @@ type BasicAuth struct {
 }
 
 // AccessLogger는 Caddy access log의 logger 이름이다. stdout으로 JSON을 내보내고 aven이 `docker logs`로 따라간다.
-const AccessLogger = "http.log.access.keel"
+const AccessLogger = "http.log.access.aven"
 
 type Caddy struct {
 	cfg  Config
@@ -182,6 +202,10 @@ type Caddy struct {
 	adminMu   sync.Mutex
 	adminPath string // AdminSocket의 호스트 경로(WakeVolume의 mountpoint 아래)
 	client    *http.Client
+
+	nameMu    sync.Mutex
+	haveNames bool
+	lay       runtimeNames
 }
 
 func New(cfg Config) *Caddy {
@@ -198,11 +222,8 @@ func (c *Caddy) adminURL(path string) string {
 	if c.cfg.AdminPort != 0 {
 		return fmt.Sprintf("http://127.0.0.1:%d%s", c.cfg.AdminPort, path)
 	}
-	return "http://keel-proxy-admin" + path
+	return "http://aven-proxy-admin" + path
 }
-
-// adminListen은 Caddy 설정의 admin.listen 값이다(컨테이너 안 경로, 0600).
-func adminListen() string { return "unix/" + AdminSocket + "|0600" }
 
 // adminClient는 관리 API용 HTTP 클라이언트다. socket의 호스트 경로를 처음 쓸 때 찾는다.
 func (c *Caddy) adminClient(ctx context.Context) (*http.Client, error) {
@@ -216,7 +237,7 @@ func (c *Caddy) adminClient(ctx context.Context) (*http.Client, error) {
 		return c.client, nil
 	}
 	if c.adminPath == "" {
-		out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "inspect", "--format", "{{.Mountpoint}}", WakeVolume).Output()
+		out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "inspect", "--format", "{{.Mountpoint}}", c.Resolve(ctx).WakeVolume).Output()
 		if err != nil {
 			return nil, fmt.Errorf("locate caddy admin socket: %w", err)
 		}
@@ -233,49 +254,50 @@ func (c *Caddy) adminClient(ctx context.Context) (*http.Client, error) {
 	return c.client, nil
 }
 
-// EnsureRunning은 keel-proxy 컨테이너가 없으면 띄운다.
+// EnsureRunning은 aven-proxy 컨테이너가 없으면 띄운다. 이미 떠 있는 keel-proxy는 지우지 않는다.
 func (c *Caddy) EnsureRunning(ctx context.Context, network string) error {
-	if _, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "inspect", WakeVolume).CombinedOutput(); err != nil {
-		if out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "create", "--label", "keel.managed=true", WakeVolume).CombinedOutput(); err != nil {
+	n := c.Resolve(ctx)
+	if _, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "inspect", n.WakeVolume).CombinedOutput(); err != nil {
+		if out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "create", "--label", "aven.managed=true", "--label", "keel.managed=true", n.WakeVolume).CombinedOutput(); err != nil {
 			return fmt.Errorf("create wake volume: %v: %s", err, out)
 		}
 	}
-	// wake volume이 없는 예전 proxy는 다시 만든다(인증서는 keel-caddy-data 볼륨에 남는다).
-	if mounts, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{range .Mounts}}{{.Name}} {{end}}", ContainerName).CombinedOutput(); err == nil &&
-		!strings.Contains(string(mounts), WakeVolume) {
-		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", ContainerName).Run()
+	// wake volume이 없는 예전 proxy는 다시 만든다(인증서는 caddy data 볼륨에 남는다).
+	if mounts, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{range .Mounts}}{{.Name}} {{end}}", n.Container).CombinedOutput(); err == nil &&
+		!strings.Contains(string(mounts), n.WakeVolume) {
+		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", n.Container).Run()
 	}
 	// 관리 API를 TCP(2019)로 publish하던 예전 proxy는 다시 만든다. --resume이 autosave의 예전 admin 설정(0.0.0.0:2019)을
 	// 다시 읽지 않도록 autosave도 지운다(라우트는 aven이 곧 다시 넣는다).
-	if ports, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{json .HostConfig.PortBindings}}", ContainerName).CombinedOutput(); err == nil &&
+	if ports, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{json .HostConfig.PortBindings}}", n.Container).CombinedOutput(); err == nil &&
 		strings.Contains(string(ports), `"2019/tcp"`) {
-		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", ContainerName).Run()
-		exec.CommandContext(ctx, c.cfg.DockerBin, "run", "--rm", "--network", "none", "-v", "keel-caddy-config:/config", "--entrypoint", "rm", c.cfg.Image,
+		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", n.Container).Run()
+		exec.CommandContext(ctx, c.cfg.DockerBin, "run", "--rm", "--network", "none", "-v", n.ConfigVolume+":/config", "--entrypoint", "rm", c.cfg.Image,
 			"-f", "/config/caddy/autosave.json").Run()
 	}
 	// tracing exporter 설정(OTEL_*)이 다른 proxy도 다시 만든다. 환경 변수는 컨테이너를 만들 때만 정해진다.
-	if _, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", ContainerName).CombinedOutput(); err == nil && !c.traceEnvMatches(ctx) {
-		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", ContainerName).Run()
+	if _, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", n.Container).CombinedOutput(); err == nil && !c.traceEnvMatches(ctx) {
+		exec.CommandContext(ctx, c.cfg.DockerBin, "rm", "-f", n.Container).Run()
 	}
-	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{.State.Running}}", ContainerName).CombinedOutput()
+	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{.State.Running}}", n.Container).CombinedOutput()
 	if err == nil && strings.TrimSpace(string(out)) == "true" {
 		return c.waitAdmin(ctx)
 	}
 	if err == nil { // 있는데 멈춰 있음
-		if out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "start", ContainerName).CombinedOutput(); err != nil {
+		if out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "start", n.Container).CombinedOutput(); err != nil {
 			return fmt.Errorf("start proxy: %v: %s", err, out)
 		}
 		return c.waitAdmin(ctx)
 	}
 	// admin은 공유 볼륨 안의 unix socket에서만 연다(네트워크로는 닿지 않는다).
-	bootstrap := `{"admin":{"listen":"` + adminListen() + `"}}`
-	args := []string{"run", "-d", "--name", ContainerName, "--network", network, "--restart", "unless-stopped",
-		"--label", "keel.managed=true", "--label", "keel.role=proxy",
+	bootstrap := `{"admin":{"listen":"` + c.adminListenPath() + `"}}`
+	args := []string{"run", "-d", "--name", n.Container, "--network", network, "--restart", "unless-stopped",
+		"--label", "aven.managed=true", "--label", "keel.managed=true", "--label", "aven.role=proxy", "--label", "keel.role=proxy",
 		"--add-host", "host.docker.internal:host-gateway",
 		"-p", c.publish(c.cfg.HTTPPort, "80"),
 		"-p", c.publish(c.cfg.HTTPSPort, "443"),
 		"-p", c.publish(c.cfg.HTTPSPort, "443/udp"),
-		"-v", "keel-caddy-data:/data", "-v", "keel-caddy-config:/config", "-v", WakeVolume + ":" + WakeDir,
+		"-v", n.DataVolume + ":/data", "-v", n.ConfigVolume + ":/config", "-v", n.WakeVolume + ":" + n.WakeDir,
 		"-e", "CADDY_BOOTSTRAP",
 		"-e", "OTEL_EXPORTER_OTLP_ENDPOINT", "-e", "OTEL_EXPORTER_OTLP_PROTOCOL", "-e", "OTEL_EXPORTER_OTLP_HEADERS",
 		"--user", "0:0", "--entrypoint", "sh", c.cfg.Image,
@@ -366,6 +388,7 @@ type hostCfg struct {
 	viaEdge    bool   // origin 서버 라우트(엣지 엔진이 보낸 요청)
 	checkToken string // Route.CheckToken
 	unverified bool   // Route.Unverified
+	wakeDir    string // 비면 WakeDir. 예전 proxy는 /run/keel
 }
 
 // normPath는 경로 규칙을 정규화한다. "", "/", "/*"는 catch-all("")이다.
@@ -446,7 +469,7 @@ func reverseProxy(upstreams []string) map[string]any {
 	return rp
 }
 
-const origProtoHeader = "X-Keel-Orig-Proto"
+const origProtoHeader = "X-Aven-Orig-Proto"
 
 func (h *hostCfg) handlers() []map[string]any {
 	var out []map[string]any
@@ -549,7 +572,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 		for _, host := range r.Hosts {
 			h := byHost[host]
 			if h == nil {
-				h = &hostCfg{host: host}
+				h = &hostCfg{host: host, wakeDir: c.socketDir()}
 				byHost[host] = h
 			}
 			if h.edge == nil && r.Edge != nil && r.Edge.Enabled() {
@@ -664,18 +687,18 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 		"automatic_https": map[string]any{"disable": true}}
 	servers := map[string]any{}
 	if c.cfg.TLS == TLSOff {
-		servers["keel"] = plainServer
+		servers["aven"] = plainServer
 		if nTLS > 0 {
-			servers["keel-tls"] = tlsServer
+			servers["aven-tls"] = tlsServer
 		}
 	} else {
-		servers["keel"] = tlsServer
+		servers["aven"] = tlsServer
 		if nPlain > 0 {
-			servers["keel-http"] = plainServer
+			servers["aven-http"] = plainServer
 		}
 	}
 	if len(originRoutes) > 0 {
-		servers[EdgeOriginServer] = originServer(originRoutes)
+		servers[EdgeOriginServer] = originServer(c.socketDir(), originRoutes)
 	}
 	apps := map[string]any{}
 	var policies []map[string]any
@@ -713,12 +736,12 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 		if len(onDemandHosts) > 0 {
 			// Caddy 2.8+의 http permission 모듈. GET <endpoint>?domain=<이름>이 200이면 발급한다.
 			automation["on_demand"] = map[string]any{"permission": map[string]any{"module": "http", "endpoint": "http://" + TLSAskListen + TLSAskPath}}
-			servers["keel-tls-ask"] = map[string]any{
+			servers["aven-tls-ask"] = map[string]any{
 				"listen":          []string{TLSAskListen},
 				"automatic_https": map[string]any{"disable": true},
 				"routes": []map[string]any{{"handle": []map[string]any{{
 					"handler":   "reverse_proxy",
-					"upstreams": []map[string]any{{"dial": WakeDial}},
+					"upstreams": []map[string]any{{"dial": c.wakeDial()}},
 					"headers":   map[string]any{"request": map[string]any{"set": map[string][]string{"Host": {TLSAskHost}}}},
 				}}}},
 			}
@@ -732,7 +755,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	}
 	apps["http"] = httpApp
 	cfg := map[string]any{
-		"admin": map[string]any{"listen": adminListen()},
+		"admin": map[string]any{"listen": c.adminListenPath()},
 		"logging": map[string]any{"logs": map[string]any{
 			"default": map[string]any{"exclude": []string{AccessLogger}},
 			"access": map[string]any{
@@ -831,7 +854,7 @@ func splitHostPort(h string) (string, string, error) {
 // FollowAccessLogs는 keel-proxy 컨테이너 stdout을 따라가며 access log를 넘긴다. ctx가 끝날 때까지 재시도한다.
 func (c *Caddy) FollowAccessLogs(ctx context.Context, out func(AccessLog)) {
 	for ctx.Err() == nil {
-		cmd := exec.CommandContext(ctx, c.cfg.DockerBin, "logs", "-f", "--since", "1s", ContainerName)
+		cmd := exec.CommandContext(ctx, c.cfg.DockerBin, "logs", "-f", "--since", "1s", c.Resolve(ctx).Container)
 		cmd.WaitDelay = 2 * time.Second
 		so, err := cmd.StdoutPipe()
 		if err == nil && cmd.Start() == nil {
@@ -853,7 +876,8 @@ func (c *Caddy) FollowAccessLogs(ctx context.Context, out func(AccessLog)) {
 
 // Connect는 proxy 컨테이너를 환경 네트워크에 붙인다.
 func (c *Caddy) Connect(ctx context.Context, network string) error {
-	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "network", "connect", network, ContainerName).CombinedOutput()
+	network = c.resolveNetwork(ctx, network)
+	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "network", "connect", network, c.Resolve(ctx).Container).CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "already") {
 		return fmt.Errorf("connect proxy to %s: %v: %s", network, err, out)
 	}

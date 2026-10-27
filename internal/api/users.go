@@ -18,9 +18,10 @@ import (
 // ---- 사용자, 초대, 세션, 2FA, API 토큰, 프로젝트 멤버, 감사 기록 ----
 
 const (
-	inviteTTL      = 7 * 24 * time.Hour
-	apiTokenPrefix = "keel_"
-	maxTokens      = 100
+	inviteTTL            = 7 * 24 * time.Hour
+	apiTokenPrefix       = "aven_"
+	legacyAPITokenPrefix = "keel_"
+	maxTokens            = 100
 )
 
 // audit은 작업 공간 수준 기록을 남긴다(실패해도 요청을 막지 않는다).

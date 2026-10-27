@@ -118,29 +118,29 @@ func TestWiring(t *testing.T) {
 	w := catalog.Templates["postgres-ha"].Definition.HACompanionRoot().ClusterWiring
 	top := Topology{RootName: "db", Primary: "db-replica-1", Data: []string{"db", "db-replica-1", "db-replica-2"}, Edge: "db-ha"}
 	root := DataVars(w, top, "db", RejoinStandby)
-	want := map[string]string{"KEEL_HA_ROLE": "replica", "KEEL_HA_PRIMARY": "${{db-replica-1.KEEL_PRIVATE_DOMAIN}}",
-		"KEEL_HA_REJOIN": "standby", "KEEL_HA_NODE_NAME": "db"}
+	want := map[string]string{"AVEN_HA_ROLE": "replica", "AVEN_HA_PRIMARY": "${{db-replica-1.AVEN_PRIVATE_DOMAIN}}",
+		"AVEN_HA_REJOIN": "standby", "AVEN_HA_NODE_NAME": "db"}
 	if !reflect.DeepEqual(root, want) {
 		t.Errorf("root vars %v", root)
 	}
-	if v := DataVars(w, top, "db-replica-1", ""); v["KEEL_HA_ROLE"] != "primary" || v["KEEL_HA_REJOIN"] != RejoinReclone {
+	if v := DataVars(w, top, "db-replica-1", ""); v["AVEN_HA_ROLE"] != "primary" || v["AVEN_HA_REJOIN"] != RejoinReclone {
 		t.Errorf("primary vars %v", v)
 	}
 	// postgres edge는 주 노드만 본다
-	if e := EdgeVars(w, top); e["KEEL_HA_NODES"] != "${{db-replica-1.KEEL_PRIVATE_DOMAIN}}:5432" {
+	if e := EdgeVars(w, top); e["AVEN_HA_NODES"] != "${{db-replica-1.AVEN_PRIVATE_DOMAIN}}:5432" {
 		t.Errorf("edge %v", e)
 	}
 	rw := catalog.Templates["redis-ha"].Definition.HACompanionRoot().ClusterWiring
 	rtop := Topology{RootName: "cache", Primary: "cache", Data: []string{"cache", "cache-replica-1", "cache-replica-2"}, Edge: "cache-ha"}
 	rv := DataVars(rw, rtop, "cache-replica-2", "")
-	if rv["KEEL_HA_QUORUM"] != "2" || rv["KEEL_HA_PEERS"] != "${{cache.KEEL_PRIVATE_DOMAIN}},${{cache-replica-1.KEEL_PRIVATE_DOMAIN}},${{cache-replica-2.KEEL_PRIVATE_DOMAIN}}" ||
-		rv["KEEL_HA_PRIMARY"] != "${{cache.KEEL_PRIVATE_DOMAIN}}" {
+	if rv["AVEN_HA_QUORUM"] != "2" || rv["AVEN_HA_PEERS"] != "${{cache.AVEN_PRIVATE_DOMAIN}},${{cache-replica-1.AVEN_PRIVATE_DOMAIN}},${{cache-replica-2.AVEN_PRIVATE_DOMAIN}}" ||
+		rv["AVEN_HA_PRIMARY"] != "${{cache.AVEN_PRIVATE_DOMAIN}}" {
 		t.Errorf("redis vars %v", rv)
 	}
-	if _, ok := rv["KEEL_HA_ROLE"]; ok {
+	if _, ok := rv["AVEN_HA_ROLE"]; ok {
 		t.Error("redis has no role variable")
 	}
-	if e := EdgeVars(rw, rtop); strings.Count(e["KEEL_HA_NODES"], ":6379") != 3 {
+	if e := EdgeVars(rw, rtop); strings.Count(e["AVEN_HA_NODES"], ":6379") != 3 {
 		t.Errorf("redis edge %v", e)
 	}
 	// 조정 노드(internal) 배선
@@ -148,10 +148,10 @@ func TestWiring(t *testing.T) {
 		InternalNodeFormat: "{name}=http://{host}:2380", CoordinatorHostsVariable: "ETCD_HOSTS", CoordinatorPort: 2379}
 	itop := Topology{RootName: "pg", Primary: "pg", Data: []string{"pg"}, Internal: []string{"pg-etcd-1", "pg-etcd-2"}}
 	if v := InternalVars(iw, itop, "pg-etcd-2"); v["ETCD_NAME"] != "pg-etcd-2" ||
-		v["ETCD_INITIAL_CLUSTER"] != "pg-etcd-1=http://${{pg-etcd-1.KEEL_PRIVATE_DOMAIN}}:2380,pg-etcd-2=http://${{pg-etcd-2.KEEL_PRIVATE_DOMAIN}}:2380" {
+		v["ETCD_INITIAL_CLUSTER"] != "pg-etcd-1=http://${{pg-etcd-1.AVEN_PRIVATE_DOMAIN}}:2380,pg-etcd-2=http://${{pg-etcd-2.AVEN_PRIVATE_DOMAIN}}:2380" {
 		t.Errorf("internal %v", v)
 	}
-	if v := DataVars(iw, itop, "pg", ""); v["ETCD_HOSTS"] != "${{pg-etcd-1.KEEL_PRIVATE_DOMAIN}}:2379,${{pg-etcd-2.KEEL_PRIVATE_DOMAIN}}:2379" {
+	if v := DataVars(iw, itop, "pg", ""); v["ETCD_HOSTS"] != "${{pg-etcd-1.AVEN_PRIVATE_DOMAIN}}:2379,${{pg-etcd-2.AVEN_PRIVATE_DOMAIN}}:2379" {
 		t.Errorf("coordinator hosts %v", v)
 	}
 	if len(WiringKeys(w)) != 5 {

@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 	"errors"
+	"github.com/turin-dev/aven/internal/compat"
 	"net/http"
-	"os"
 	"strings"
 
 	"github.com/turin-dev/aven/internal/catalog"
@@ -169,10 +169,10 @@ func (s *Server) deleteSelfService(w http.ResponseWriter, r *http.Request) {
 // self 서비스는 컨테이너를 띄우지 않으므로 작업 공간 자원 한도를 두지 않는다. 중간에 실패하면 만든 것을 지운다.
 func (s *Server) ensureSelfProject(ctx context.Context, ownerID, repo, branch string) (svc *store.Service, err error) {
 	if repo == "" {
-		repo = env("KEEL_SELF_REPO", defaultSelfRepo)
+		repo = env("SELF_REPO", defaultSelfRepo)
 	}
 	if branch == "" {
-		branch = env("KEEL_SELF_BRANCH", "main")
+		branch = env("SELF_BRANCH", "main")
 	}
 	ws, err := s.Store.CreateWorkspace(ctx, selfWorkspaceName, ownerID)
 	if err != nil {
@@ -229,7 +229,7 @@ func (s *Server) ensureSelfProject(ctx context.Context, ownerID, repo, branch st
 // EnsureSelfProjectOnFirstRun은 새로 설치한 서버(서비스가 하나도 없음)에 Aven 프로젝트를 한 번 만들어 둔다.
 // 기존 설치는 건너뛰고(어드민 › Owner · 초기 설정에서 추가한다), KEEL_SELF_PROJECT=off면 만들지 않는다.
 func (s *Server) EnsureSelfProjectOnFirstRun(ctx context.Context) error {
-	if s.Deploy == nil || s.Deploy.SelfServiceFromEnv() || strings.EqualFold(os.Getenv("KEEL_SELF_PROJECT"), "off") {
+	if s.Deploy == nil || s.Deploy.SelfServiceFromEnv() || strings.EqualFold(compat.Env("SELF_PROJECT"), "off") {
 		return nil
 	}
 	if _, err := s.Store.GetSetting(ctx, settingSelfProjectOffered); err == nil {
@@ -255,8 +255,8 @@ func (s *Server) EnsureSelfProjectOnFirstRun(ctx context.Context) error {
 	return s.Store.SetSetting(ctx, settingSelfProjectOffered, "1")
 }
 
-func env(key, def string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+func env(suffix, def string) string {
+	if v := strings.TrimSpace(compat.Env(suffix)); v != "" {
 		return v
 	}
 	return def

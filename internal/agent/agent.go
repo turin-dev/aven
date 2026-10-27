@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/mesh"
 	"github.com/turin-dev/aven/internal/netlog"
 	"github.com/turin-dev/aven/internal/node"
@@ -111,20 +112,20 @@ type Handler struct {
 }
 
 var (
-	containerRe  = regexp.MustCompile(`^keel-[a-z0-9][a-z0-9-]{0,120}$`)
-	networkRe    = regexp.MustCompile(`^keel-(env_[a-zA-Z0-9]{4,64}|sbx-[a-z0-9-]{4,64})$`)
-	volumeRe     = regexp.MustCompile(`^keel-vol-[a-zA-Z0-9]{4,64}$`)
+	containerRe  = regexp.MustCompile(`^(?:aven|keel)-[a-z0-9][a-z0-9-]{0,120}$`)
+	networkRe    = regexp.MustCompile(`^(?:aven|keel)-(env_[a-zA-Z0-9]{4,64}|sbx-[a-z0-9-]{4,64})$`)
+	volumeRe     = regexp.MustCompile(`^(?:aven|keel)-vol-[a-zA-Z0-9]{4,64}$`)
 	imageRe      = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:@+-]{0,254}$`)
-	keelImageRe  = regexp.MustCompile(`^keel/[a-z0-9-]{1,80}:[a-z0-9-]{1,80}$`)
-	keelRepoRe   = regexp.MustCompile(`^keel/[a-z0-9-]{1,80}$`)
-	labelKeyRe   = regexp.MustCompile(`^keel\.[a-z0-9._-]{1,40}$`)
+	keelImageRe  = regexp.MustCompile(`^(?:aven|keel)/[a-z0-9-]{1,80}:[a-z0-9-]{1,80}$`)
+	keelRepoRe   = regexp.MustCompile(`^(?:aven|keel)/[a-z0-9-]{1,80}$`)
+	labelKeyRe   = regexp.MustCompile(`^(?:aven|keel)\.[a-z0-9._-]{1,40}$`)
 	labelValRe   = regexp.MustCompile(`^[a-zA-Z0-9_.:/@+=-]{0,200}$`)
 	hostLabelRe  = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]{0,251}[a-zA-Z0-9])?$`)
 	envKeyRe     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]{0,255}$`)
 	restartRe    = regexp.MustCompile(`^(|no|always|unless-stopped|on-failure(:[0-9]{1,4})?)$`)
 	mountPathRe  = regexp.MustCompile(`^/[a-zA-Z0-9._/@+-]{0,250}$`)
 	workspaceRe  = regexp.MustCompile(`^[a-f0-9]{24}$`)
-	upstreamRe   = regexp.MustCompile(`^keel-[a-z0-9][a-z0-9-]{0,120}:[0-9]{1,5}$`)
+	upstreamRe   = regexp.MustCompile(`^(?:aven|keel)-[a-z0-9][a-z0-9-]{0,120}:[0-9]{1,5}$`)
 	cpusRe       = regexp.MustCompile(`^[0-9]{1,3}(\.[0-9]{1,3})?$`)
 	routePathRe  = regexp.MustCompile(`^/[A-Za-z0-9/._~*%:@!$&'()+,;=-]{0,255}$`)
 	redirectToRe = regexp.MustCompile(`^(https?://)?[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9/._~%:@!$&'()+,;=?#-]*)?$`)
@@ -137,7 +138,7 @@ var (
 // 샌드박스: 전용 네트워크(keel-sbx-<id>)와 fork/checkpoint 이미지(keel/sandbox:*).
 var (
 	sandboxIDRe    = regexp.MustCompile(`^sbx_[a-z2-7]{13}$`)
-	sandboxImageRe = regexp.MustCompile(`^keel/sandbox:[a-z0-9-]{4,80}$`)
+	sandboxImageRe = regexp.MustCompile(`^(?:aven|keel)/sandbox:[a-z0-9-]{4,80}$`)
 )
 
 // 컨테이너 run에 허용하는 역할. tcpproxy(포트 publish)와 proxy는 받지 않는다.
@@ -239,6 +240,9 @@ func ValidateRunSpec(s node.RunSpec, roles map[string]bool) error {
 func (h *Handler) managed(ctx context.Context, name string) (exists bool, err error) {
 	if !containerRe.MatchString(name) {
 		return false, fmt.Errorf("container name %q is not allowed", name)
+	}
+	if strings.HasPrefix(name, "keel-") {
+		compat.NoteLegacyResource("container-prefix", "container prefix keel-", "container prefix aven-")
 	}
 	st, err := h.Docker.InspectMany(ctx, []string{name})
 	if err != nil {
@@ -355,8 +359,12 @@ func (h *Handler) Handle(ctx context.Context, op string, payload []byte, stream 
 		if err := checkLabels(r.Labels); err != nil {
 			return nil, err
 		}
-		if id := r.Labels[node.LabelSandbox]; id != "" || strings.HasPrefix(r.Name, "keel-sbx-") {
-			if !sandboxIDRe.MatchString(id) || r.Name != "keel-sbx-"+strings.ReplaceAll(id, "_", "-") || r.Labels[node.LabelProject] == "" || r.Labels[node.LabelEnv] == "" {
+		slug := strings.ReplaceAll(r.Labels[node.LabelSandbox], "_", "-")
+		if id := r.Labels[node.LabelSandbox]; id != "" || strings.HasPrefix(r.Name, "aven-sbx-") || strings.HasPrefix(r.Name, "keel-sbx-") {
+			if strings.HasPrefix(r.Name, "keel-sbx-") {
+				compat.NoteLegacyResource("sandbox-prefix", "sandbox network prefix keel-sbx-", "sandbox network prefix aven-sbx-")
+			}
+			if !sandboxIDRe.MatchString(id) || (r.Name != "aven-sbx-"+slug && r.Name != "keel-sbx-"+slug) || r.Labels[node.LabelProject] == "" || r.Labels[node.LabelEnv] == "" {
 				return nil, errors.New("invalid sandbox network labels")
 			}
 		}
@@ -377,7 +385,7 @@ func (h *Handler) Handle(ctx context.Context, op string, payload []byte, stream 
 		if !networkRe.MatchString(r.Name) {
 			return nil, fmt.Errorf("network %q is not allowed", r.Name)
 		}
-		return nil, h.Docker.RemoveNetwork(ctx, r.Name, proxy.ContainerName)
+		return nil, h.Docker.RemoveNetwork(ctx, r.Name, proxy.ContainerName, proxy.LegacyContainerName)
 
 	case agentprotocol.OpVolumeEnsure, agentprotocol.OpVolumeRemove:
 		var r agentprotocol.VolumeRequest

@@ -30,7 +30,7 @@ func TestEnvFileApplyKeepsCommentsAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
-	want := "# server\nKEEL_DATA=/var/lib/keel\nKEEL_PUBLIC_URL=https://new.example\n\n# mail\nKEEL_GITHUB_TOKEN=x\nKEEL_BASE_DOMAIN=apps.example\nMY_EXTRA=1\n"
+	want := "# server\nKEEL_DATA=/var/lib/keel\n\n# mail\nKEEL_GITHUB_TOKEN=x\nAVEN_BASE_DOMAIN=apps.example\nAVEN_PUBLIC_URL=https://new.example\nMY_EXTRA=1\n"
 	if string(b) != want {
 		t.Fatalf("file:\n%s\nwant:\n%s", b, want)
 	}
@@ -70,19 +70,19 @@ func TestEnvFileEntries(t *testing.T) {
 	for _, e := range f.Entries(func(k string) (string, bool) { v, ok := running[k]; return v, ok }) {
 		got[e.Name] = e
 	}
-	if e := got["KEEL_PUBLIC_URL"]; !e.Set || e.Value != "https://a.example" || e.Pending || e.Group != "general" {
+	if e := got["AVEN_PUBLIC_URL"]; !e.Set || e.Value != "https://a.example" || e.Pending || e.Group != "general" {
 		t.Errorf("public url: %+v", e)
 	}
-	if e := got["KEEL_SMTP_PASSWORD"]; !e.Set || !e.Secret || e.Value != "" || e.Pending {
+	if e := got["AVEN_SMTP_PASSWORD"]; !e.Set || !e.Secret || e.Value != "" || e.Pending {
 		t.Errorf("secret: %+v", e)
 	}
-	if e := got["KEEL_DATA"]; !e.Fixed || e.Pending {
+	if e := got["AVEN_DATA"]; !e.Fixed || e.Pending {
 		t.Errorf("fixed: %+v", e)
 	}
-	if e := got["KEEL_BASE_DOMAIN"]; !e.Pending {
+	if e := got["AVEN_BASE_DOMAIN"]; !e.Pending {
 		t.Errorf("changed value must be pending: %+v", e)
 	}
-	if e := got["KEEL_MESH"]; e.Set || !e.Pending {
+	if e := got["AVEN_MESH"]; e.Set || !e.Pending {
 		t.Errorf("removed from file must be pending: %+v", e)
 	}
 	if e := got["CUSTOM_TOKEN"]; e.Group != "other" || !e.Secret || e.Value != "" {

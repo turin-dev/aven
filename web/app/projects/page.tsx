@@ -16,10 +16,14 @@ import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { ProjectCard, ProjectRow, ProjectSkeleton, LIST_FRAME } from "@/components/projects/ProjectCard";
 import { DashboardSidebar, MobileNav } from "@/components/projects/DashboardSidebar";
 import { t, tr } from "@/lib/i18n";
+import { readStorage, writeStorage } from "@/lib/legacyStorage";
 
-const FAV_KEY = "keel.favorites.v1";
-const VIEW_KEY = "keel.projects.view.v1";
-const SORT_KEY = "keel.projects.sort.v1";
+const FAV_KEY = "aven.favorites.v1";
+const LEGACY_FAV_KEY = "keel.favorites.v1";
+const VIEW_KEY = "aven.projects.view.v1";
+const LEGACY_VIEW_KEY = "keel.projects.view.v1";
+const SORT_KEY = "aven.projects.sort.v1";
+const LEGACY_SORT_KEY = "keel.projects.sort.v1";
 
 const SORTS = [
   { value: "recent", label: t("정렬: 최근 활동") },
@@ -32,7 +36,7 @@ function useFavorites() {
   const [fav, setFav] = useState<string[]>([]);
   useEffect(() => {
     try {
-      setFav(JSON.parse(window.localStorage.getItem(FAV_KEY) ?? "[]"));
+      setFav(JSON.parse(readStorage(FAV_KEY, LEGACY_FAV_KEY) ?? "[]"));
     } catch {
       /* ignore */
     }
@@ -40,35 +44,27 @@ function useFavorites() {
   const toggle = (id: string) =>
     setFav((f) => {
       const n = f.includes(id) ? f.filter((x) => x !== id) : [...f, id];
-      try {
-        window.localStorage.setItem(FAV_KEY, JSON.stringify(n));
-      } catch {
-        /* ignore */
-      }
+      writeStorage(FAV_KEY, JSON.stringify(n));
       return n;
     });
   return { fav, toggle };
 }
 
 /** A string preference persisted in localStorage (read after mount so SSR markup matches). */
-function useStoredPref<T extends string>(key: string, allowed: readonly T[], fallback: T) {
+function useStoredPref<T extends string>(key: string, allowed: readonly T[], fallback: T, legacy?: string) {
   const [value, setValue] = useState<T>(fallback);
   useEffect(() => {
     try {
-      const v = window.localStorage.getItem(key);
+      const v = readStorage(key, legacy);
       if (v && (allowed as readonly string[]).includes(v)) setValue(v as T);
     } catch {
       /* ignore */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, legacy]);
   const set = (v: T) => {
     setValue(v);
-    try {
-      window.localStorage.setItem(key, v);
-    } catch {
-      /* ignore */
-    }
+    writeStorage(key, v);
   };
   return [value, set] as const;
 }
@@ -123,8 +119,8 @@ function ProjectsInner() {
     { keys: "mod+k", label: t("프로젝트 검색에 포커스"), group: t("대시보드"), onTrigger: () => searchRef.current?.focus() },
     { keys: "mod+/", label: t("새 프로젝트 만들기"), group: t("대시보드"), enabled: caps.canCreateProjects, onTrigger: () => setCreating(true) },
   ]);
-  const [sort, setSort] = useStoredPref<Sort>(SORT_KEY, ["recent", "created", "name"], "recent");
-  const [view, setView] = useStoredPref(VIEW_KEY, ["grid", "list"] as const, "grid");
+  const [sort, setSort] = useStoredPref<Sort>(SORT_KEY, ["recent", "created", "name"], "recent", LEGACY_SORT_KEY);
+  const [view, setView] = useStoredPref(VIEW_KEY, ["grid", "list"] as const, "grid", LEGACY_VIEW_KEY);
   const { fav, toggle } = useFavorites();
   const projects = ws.projects;
   const all = useMemo(() => projects.data ?? [], [projects.data]);

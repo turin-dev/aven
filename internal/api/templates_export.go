@@ -219,7 +219,7 @@ func exportRefProblem(svc, key, v string, own, dbDefaults map[string]string, exp
 			if _, ok := dbDefaults[ref]; ok {
 				continue
 			}
-			if strings.HasPrefix(ref, "KEEL_") || ref == "PORT" {
+			if strings.HasPrefix(ref, "AVEN_") || strings.HasPrefix(ref, "KEEL_") || ref == "PORT" {
 				continue
 			}
 			return ref

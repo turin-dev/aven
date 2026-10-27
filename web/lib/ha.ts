@@ -53,7 +53,9 @@ export type HACluster = {
   status: "provisioning" | "active" | "switching";
   auto_failover: boolean;
   /** true when Aven promotes replicas itself (postgres); otherwise the engine elects a primary (Sentinel / replica set). */
-  keel_failover: boolean;
+  aven_failover?: boolean;
+  /** @deprecated same value as aven_failover; still sent for older clients */
+  keel_failover?: boolean;
   busy: boolean;
   message: string;
   companion_template: string;

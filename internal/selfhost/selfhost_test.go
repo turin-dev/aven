@@ -71,7 +71,7 @@ func TestRunArgsDefaults(t *testing.T) {
 	if f := argAfter(args, "--env-file"); len(f) != 1 || f[0] != DefaultEnvFile {
 		t.Errorf("env-file: %v", f)
 	}
-	if v := argAfter(args, "-v"); !has(v, "/var/lib/keel:/var/lib/keel") || !has(v, "/var/lib/docker/volumes:/var/lib/docker/volumes") {
+	if v := argAfter(args, "-v"); !has(v, "/var/lib/aven:/var/lib/aven") || !has(v, "/var/lib/docker/volumes:/var/lib/docker/volumes") {
 		t.Errorf("volumes: %v", v)
 	}
 }

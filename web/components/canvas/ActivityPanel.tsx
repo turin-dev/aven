@@ -25,7 +25,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import type { KeelEvent, Service } from "@/lib/api";
+import type { AvenEvent, Service } from "@/lib/api";
 import { useEvents } from "@/lib/queries";
 import { fmtRelative, fmtTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -72,7 +72,7 @@ export function ActivityPanel({
   pid: string;
   envId: string;
   services: Pick<Service, "id" | "name">[];
-  onOpen: (ev: KeelEvent) => void;
+  onOpen: (ev: AvenEvent) => void;
   onClose?: () => void;
 }) {
   const events = useEvents(pid, envId, 30);

@@ -193,7 +193,7 @@ const en: Record<string, string> = {
   "설정 차이는 없습니다.": "No config differences.",
   "적용하면 partial {partial}이 {claims}의 소유권을 가져옵니다.": "Applying will take ownership of {claims} for partial {partial}.",
   "서비스 또는 변수를 삭제합니다. 서비스 삭제는 모든 환경의 배포와 연결된 볼륨 데이터를 제거합니다.": "Services or variables will be deleted. Deleting a service removes its volume data linked to deployments in all environments.",
-  "변수 값은 보존 표시(preserve)로 내보내고 계획에서도 가려집니다. sealed 변수는 값을 바꿀 수 없습니다. 서비스별 keel.json·railway.toml은 배포할 때 계속 이 설정 위에 적용됩니다.": "Variable values are exported as preserve and hidden in plans. Sealed variables cannot be changed. Per-service keel.json and railway.toml still apply on top of this config at deploy time.",
+  "변수 값은 보존 표시(preserve)로 내보내고 계획에서도 가려집니다. sealed 변수는 값을 바꿀 수 없습니다. 서비스별 aven.json·keel.json·railway.toml은 배포할 때 계속 이 설정 위에 적용됩니다.": "Variable values are exported as preserve and hidden in plans. Sealed variables cannot be changed. Per-service aven.json, keel.json, and railway.toml still apply on top of this config at deploy time.",
   "삭제가 포함된 변경 적용": "Apply changes including deletions",
   "설정 적용": "Apply config",
   "생성 {create}, 변경 {change}, 삭제 {destroy}개를 {env} 환경에 적용합니다.": "Apply {create} create, {change} change and {destroy} delete to the {env} environment.",

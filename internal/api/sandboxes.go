@@ -93,10 +93,10 @@ func (s *Server) sandboxOps() sandboxBackend {
 func sandboxSlug(id string) string { return strings.ReplaceAll(id, "_", "-") }
 
 // sandboxContainerName은 컨테이너와 isolated 네트워크 이름이다(agent가 같은 규칙을 검사한다).
-func sandboxContainerName(id string) string { return "keel-sbx-" + sandboxSlug(id) }
+func sandboxContainerName(id string) string { return "aven-sbx-" + sandboxSlug(id) }
 
 // sandboxSnapshotImage는 fork/checkpoint가 남기는 노드 로컬 이미지 이름이다.
-func sandboxSnapshotImage(id string) string { return "keel/sandbox:" + sandboxSlug(id) }
+func sandboxSnapshotImage(id string) string { return "aven/sandbox:" + sandboxSlug(id) }
 
 func validSandboxPath(p string) bool {
 	return p != "" && len(p) <= 4096 && strings.HasPrefix(p, "/") && !strings.ContainsRune(p, 0)
@@ -590,7 +590,7 @@ type sandboxExecResult struct {
 // sandboxRun은 샌드박스에서 argv를 실행한다. 실행 전후로 활동 시각을 갱신한다(긴 명령 중에 유휴 삭제되지 않게).
 func (s *Server) sandboxRun(ctx context.Context, b *store.Sandbox, argv []string, cwd string, env []string, stdin []byte, maxOut, timeoutS int) (*sandboxExecResult, error) {
 	s.touchSandbox(ctx, b)
-	cmd := append([]string{"sh", "-c", sandboxExecWrapper, "keel-exec", strconv.Itoa(timeoutS), cwd}, argv...)
+	cmd := append([]string{"sh", "-c", sandboxExecWrapper, "aven-exec", strconv.Itoa(timeoutS), cwd}, argv...)
 	started := time.Now()
 	out, err := s.sandboxOps().ExecRun(ctx, b.NodeID, b.ContainerName,
 		node.ExecRunRequest{Cmd: cmd, Env: env, Stdin: stdin, MaxOutput: maxOut}, time.Duration(timeoutS+10)*time.Second)

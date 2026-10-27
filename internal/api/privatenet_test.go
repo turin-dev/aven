@@ -55,7 +55,7 @@ func TestPrivateDNSNameAPI(t *testing.T) {
 	}
 	name, fqdn, aliases := privateDNS(in, f.web, f.prod)
 	if name != "frontend" || fqdn != "frontend."+f.prod.Name+".keel.internal" ||
-		!slices.Equal(aliases, []string{"web", "web." + f.prod.Name + ".keel.internal", "frontend", fqdn}) {
+		!slices.Equal(aliases, []string{"web", "web." + f.prod.Name + ".keel.internal", "web." + f.prod.Name + ".aven.internal", "frontend", "frontend." + f.prod.Name + ".keel.internal", "frontend." + f.prod.Name + ".aven.internal"}) {
 		t.Fatalf("privateDNS: %s %s %v", name, fqdn, aliases)
 	}
 

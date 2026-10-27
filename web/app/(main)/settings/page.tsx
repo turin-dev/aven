@@ -69,6 +69,7 @@ import {
   cx,
 } from "@/components/ui";
 import { t, tr } from "@/lib/i18n";
+import { removeStorage, writeStorage } from "@/lib/legacyStorage";
 
 type SectionId =
   | "general"
@@ -260,11 +261,7 @@ function ProjectWorkspaceGithub({ ws }: { ws: Workspace }) {
                   (async () => {
                     try {
                       await api.moveProject(p.id, next);
-                      try {
-                        window.localStorage.setItem("keel.workspace.v1", next);
-                      } catch {
-                        /* ignore */
-                      }
+                      writeStorage("aven.workspace.v1", next);
                       await qc.invalidateQueries({ queryKey: qk.projects });
                       await qc.invalidateQueries({ queryKey: qk.project(p.id) });
                       toast(t("프로젝트를 옮겼습니다."));
@@ -306,7 +303,7 @@ function ProjectWorkspaceGithub({ ws }: { ws: Workspace }) {
           <div className="text-sm">
             {gh === null ? (
               <span className="text-gray-600">
-                {tr("연결 안 됨 ({code} 사용)", { code: <span className="font-mono">KEEL_GITHUB_TOKEN</span> })}
+                {tr("연결 안 됨 ({code} 사용)", { code: <span className="font-mono">AVEN_GITHUB_TOKEN</span> })}
               </span>
             ) : gh.connected ? (
               <span>
@@ -591,7 +588,7 @@ function PRForm({ ws }: { ws: Workspace }) {
         />
         <PRToggleRow
           label={t("도메인 생성")}
-          hint={tr("base 환경에서 도메인이 있던 서비스에 {domain} 도메인을 붙입니다(KEEL_BASE_DOMAIN 필요).", {
+          hint={tr("base 환경에서 도메인이 있던 서비스에 {domain} 도메인을 붙입니다(AVEN_BASE_DOMAIN 필요).", {
             domain: <span className="font-mono">&lt;{t("서비스")}&gt;-pr-&lt;{t("번호")}&gt;</span>,
           })}
           checked={cfg.domain}
@@ -889,11 +886,11 @@ function Integrations({ ws }: { ws: Workspace }) {
                 </div>
                 {!gh.data.secret_configured && (
                   <p className="text-sm text-warn">
-                    {tr("서버에 {name}이 없으면 서명을 확인할 수 없어 웹훅을 받지 않습니다.", { name: <span className="font-mono">KEEL_GITHUB_WEBHOOK_SECRET</span> })}
+                    {tr("서버에 {name}이 없으면 서명을 확인할 수 없어 웹훅을 받지 않습니다.", { name: <span className="font-mono">AVEN_GITHUB_WEBHOOK_SECRET</span> })}
                   </p>
                 )}
                 {!gh.data.token_configured && (
-                  <p className="text-sm text-gray-500">{t("위의 GitHub 연결(또는 서버의 KEEL_GITHUB_TOKEN)이 있어야 비공개 저장소를 클론할 수 있습니다.")}</p>
+                  <p className="text-sm text-gray-500">{t("위의 GitHub 연결(또는 서버의 AVEN_GITHUB_TOKEN)이 있어야 비공개 저장소를 클론할 수 있습니다.")}</p>
                 )}
                 <p className="text-sm text-gray-500">{t("GitHub를 연결했다면 위의 \"저장소 웹훅 만들기\"로 아래 과정을 대신할 수 있습니다.")}</p>
                 <ol className="list-decimal space-y-1.5 pl-5 text-sm text-gray-600 marker:text-gray-400">
@@ -910,7 +907,7 @@ function Integrations({ ws }: { ws: Workspace }) {
                   <li>
                     {tr("{field}에 서버의 {name} 값을 넣습니다.", {
                       field: <b className="text-foreground">Secret</b>,
-                      name: <span className="font-mono text-foreground">KEEL_GITHUB_WEBHOOK_SECRET</span>,
+                      name: <span className="font-mono text-foreground">AVEN_GITHUB_WEBHOOK_SECRET</span>,
                     })}
                   </li>
                   <li>
@@ -1055,11 +1052,7 @@ function Danger({ ws }: { ws: Workspace }) {
                 setBusy(true);
                 try {
                   await api.deleteProject(p.id);
-                  try {
-                    window.localStorage.removeItem("keel.project.v1");
-                  } catch {
-                    /* ignore */
-                  }
+                  removeStorage("aven.project.v1", "keel.project.v1");
                   await qc.invalidateQueries({ queryKey: qk.projects });
                   router.replace("/");
                 } catch (e) {

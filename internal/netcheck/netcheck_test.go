@@ -73,7 +73,7 @@ func TestClassification(t *testing.T) {
 	var probed []string
 	cl := &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		probed = append(probed, r.URL.Host)
-		if r.URL.Path != CheckPath {
+		if r.URL.Path != CheckPath && r.URL.Path != LegacyCheckPath {
 			t.Errorf("probe path %s", r.URL.Path)
 		}
 		body := "nope"

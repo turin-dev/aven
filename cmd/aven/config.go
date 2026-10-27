@@ -101,7 +101,7 @@ func relPath(p string) string {
 
 func cmdConfigImport(c *config, args []string) {
 	fl := flag.NewFlagSet("config import", flag.ExitOnError)
-	file := fl.String("file", "", "file to write (default: the existing .keel/aven.* or .keel/aven.ts)")
+	file := fl.String("file", "", "file to write (default: the existing .aven/aven.* or .aven/aven.ts; .keel still works)")
 	format := fl.String("format", "", "ts | json | yaml (default: from --file, else ts)")
 	include := fl.Bool("include-variables", false, "inline non-sealed variable values (secrets!) instead of preserve()")
 	force := fl.Bool("force", false, "overwrite an existing file")
@@ -172,7 +172,7 @@ func cmdConfigImport(c *config, args []string) {
 	fmt.Println("next: aven config plan  (a clean import shows no changes)")
 }
 
-// loadDefinition은 --file 또는 가장 가까운 .keel/aven.*를 평가한다.
+// loadDefinition은 --file 또는 가장 가까운 .aven/aven.*를 평가한다(.keel도 찾는다).
 func loadDefinition(file, command string, l *link, p *project) (string, *iac.Definition) {
 	if file == "" {
 		wd, _ := os.Getwd()
@@ -195,7 +195,7 @@ func cmdConfigPlan(c *config, args []string, apply bool) {
 		name = "config apply"
 	}
 	fl := flag.NewFlagSet(name, flag.ExitOnError)
-	file := fl.String("file", "", "configuration file (default: nearest .keel/aven.ts|json|yaml)")
+	file := fl.String("file", "", "configuration file (default: nearest .aven/aven.ts|json|yaml; .keel still works)")
 	env := fl.String("e", "", "environment name or id (default: linked)")
 	fl.StringVar(env, "environment", "", "environment name or id (default: linked)")
 	asJSON := fl.Bool("json", false, "machine-readable output")

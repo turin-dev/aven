@@ -19,6 +19,30 @@ func TestAdminNotOnNetwork(t *testing.T) {
 	}
 }
 
+// An upgraded server that reuses a running keel-proxy must keep the admin
+// socket in /run/keel: that container only mounts the wake volume there, and
+// Caddy rejects a /load whose admin.listen it cannot bind (every later route
+// change would then fail and new deployments would get 502).
+func TestBuildLegacyProxyKeepsSocketDir(t *testing.T) {
+	c := New(Config{TLS: TLSOff})
+	c.lay, c.haveNames = legacyNames(), true
+	m, s := buildCfg(t, c, []Route{{Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:3000"}}})
+	admin, _ := m["admin"].(map[string]any)
+	if got, want := admin["listen"], "unix/"+LegacyWakeDir+"/caddy-admin.sock|0600"; got != want {
+		t.Fatalf("admin.listen = %v, want %v", got, want)
+	}
+	if strings.Contains(s, WakeDir+"/") {
+		t.Fatalf("config for a legacy proxy refers to %s: %s", WakeDir, s)
+	}
+
+	c = New(Config{TLS: TLSOff})
+	m, _ = buildCfg(t, c, nil)
+	admin, _ = m["admin"].(map[string]any)
+	if got, want := admin["listen"], "unix/"+WakeDir+"/caddy-admin.sock|0600"; got != want {
+		t.Fatalf("new proxy admin.listen = %v, want %v", got, want)
+	}
+}
+
 func TestBuildAuto(t *testing.T) {
 	c := New(Config{TLS: TLSAuto, ACMEEmail: "me@example.com"})
 	b, err := c.Build([]Route{{Hosts: []string{"b.example.com"}, Upstreams: []string{"keel-b-1:80"}}, {Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:3000"}}})
@@ -30,7 +54,7 @@ func TestBuildAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(b)
-	for _, want := range []string{`"listen":[":443"]`, `"dial":"keel-a-1:3000"`, `"email":"me@example.com"`, `"admin":{"listen":"unix//run/keel/caddy-admin.sock|0600"}`} {
+	for _, want := range []string{`"listen":[":443"]`, `"dial":"keel-a-1:3000"`, `"email":"me@example.com"`, `"admin":{"listen":"unix//run/aven/caddy-admin.sock|0600"}`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("config missing %s: %s", want, s)
 		}
@@ -82,8 +106,8 @@ func TestBuildReplicasAndAccessLog(t *testing.T) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	srv := cfg.Apps.HTTP.Servers["keel"]
-	if srv.Logs["default_logger_name"] != "keel" {
+	srv := cfg.Apps.HTTP.Servers["aven"]
+	if srv.Logs["default_logger_name"] != "aven" {
 		t.Errorf("access logs not enabled: %v", srv.Logs)
 	}
 	acc := cfg.Logging.Logs["access"]
@@ -112,7 +136,7 @@ func TestBuildReplicasAndAccessLog(t *testing.T) {
 }
 
 func TestParseAccessLog(t *testing.T) {
-	line := `2026-10-16T12:00:00.000000000Z {"level":"info","ts":1760616000.5,"logger":"http.log.access.keel","msg":"handled request","request":{"remote_ip":"::1","client_ip":"2a01::5","proto":"HTTP/1.1","method":"GET","host":"App.Example.com:8080","uri":"/x?y=1","headers":{"User-Agent":["curl/8"]}},"duration":0.0125,"size":42,"status":200}`
+	line := `2026-10-16T12:00:00.000000000Z {"level":"info","ts":1760616000.5,"logger":"http.log.access.aven","msg":"handled request","request":{"remote_ip":"::1","client_ip":"2a01::5","proto":"HTTP/1.1","method":"GET","host":"App.Example.com:8080","uri":"/x?y=1","headers":{"User-Agent":["curl/8"]}},"duration":0.0125,"size":42,"status":200}`
 	l, ok := ParseAccessLog(line)
 	if !ok {
 		t.Fatal("not parsed")
@@ -198,13 +222,13 @@ func TestPerDomainTLSModes(t *testing.T) {
 		{Hosts: []string{"int.example.com"}, Upstreams: []string{"keel-c-1:1"}, TLS: TLSInternal},
 	})
 	sv := servers(m)
-	if len(sv) != 2 || sv["keel"]["listen"].([]any)[0] != ":443" || sv["keel-http"]["listen"].([]any)[0] != ":80" {
+	if len(sv) != 2 || sv["aven"]["listen"].([]any)[0] != ":443" || sv["aven-http"]["listen"].([]any)[0] != ":80" {
 		t.Fatalf("servers: %s", s)
 	}
-	if !strings.Contains(string(mustJSON(sv["keel-http"])), "tunnel.example.com") || strings.Contains(string(mustJSON(sv["keel-http"])), "a.example.com") {
+	if !strings.Contains(string(mustJSON(sv["aven-http"])), "tunnel.example.com") || strings.Contains(string(mustJSON(sv["aven-http"])), "a.example.com") {
 		t.Errorf("off host must be only in http server: %s", s)
 	}
-	if sv["keel-http"]["automatic_https"].(map[string]any)["disable"] != true {
+	if sv["aven-http"]["automatic_https"].(map[string]any)["disable"] != true {
 		t.Error("http server must not auto-redirect")
 	}
 	if !strings.Contains(s, `"module":"internal"`) || !strings.Contains(s, `"module":"acme"`) {
@@ -217,7 +241,7 @@ func TestPerDomainTLSModes(t *testing.T) {
 		{Hosts: []string{"s.example.com"}, Upstreams: []string{"keel-b-1:1"}, TLS: TLSAuto},
 	})
 	sv = servers(m)
-	if sv["keel"]["listen"].([]any)[0] != ":80" || sv["keel-tls"]["listen"].([]any)[0] != ":443" {
+	if sv["aven"]["listen"].([]any)[0] != ":80" || sv["aven-tls"]["listen"].([]any)[0] != ":443" {
 		t.Errorf("servers: %v", sv)
 	}
 }
@@ -235,7 +259,7 @@ func TestUnmatchedHost404CatchAll(t *testing.T) {
 	// 전역 off, 라우트 없음: :80 서버에 404만
 	m, _ := buildCfg(t, New(Config{TLS: TLSOff}), nil)
 	sv := servers(m)
-	if len(sv) != 1 || !lastIs404(sv["keel"]) {
+	if len(sv) != 1 || !lastIs404(sv["aven"]) {
 		t.Fatalf("off/empty: %v", sv)
 	}
 	// 전역 auto: :443에 404, TLS 호스트가 있으니 :80(off 호스트)에는 붙이지 않는다(http→https 리다이렉트 보존)
@@ -244,12 +268,12 @@ func TestUnmatchedHost404CatchAll(t *testing.T) {
 		{Hosts: []string{"tunnel.example.com"}, Upstreams: []string{"keel-b-1:1"}, TLS: TLSOff},
 	})
 	sv = servers(m)
-	if !lastIs404(sv["keel"]) || lastIs404(sv["keel-http"]) {
+	if !lastIs404(sv["aven"]) || lastIs404(sv["aven-http"]) {
 		t.Errorf("auto: %s", s)
 	}
 	// 전역 auto, 라우트 없음: :80 서버를 새로 만들지 않는다
 	m, _ = buildCfg(t, New(Config{TLS: TLSAuto}), nil)
-	if sv = servers(m); len(sv) != 1 || !lastIs404(sv["keel"]) {
+	if sv = servers(m); len(sv) != 1 || !lastIs404(sv["aven"]) {
 		t.Errorf("auto/empty: %v", sv)
 	}
 }
@@ -263,7 +287,7 @@ func TestRedirectAndAuthAndTrust(t *testing.T) {
 		{Hosts: []string{"t.example.com"}, Upstreams: []string{"keel-a-1:1"}, TLS: TLSOff, TrustProto: true},
 	})
 	for _, want := range []string{`"status_code":308`, `"status_code":307`, `https://example.com{http.request.uri}`, `https://example.com/x{http.request.uri}`,
-		`"http_basic"`, `"algorithm":"bcrypt"`, `"username":"bob"`, `X-Keel-Orig-Proto`} {
+		`"http_basic"`, `"algorithm":"bcrypt"`, `"username":"bob"`, `X-Aven-Orig-Proto`} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s: %s", want, s)
 		}
@@ -325,7 +349,7 @@ func TestBuildWildcardAutoTLS(t *testing.T) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	srv := cfg.Apps.HTTP.Servers["keel"]
+	srv := cfg.Apps.HTTP.Servers["aven"]
 	var hosts []string
 	for _, r := range srv.Routes {
 		if len(r.Match) == 0 {
@@ -355,7 +379,7 @@ func TestBuildWildcardAutoTLS(t *testing.T) {
 	if !od || !acme {
 		t.Errorf("policies: %+v", auto.Policies)
 	}
-	ask, ok := cfg.Apps.HTTP.Servers["keel-tls-ask"]
+	ask, ok := cfg.Apps.HTTP.Servers["aven-tls-ask"]
 	if !ok || ask.Listen[0] != TLSAskListen || !strings.Contains(string(b), `"Host":["`+TLSAskHost+`"]`) || !strings.Contains(string(b), `"dial":"`+WakeDial+`"`) {
 		t.Errorf("ask server: %+v", ask)
 	}
@@ -413,14 +437,14 @@ func TestBuildWildcardInternalAndOff(t *testing.T) {
 	if cfg.Apps.TLS.Automation.OnDemand != nil {
 		t.Error("no auto-TLS wildcard: on_demand must not be set")
 	}
-	if _, ok := cfg.Apps.HTTP.Servers["keel-tls-ask"]; ok {
+	if _, ok := cfg.Apps.HTTP.Servers["aven-tls-ask"]; ok {
 		t.Error("ask server without on-demand hosts")
 	}
 	pol := cfg.Apps.TLS.Automation.Policies
 	if len(pol) != 1 || pol[0].Subjects[0] != "*.int.example.com" || pol[0].Issuers[0]["module"] != "internal" {
 		t.Errorf("internal policy: %+v", pol)
 	}
-	plain := cfg.Apps.HTTP.Servers["keel-http"]
+	plain := cfg.Apps.HTTP.Servers["aven-http"]
 	if len(plain.Routes) != 1 || plain.Routes[0].Match[0]["host"][0] != "*.plain.example.com" {
 		t.Errorf("plain wildcard route: %+v", plain)
 	}
@@ -479,13 +503,13 @@ func TestRouteJSONOmitsUnusedNewFields(t *testing.T) {
 }
 
 func TestSetHeadersOverwriteOnUpstreamRequest(t *testing.T) {
-	b, err := New(Config{TLS: TLSOff}).Build([]Route{{Hosts: []string{"aven.example.com"}, Upstreams: []string{"unix//run/keel/keel-server.sock"},
+	b, err := New(Config{TLS: TLSOff}).Build([]Route{{Hosts: []string{"aven.example.com"}, Upstreams: []string{"unix//run/aven/keel-server.sock"},
 		SetHeaders: map[string]string{"X-Keel-Gateway": "s3cret"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
-	if !strings.Contains(s, `"set":{"X-Keel-Gateway":["s3cret"]}`) || !strings.Contains(s, `"dial":"unix//run/keel/keel-server.sock"`) {
+	if !strings.Contains(s, `"set":{"X-Keel-Gateway":["s3cret"]}`) || !strings.Contains(s, `"dial":"unix//run/aven/keel-server.sock"`) {
 		t.Fatalf("header must be set (overwriting any client value) on the upstream request: %s", s)
 	}
 }
@@ -507,7 +531,7 @@ func TestMetricsRouteOnPrivateHost(t *testing.T) {
 	if cfg.Apps.HTTP.Metrics["per_host"] != true {
 		t.Fatalf("per-host metrics: %s", b)
 	}
-	plain, ok := cfg.Apps.HTTP.Servers["keel-http"]
+	plain, ok := cfg.Apps.HTTP.Servers["aven-http"]
 	if !ok {
 		t.Fatalf("a :80 server must exist for /metrics: %s", b)
 	}
@@ -530,7 +554,7 @@ func TestMetricsRouteOnPrivateHost(t *testing.T) {
 // WebSocket 하나로 이미지를 받으므로, 끊기면 그 순간 원격 노드로 가던 배포가 "remote node is offline"으로 실패했다.
 func TestReverseProxyKeepsStreamsAcrossReload(t *testing.T) {
 	for _, r := range []Route{
-		{Hosts: []string{"aven.example.com"}, Upstreams: []string{"unix//run/keel/keel-server.sock"}},
+		{Hosts: []string{"aven.example.com"}, Upstreams: []string{"unix//run/aven/keel-server.sock"}},
 		{Hosts: []string{"lb.example.com"}, Upstreams: []string{"keel-web-1:8080", "keel-web-2:8080"}},
 	} {
 		b, err := New(Config{TLS: TLSOff}).Build([]Route{r})
@@ -582,8 +606,8 @@ func isCheckRoute(h any, token string) bool {
 	r := rs[0].(map[string]any)
 	match, _ := json.Marshal(r["match"])
 	handle := r["handle"].([]any)[0].(map[string]any)
-	return string(match) == `[{"path":["`+DomainCheckPath+`"]}]` && handle["handler"] == "static_response" &&
-		handle["body"] == DomainCheckBody(token) && handle["status_code"] == float64(200) && r["terminal"] == true
+	return string(match) == `[{"path":["`+DomainCheckPath+`","`+LegacyDomainCheckPath+`"]}]` && handle["handler"] == "static_response" &&
+		handle["body"] == DomainCheckBody(token)+"\n"+LegacyDomainCheckBody(token) && handle["status_code"] == float64(200) && r["terminal"] == true
 }
 
 func TestDomainCheckRouteComesFirst(t *testing.T) {
@@ -607,7 +631,7 @@ func TestDomainCheckRouteComesFirst(t *testing.T) {
 		"edge.example.com":  "reverse_proxy",   // 엣지 엔진으로 보내기 전에
 	}
 	for host, want := range next {
-		hs := hostHandlers(t, m, "keel", host)
+		hs := hostHandlers(t, m, "aven", host)
 		if len(hs) < 2 || !isCheckRoute(hs[0], tok) {
 			t.Fatalf("%s: check route is not first: %v", host, hs)
 		}
@@ -616,7 +640,7 @@ func TestDomainCheckRouteComesFirst(t *testing.T) {
 		}
 	}
 	// 엣지: :443에서 엣지 엔진(unix edge socket)으로 넘기기 전에 답하고, origin 서버에는 넣지 않는다.
-	eh := hostHandlers(t, m, "keel", "edge.example.com")
+	eh := hostHandlers(t, m, "aven", "edge.example.com")
 	if b, _ := json.Marshal(eh[1]); !strings.Contains(string(b), EdgeSocket) {
 		t.Errorf("edge host should forward to the edge engine after the check: %s", b)
 	}
@@ -624,22 +648,22 @@ func TestDomainCheckRouteComesFirst(t *testing.T) {
 		t.Error("origin server must not carry the check route")
 	}
 	// PathsOnly: 확인 경로는 404 대신 토큰으로 답한다(확인 경로가 경로 규칙 subroute보다 앞).
-	if b, _ := json.Marshal(hostHandlers(t, m, "keel", "paths.example.com")[1]); !strings.Contains(string(b), `"status_code":404`) {
+	if b, _ := json.Marshal(hostHandlers(t, m, "aven", "paths.example.com")[1]); !strings.Contains(string(b), `"status_code":404`) {
 		t.Errorf("PathsOnly 404 missing: %s", b)
 	}
 	// 평문(tls=off, 터널) 서버에서도 맨 앞, X-Forwarded-Proto 보관 handler보다 먼저.
-	ph := hostHandlers(t, m, "keel-http", "plain.example.com")
+	ph := hostHandlers(t, m, "aven-http", "plain.example.com")
 	if !isCheckRoute(ph[0], tok) || ph[1].(map[string]any)["handler"] != "headers" {
 		t.Fatalf("plain server: %v", ph)
 	}
 	// 토큰이 없는 호스트는 예전 그대로
-	if nh := hostHandlers(t, m, "keel", "notoken.example.com"); len(nh) != 1 || nh[0].(map[string]any)["handler"] != "reverse_proxy" {
+	if nh := hostHandlers(t, m, "aven", "notoken.example.com"); len(nh) != 1 || nh[0].(map[string]any)["handler"] != "reverse_proxy" {
 		t.Fatalf("no token: %v", nh)
 	}
 
 	// 전역 TLS가 off인 노드(평문 서버가 "aven")
 	m, _ = buildCfg(t, New(Config{TLS: TLSOff}), []Route{{Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:80"}, Auth: &BasicAuth{User: "u", Hash: hash}, CheckToken: tok}})
-	if hs := hostHandlers(t, m, "keel", "a.example.com"); !isCheckRoute(hs[0], tok) || hs[1].(map[string]any)["handler"] != "authentication" {
+	if hs := hostHandlers(t, m, "aven", "a.example.com"); !isCheckRoute(hs[0], tok) || hs[1].(map[string]any)["handler"] != "authentication" {
 		t.Fatalf("tls off node: %v", hs)
 	}
 }
@@ -683,16 +707,16 @@ func TestUnverifiedHostsUseOnDemandPolicy(t *testing.T) {
 	if _, ok := auto["on_demand"]; !ok {
 		t.Error("on_demand permission missing")
 	}
-	if _, ok := servers(m)["keel-tls-ask"]; !ok {
+	if _, ok := servers(m)["aven-tls-ask"]; !ok {
 		t.Error("ask server missing")
 	}
-	skip, _ := json.Marshal(servers(m)["keel"]["automatic_https"])
+	skip, _ := json.Marshal(servers(m)["aven"]["automatic_https"])
 	if !strings.Contains(string(skip), "new.example.com") || strings.Contains(string(skip), "legacy.example.com") {
 		t.Errorf("skip_certificates: %s", skip)
 	}
 	// 보류 호스트가 없으면 예전 설정과 같다(ask 서버 없음).
 	m, _ = buildCfg(t, New(Config{TLS: TLSAuto}), routes[:1])
-	if _, ok := servers(m)["keel-tls-ask"]; ok {
+	if _, ok := servers(m)["aven-tls-ask"]; ok {
 		t.Error("ask server without on-demand hosts")
 	}
 }

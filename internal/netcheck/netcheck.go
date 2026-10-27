@@ -1,10 +1,11 @@
 // Package netcheck는 공개 도메인의 DNS·소유 확인·인증서 상태를 백그라운드로 확인해 domain_states에 기록한다.
 //
 // 확인 한 번:
-//  1. A, AAAA, CNAME을 조회한다(와일드카드 *.x는 keel-dns-check.x로 조회).
+//  1. A, AAAA, CNAME을 조회한다(와일드카드 *.x는 aven-dns-check.x로 조회하고, 없으면 예전 keel-dns-check.x).
 //  2. direct(노드 주소나 ingress 호스트를 가리킴), cloudflare(CF 엣지 대역), tunnel(터널 노드이거나 cfargotunnel CNAME), none으로 나눈다.
-//  3. cloudflare/tunnel이면 https://<host>/.well-known/keel/domain-check 응답에서 keel-domain-check=<token>을 찾는다.
-//  4. _keel-verify.<host> TXT에서 keel-verify=<token>을 찾는다.
+//  3. cloudflare/tunnel이면 https://<host>/.well-known/aven/domain-check 응답에서 aven-domain-check=<token>을 찾는다.
+//     예전 경로 /.well-known/keel/domain-check 와 keel-domain-check= 도 받는다.
+//  4. _aven-verify.<host> TXT에서 aven-verify=<token>을 찾는다. 예전 _keel-verify / keel-verify= 도 받는다.
 //
 // 상태: direct → active, cloudflare/tunnel → proxied, none → pending_dns, 조회 실패 → error.
 // 검증(verified_at)은 direct, HTTP 응답, TXT 중 하나가 맞으면 처음 한 번 기록한다(legacy 호스트는 이미 검증됨).
@@ -25,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -36,8 +38,11 @@ const (
 	ProxyNone       = "none"
 )
 
-// CheckPath는 프록시가 확인 토큰을 돌려주는 경로다(P3에서 keel-proxy가 응답한다).
-const CheckPath = "/.well-known/keel/domain-check"
+// CheckPath는 프록시가 확인 토큰을 돌려주는 경로다.
+const CheckPath = "/.well-known/aven/domain-check"
+
+// LegacyCheckPath는 예전 설치가 응답하던 경로다.
+const LegacyCheckPath = "/.well-known/keel/domain-check"
 
 // Resolver는 DNS 조회다(*net.Resolver가 만족한다). 테스트에서 바꿔 끼운다.
 type Resolver interface {
@@ -145,19 +150,36 @@ func (c *Checker) token(host string) string {
 // ProbeHost는 DNS 확인에 쓸 이름이다. 와일드카드는 * 레코드가 답하는 임의의 하위 이름으로 확인한다.
 func ProbeHost(host string) string {
 	if rest, ok := strings.CutPrefix(host, "*."); ok {
+		return "aven-dns-check." + rest
+	}
+	return host
+}
+
+// LegacyProbeHost는 예전 와일드카드 확인 이름이다.
+func LegacyProbeHost(host string) string {
+	if rest, ok := strings.CutPrefix(host, "*."); ok {
 		return "keel-dns-check." + rest
 	}
 	return host
 }
 
 // TXTName은 소유 확인 TXT 레코드 이름이다(와일드카드는 *.를 뗀 이름).
-func TXTName(host string) string { return "_keel-verify." + strings.TrimPrefix(host, "*.") }
+func TXTName(host string) string { return "_aven-verify." + strings.TrimPrefix(host, "*.") }
+
+// LegacyTXTName은 예전 설치에 이미 올려 둔 TXT 이름이다.
+func LegacyTXTName(host string) string { return "_keel-verify." + strings.TrimPrefix(host, "*.") }
 
 // TXTValue는 TXT 레코드 값이다.
-func TXTValue(token string) string { return "keel-verify=" + token }
+func TXTValue(token string) string { return "aven-verify=" + token }
 
-// CheckBody는 /.well-known/keel/domain-check 응답 본문이다.
-func CheckBody(token string) string { return "keel-domain-check=" + token }
+// LegacyTXTValue는 예전 TXT 값이다.
+func LegacyTXTValue(token string) string { return "keel-verify=" + token }
+
+// CheckBody는 /.well-known/aven/domain-check 응답 본문이다.
+func CheckBody(token string) string { return "aven-domain-check=" + token }
+
+// LegacyCheckBody는 예전 확인 본문이다.
+func LegacyCheckBody(token string) string { return "keel-domain-check=" + token }
 
 func normName(s string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), ".")) }
 
@@ -182,6 +204,24 @@ func (c *Checker) Check(ctx context.Context, t Target) Result {
 	lctx, cancel = context.WithTimeout(ctx, 5*time.Second)
 	addrs, err := r.LookupIPAddr(lctx, probe)
 	cancel()
+	if err != nil && isNotFound(err) && len(addrs) == 0 {
+		if legacy := LegacyProbeHost(host); legacy != probe {
+			lctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+			alt, altErr := r.LookupIPAddr(lctx, legacy)
+			cancel()
+			if altErr == nil || !isNotFound(altErr) || len(alt) > 0 {
+				compat.NoteLegacyResource("dns-probe", legacy, probe)
+				probe, addrs, err = legacy, alt, altErr
+				lctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+				lc, _ := r.LookupCNAME(lctx, legacy)
+				cancel()
+				if lc = normName(lc); lc != "" && lc != legacy {
+					cname = lc
+					res.Observed = append([]store.ObservedRR{{Type: "CNAME", Value: lc}}, res.Observed...)
+				}
+			}
+		}
+	}
 	var ips []netip.Addr
 	for _, a := range addrs {
 		ip, ok := netip.AddrFromSlice(a.IP)
@@ -250,10 +290,26 @@ func (c *Checker) Check(ctx context.Context, t Target) Result {
 		lctx, cancel = context.WithTimeout(ctx, 5*time.Second)
 		txts, _ := r.LookupTXT(lctx, TXTName(host))
 		cancel()
+		matched := false
 		for _, v := range txts {
 			res.Observed = append(res.Observed, store.ObservedRR{Type: "TXT", Value: v})
-			if res.VerifyMethod == "" && strings.TrimSpace(v) == TXTValue(tok) {
-				res.VerifyMethod = store.VerifyTXT
+			if strings.TrimSpace(v) == TXTValue(tok) {
+				matched = true
+				if res.VerifyMethod == "" {
+					res.VerifyMethod = store.VerifyTXT
+				}
+			}
+		}
+		if !matched {
+			lctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+			old, _ := r.LookupTXT(lctx, LegacyTXTName(host))
+			cancel()
+			for _, v := range old {
+				res.Observed = append(res.Observed, store.ObservedRR{Type: "TXT", Value: v})
+				if res.VerifyMethod == "" && strings.TrimSpace(v) == LegacyTXTValue(tok) {
+					res.VerifyMethod = store.VerifyTXT
+					compat.NoteLegacyResource("domain-txt", LegacyTXTName(host)+" "+LegacyTXTValue(tok), TXTName(host)+" "+TXTValue(tok))
+				}
 			}
 		}
 	}
@@ -268,29 +324,57 @@ func isNotFound(err error) bool {
 	return errors.As(err, &de) && de.IsNotFound
 }
 
-// probe는 https://<host>/.well-known/keel/domain-check 응답에 토큰이 있는지 본다.
+// probe는 https://<host>/.well-known/aven/domain-check 응답에 토큰이 있는지 본다.
+// 새 본문이 없으면 예전 keel-domain-check= 과 /.well-known/keel/domain-check 도 받는다.
 func (c *Checker) probe(ctx context.Context, host, tok string) (bool, error) {
+	ok, legacy, err := c.probePath(ctx, host, CheckPath, tok)
+	if ok {
+		return true, nil
+	}
+	if legacy {
+		compat.NoteLegacyResource("domain-check", LegacyCheckPath, CheckPath)
+		return true, nil
+	}
+	ok, legacy, err2 := c.probePath(ctx, host, LegacyCheckPath, tok)
+	if ok || legacy {
+		compat.NoteLegacyResource("domain-check", LegacyCheckPath, CheckPath)
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, err2
+}
+
+func (c *Checker) probePath(ctx context.Context, host, path, tok string) (ok, legacy bool, err error) {
 	cl := c.HTTP
 	if cl == nil {
 		cl = c.defaultClient()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+host+CheckPath, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://"+host+path, nil)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	req.Header.Set("User-Agent", "keel-netcheck")
+	req.Header.Set("User-Agent", "aven-netcheck")
 	resp, err := cl.Do(req)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode != 200 {
-		return false, fmt.Errorf("status %d", resp.StatusCode)
+		return false, false, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	return strings.Contains(string(b), CheckBody(tok)), nil
+	body := string(b)
+	if strings.Contains(body, CheckBody(tok)) {
+		return true, false, nil
+	}
+	if strings.Contains(body, LegacyCheckBody(tok)) {
+		return false, true, nil
+	}
+	return false, false, nil
 }
 
 // defaultClient는 Cloudflare 엣지 주소로만 연결하는 HTTP 클라이언트다(사용자가 정한 호스트로 요청하므로 사설 주소 등으로는

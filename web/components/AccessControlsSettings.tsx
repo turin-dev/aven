@@ -472,7 +472,7 @@ export function GuardrailsSettings() {
             disabled={busy}
             onChange={(v) => void update({ restrict_generated_domains: v })}
           >
-            {t("서버 관리자가 아니면 서비스 도메인(KEEL_BASE_DOMAIN 아래)을 만들 수 없습니다. 켜져 있는 동안 템플릿 서비스와 새 환경에는 누구에게도 도메인이 자동 생성되지 않습니다. 사용자 지정 도메인과 비공개 네트워크는 그대로입니다.")}
+            {t("서버 관리자가 아니면 서비스 도메인(AVEN_BASE_DOMAIN 아래)을 만들 수 없습니다. 켜져 있는 동안 템플릿 서비스와 새 환경에는 누구에게도 도메인이 자동 생성되지 않습니다. 사용자 지정 도메인과 비공개 네트워크는 그대로입니다.")}
           </PolicyRow>
           <PolicyRow title={t("TCP 프록시 제한")} scope={t("Admin 외")} checked={d.restrict_tcp_proxy} disabled={busy} onChange={(v) => void update({ restrict_tcp_proxy: v })}>
             {t("서버 관리자가 아니면 공개 TCP 프록시를 만들 수 없습니다. 켜져 있는 동안 데이터베이스와 새 환경에 TCP 프록시가 자동으로 생기지 않습니다.")}

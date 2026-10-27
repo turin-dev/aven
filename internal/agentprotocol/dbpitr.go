@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/turin-dev/aven/internal/compat"
 )
 
 // 시점 복구(PITR): Postgres WAL / MySQL binlog를 계속 백업 저장소로 보관하고 원하는 시각으로 복원한다.
@@ -34,7 +36,12 @@ const (
 )
 
 // PITRArchiveDir는 postgres 데이터 볼륨 안에서 archive_command가 WAL을 복사해 두는 디렉터리다(볼륨 마운트 기준).
-const PITRArchiveDir = "keel-pitr/wal"
+const (
+	PITRArchiveDir       = "aven-pitr/wal"
+	LegacyPITRArchiveDir = "keel-pitr/wal"
+	pitrMagic            = "AVENPITR"
+	legacyPITRMagic      = "KEELPITR"
+)
 
 // PITRMaxFiles는 helper 한 번이 내보내는 최대 파일 수다(밀린 파일은 다음 주기에 이어서 보낸다).
 const PITRMaxFiles = 64
@@ -59,7 +66,7 @@ func ValidPITRPath(p string) bool {
 // PITRDataDirOK는 PGDATA가 볼륨 마운트의 하위 디렉터리인지 알려준다(archive 디렉터리를 PGDATA 밖, 같은 볼륨에 둔다).
 func PITRDataDirOK(mount, dataDir string) bool {
 	return ValidPITRPath(mount) && ValidPITRPath(dataDir) && strings.HasPrefix(dataDir, mount+"/") &&
-		!strings.HasPrefix(dataDir, mount+"/keel-pitr")
+		!strings.HasPrefix(dataDir, mount+"/keel-pitr") && !strings.HasPrefix(dataDir, mount+"/aven-pitr")
 }
 
 // PITRTimeLayout은 recovery_target_time / mysqlbinlog --stop-datetime에 넘기는 UTC 시각 형식이다.
@@ -93,7 +100,7 @@ exec "$DUMP" -h "$DBHOST" -P "$DBPORT" -u "$DBUSER" --single-transaction --sourc
 }
 
 // pitrFrameEmit은 현재 디렉터리의 파일 하나를 PITR 프레임으로 내보내는 셸 함수(emit <name>)다.
-const pitrFrameEmit = `emit() { printf 'KEELPITR %s %s\n' "$1" "$(wc -c < "$1" | tr -d ' ')"; cat "$1"; }
+const pitrFrameEmit = `emit() { printf 'AVENPITR %s %s\n' "$1" "$(wc -c < "$1" | tr -d ' ')"; cat "$1"; }
 `
 
 // DBPITRWALTool은 postgres archive 디렉터리의 WAL 파일을 프레임으로 내보낸다(데이터 볼륨을 mount에 붙인다).
@@ -103,9 +110,11 @@ func DBPITRWALTool(mount string) (*DBTool, error) {
 	}
 	return &DBTool{Env: map[string]string{"PITR_DIR": mount + "/" + PITRArchiveDir, "PITR_MAX": fmt.Sprint(PITRMaxFiles)}, Ext: "frames",
 		Script: `set -e
-cd "$PITR_DIR" 2>/dev/null || exit 0
-` + pitrFrameEmit + `ls -1 | grep -E '^[0-9A-F]{8}([0-9A-F]{16}(\.partial|\.[0-9A-F]{8}\.backup)?|\.history)$' | sort | head -n "$PITR_MAX" > /tmp/keel-pitr-list || true
-while IFS= read -r f; do emit "$f"; done < /tmp/keel-pitr-list`}, nil
+base="${PITR_DIR%/aven-pitr/wal}"
+base="${base%/keel-pitr/wal}"
+cd "$base/aven-pitr/wal" 2>/dev/null || cd "$base/keel-pitr/wal" 2>/dev/null || exit 0
+` + pitrFrameEmit + `ls -1 | grep -E '^[0-9A-F]{8}([0-9A-F]{16}(\.partial|\.[0-9A-F]{8}\.backup)?|\.history)$' | sort | head -n "$PITR_MAX" > /tmp/aven-pitr-list || true
+while IFS= read -r f; do emit "$f"; done < /tmp/aven-pitr-list`}, nil
 }
 
 // DBPITRBinlogTool은 닫힌 binlog 파일들을 원격 읽기(--raw)로 받아 프레임으로 내보낸다.
@@ -122,9 +131,9 @@ func DBPITRBinlogTool(host string, port int, c DBCreds, files []string) (*DBTool
 		"PITR_FILES": strings.Join(files, " ")}
 	return &DBTool{Env: env, Ext: "frames", Script: `set -e
 BINLOG=$(command -v mysqlbinlog || command -v mariadb-binlog) || { echo "mysqlbinlog not found in image" >&2; exit 127; }
-mkdir -p /tmp/keel-pitr && cd /tmp/keel-pitr
+mkdir -p /tmp/aven-pitr && cd /tmp/aven-pitr
 ` + pitrFrameEmit + `for f in $PITR_FILES; do
-  "$BINLOG" --read-from-remote-server --host="$DBHOST" --port="$DBPORT" --user="$DBUSER" --raw --result-file=/tmp/keel-pitr/ "$f" >&2
+  "$BINLOG" --read-from-remote-server --host="$DBHOST" --port="$DBPORT" --user="$DBUSER" --raw --result-file=/tmp/aven-pitr/ "$f" >&2
   emit "$f"
   rm -f "$f"
 done`}, nil
@@ -155,7 +164,8 @@ func DBPITRRestoreTool(kind, host string, port int, c DBCreds, o PITRRestoreOpts
 		}
 		return &DBTool{DataDir: true, Env: map[string]string{"PITR_MOUNT": o.Mount, "PITR_DATA": o.DataDir, "PITR_TARGET": target + "+00", "PITR_ARCHIVE": keep},
 			Script: `set -e
-R="$PITR_MOUNT/keel-pitr/restore"
+if [ -d "$PITR_MOUNT/keel-pitr" ]; then PITR_ROOT="$PITR_MOUNT/keel-pitr"; else PITR_ROOT="$PITR_MOUNT/aven-pitr"; fi
+R="$PITR_ROOT/restore"
 rm -rf "$R" && mkdir -p "$R"
 tar -C "$R" -xf -
 [ -s "$R/base.tar.gz" ] || { echo "base backup is missing from the restore stream" >&2; exit 2; }
@@ -163,7 +173,7 @@ rm -rf "$PITR_DATA" && mkdir -p "$PITR_DATA"
 tar -C "$PITR_DATA" -xzf "$R/base.tar.gz"
 rm -f "$R/base.tar.gz" "$PITR_DATA/recovery.signal" "$PITR_DATA/standby.signal" "$PITR_DATA/postmaster.pid"
 [ -f "$PITR_DATA/PG_VERSION" ] || { echo "base backup is not a PostgreSQL data directory" >&2; exit 2; }
-rm -rf "$PITR_MOUNT/keel-pitr/wal" && mkdir -p "$PITR_MOUNT/keel-pitr/wal"
+rm -rf "$PITR_ROOT/wal" && mkdir -p "$PITR_ROOT/wal"
 {
   echo "# aven point-in-time recovery"
   echo "restore_command = 'gunzip -c $R/wal/%f.gz > %p'"
@@ -173,7 +183,7 @@ rm -rf "$PITR_MOUNT/keel-pitr/wal" && mkdir -p "$PITR_MOUNT/keel-pitr/wal"
   [ "$PITR_ARCHIVE" = on ] || echo "archive_mode = 'off'"
 } >> "$PITR_DATA/postgresql.auto.conf"
 touch "$PITR_DATA/recovery.signal"
-chown -R postgres:postgres "$PITR_MOUNT/keel-pitr" "$PITR_DATA"
+chown -R postgres:postgres "$PITR_ROOT" "$PITR_DATA"
 chmod 700 "$PITR_DATA"
 echo "restored base backup; recovery to $PITR_TARGET starts on the next boot" >&2`}, nil
 	case "mysql":
@@ -184,10 +194,10 @@ echo "restored base backup; recovery to $PITR_TARGET starts on the next boot" >&
 			"PITR_TARGET": target, "PITR_BASE_FILE": o.BaseFile, "PITR_BASE_POSITION": fmt.Sprint(o.BasePosition), "TZ": "UTC"}
 		return &DBTool{Env: env, Script: mysqlPrelude + `set -e
 BINLOG=$(command -v mysqlbinlog || command -v mariadb-binlog) || { echo "mysqlbinlog not found in image" >&2; exit 127; }
-W=/tmp/keel-pitr && rm -rf "$W" && mkdir -p "$W" && cd "$W"
+W=/tmp/aven-pitr && rm -rf "$W" && mkdir -p "$W" && cd "$W"
 : > .list
 while IFS=' ' read -r tag name size; do
-  [ "$tag" = KEELPITR ] || { echo "bad restore stream" >&2; exit 5; }
+  [ "$tag" = AVENPITR ] || [ "$tag" = KEELPITR ] || { echo "bad restore stream" >&2; exit 5; }
   case "$name" in ''|.*|*/*) echo "bad file name" >&2; exit 5 ;; esac
   head -c "$size" > "$name"
   [ "$(wc -c < "$name" | tr -d ' ')" = "$size" ] || { echo "truncated restore stream ($name)" >&2; exit 5; }
@@ -265,8 +275,11 @@ func (c *countReader) Read(p []byte) (int, error) {
 // ParsePITRFrameHeader는 "KEELPITR <name> <size>\n"을 읽는다.
 func ParsePITRFrameHeader(line string) (PITRFrame, error) {
 	parts := strings.Fields(line)
-	if len(parts) != 3 || parts[0] != "KEELPITR" || !strings.HasSuffix(line, "\n") {
+	if len(parts) != 3 || (parts[0] != pitrMagic && parts[0] != legacyPITRMagic) || !strings.HasSuffix(line, "\n") {
 		return PITRFrame{}, fmt.Errorf("bad pitr frame header %q", strings.TrimSpace(line))
+	}
+	if parts[0] == legacyPITRMagic {
+		compat.NoteLegacyResource("pitr-magic", "frame "+legacyPITRMagic, "frame "+pitrMagic)
 	}
 	if !PITRFileRe.MatchString(parts[1]) {
 		return PITRFrame{}, fmt.Errorf("bad pitr file name %q", parts[1])
@@ -283,7 +296,7 @@ func WritePITRFrame(w io.Writer, name string, size int64, body io.Reader) error 
 	if !PITRFileRe.MatchString(name) {
 		return fmt.Errorf("bad pitr file name %q", name)
 	}
-	if _, err := fmt.Fprintf(w, "KEELPITR %s %d\n", name, size); err != nil {
+	if _, err := fmt.Fprintf(w, pitrMagic+" %s %d\n", name, size); err != nil {
 		return err
 	}
 	n, err := io.Copy(w, io.LimitReader(body, size))

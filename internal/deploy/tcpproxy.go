@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"net"
-	"os"
 	"strings"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
@@ -14,6 +14,10 @@ import (
 )
 
 func tcpName(instanceID string) string {
+	return "aven-tcp-" + strings.TrimPrefix(instanceID, "ins_")
+}
+
+func legacyTCPName(instanceID string) string {
 	return "keel-tcp-" + strings.TrimPrefix(instanceID, "ins_")
 }
 
@@ -54,6 +58,13 @@ func (m *Manager) syncTCPOn(ctx context.Context, t *Target, in *store.Instance, 
 	drv := m.driverForNode(nodeID)
 	st, ierr := drv.Inspect(ctx, name)
 	exists := ierr == nil
+	if !exists {
+		if prev, err := drv.Inspect(ctx, legacyTCPName(in.ID)); err == nil {
+			name = legacyTCPName(in.ID)
+			st, exists = prev, true
+			compat.NoteLegacyResource("tcp-proxy", "container "+name, "container "+tcpName(in.ID))
+		}
+	}
 	if !want {
 		if exists {
 			return drv.Remove(ctx, name, 1)
@@ -69,7 +80,14 @@ func (m *Manager) syncTCPOn(ctx context.Context, t *Target, in *store.Instance, 
 		return (&remoteDriver{hub: m.Agents, node: nodeID}).tcpEnsure(ctx, agentprotocol.TCPProxyRequest{InstanceID: in.ID, ProjectID: t.Project.ID, EnvID: t.Env.ID,
 			Network: EnvNetwork(t.Env.ID), Target: target, PublicPort: in.TCPProxy.PublicPort, ContainerPort: in.TCPProxy.ContainerPort})
 	}
-	if exists && st.Labels["keel.tcp"] == sig && st.Running {
+	got := ""
+	if st != nil {
+		got = st.Labels["aven.tcp"]
+		if got == "" {
+			got = st.Labels["keel.tcp"]
+		}
+	}
+	if exists && got == sig && st.Running {
 		return nil
 	}
 	if exists {
@@ -89,7 +107,7 @@ func (m *Manager) syncTCPOn(ctx context.Context, t *Target, in *store.Instance, 
 	return m.Docker.Run(ctx, node.RunSpec{
 		Name: name, Image: node.TCPForwardImage, Network: EnvNetwork(t.Env.ID), Restart: "unless-stopped",
 		Labels: map[string]string{node.LabelManaged: "true", node.LabelRole: node.RoleTCPProxy, node.LabelInstance: in.ID,
-			node.LabelEnv: t.Env.ID, node.LabelProject: t.Project.ID, "keel.tcp": sig},
+			node.LabelEnv: t.Env.ID, node.LabelProject: t.Project.ID, "aven.tcp": sig, "keel.tcp": sig},
 		Publish: []string{pub},
 		Cmd: []string{fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", in.TCPProxy.ContainerPort),
 			fmt.Sprintf("TCP:%s:%d", target, in.TCPProxy.ContainerPort)},
@@ -187,7 +205,7 @@ func (m *Manager) tcpEndpointOn(ctx context.Context, nodeID string) (string, boo
 				ing = n.NodeIngress
 			}
 		}
-		if v := strings.TrimSpace(os.Getenv("KEEL_INGRESS_MODE")); v != "" {
+		if v := strings.TrimSpace(compat.Env("INGRESS_MODE")); v != "" {
 			ing.IngressMode = v
 		}
 		if ing.Tunnel() {

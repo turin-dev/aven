@@ -6,13 +6,13 @@ import { ApiError } from "@/lib/api";
 import { getLocale } from "@/lib/i18n";
 
 // Dev-only fake backend. Both checks are inlined at build time, so production builds drop the import.
-const MOCK = process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_KEEL_MOCK === "1";
+const MOCK = process.env.NODE_ENV === "development" && (process.env.NEXT_PUBLIC_AVEN_MOCK === "1" || process.env.NEXT_PUBLIC_KEEL_MOCK === "1");
 
 function MockGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!MOCK);
   useEffect(() => {
     // Keep the condition inline so the bundler can drop the dynamic import as dead code.
-    if (process.env.NODE_ENV === "development" && process.env.NEXT_PUBLIC_KEEL_MOCK === "1") {
+    if (process.env.NODE_ENV === "development" && (process.env.NEXT_PUBLIC_AVEN_MOCK === "1" || process.env.NEXT_PUBLIC_KEEL_MOCK === "1")) {
       import("@/lib/mock").then((m) => {
         m.install();
         setReady(true);

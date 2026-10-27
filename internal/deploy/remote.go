@@ -122,13 +122,15 @@ func (m *Manager) removeEnvNetwork(ctx context.Context, envID string) {
 	if err := m.SyncMesh(ctx); err != nil {
 		m.Log.Warn("mesh sync before network removal", "err", err)
 	}
-	if err := m.Docker.RemoveNetwork(ctx, EnvNetwork(envID), proxy.ContainerName); err != nil {
-		m.Log.Warn("remove network", "err", err)
-	}
-	for _, n := range m.remoteNodes(ctx) {
-		if m.nodeOnline(n.ID) {
-			if err := m.driverForNode(n.ID).RemoveNetwork(ctx, EnvNetwork(envID)); err != nil {
-				m.Log.Warn("remove network", "node", n.ID, "err", err)
+	for _, name := range []string{EnvNetwork(envID), LegacyEnvNetwork(envID)} {
+		if err := m.Docker.RemoveNetwork(ctx, name, proxy.ContainerName, proxy.LegacyContainerName); err != nil {
+			m.Log.Warn("remove network", "network", name, "err", err)
+		}
+		for _, n := range m.remoteNodes(ctx) {
+			if m.nodeOnline(n.ID) {
+				if err := m.driverForNode(n.ID).RemoveNetwork(ctx, name); err != nil {
+					m.Log.Warn("remove network", "node", n.ID, "network", name, "err", err)
+				}
 			}
 		}
 	}

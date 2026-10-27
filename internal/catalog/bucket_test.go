@@ -19,15 +19,15 @@ func TestBucketServiceDefinition(t *testing.T) {
 	if def.HealthcheckType != "http" || def.HealthcheckPath != "/minio/health/live" || !def.Domain || len(def.Volumes) != 1 || def.Volumes[0] != "/data" {
 		t.Errorf("health/domain/volume: %+v", def)
 	}
-	if !strings.Contains(def.StartCommand, `mc mb --ignore-existing "keel/$BUCKET"`) || strings.Contains(def.StartCommand, def.GeneratedPassword) {
+	if !strings.Contains(def.StartCommand, `mc mb --ignore-existing "aven/$BUCKET"`) || strings.Contains(def.StartCommand, def.GeneratedPassword) {
 		t.Errorf("start command: %s", def.StartCommand)
 	}
 	v := def.Variables
 	pw := def.GeneratedPassword
-	if v["SECRET_ACCESS_KEY"] != pw || v["REGION"] != "us-east-1" || v["ENDPOINT"] != "http://${{KEEL_PRIVATE_DOMAIN}}:9000" || v["PUBLIC_ENDPOINT"] != "https://${{KEEL_PUBLIC_DOMAIN}}" {
+	if v["SECRET_ACCESS_KEY"] != pw || v["REGION"] != "us-east-1" || v["ENDPOINT"] != "http://${{AVEN_PRIVATE_DOMAIN}}:9000" || v["PUBLIC_ENDPOINT"] != "https://${{AVEN_PUBLIC_DOMAIN}}" {
 		t.Errorf("vars: %v", v)
 	}
-	if !regexp.MustCompile(`^bucket-[0-9a-f]{10}$`).MatchString(v["BUCKET"]) || !regexp.MustCompile(`^KEEL[0-9A-F]{16}$`).MatchString(v["ACCESS_KEY_ID"]) {
+	if !regexp.MustCompile(`^bucket-[0-9a-f]{10}$`).MatchString(v["BUCKET"]) || !regexp.MustCompile(`^AVEN[0-9A-F]{16}$`).MatchString(v["ACCESS_KEY_ID"]) {
 		t.Errorf("generated names: %s %s", v["BUCKET"], v["ACCESS_KEY_ID"])
 	}
 	if strings.Contains(v["ACCESS_KEY_ID"], pw) || strings.Contains(v["BUCKET"], strings.ToLower(pw[:8])) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/node"
 )
 
@@ -22,10 +23,45 @@ type Docker interface {
 }
 
 const (
-	labelMesh        = "keel.mesh"         // forwarder 서명(포트 → 로컬 포트 @ gateway IP)
-	labelMeshService = "keel.mesh.service" // forwarder가 대신하는 서비스 이름
-	labelMeshAliases = "keel.mesh.aliases" // forwarder에 더 붙인 이름(Import.Aliases, 쉼표로 이음). 없으면 라벨도 없다.
+	labelMesh        = "aven.mesh"         // forwarder 서명(포트 → 로컬 포트 @ gateway IP)
+	labelMeshService = "aven.mesh.service" // forwarder가 대신하는 서비스 이름
+	labelMeshAliases = "aven.mesh.aliases" // forwarder에 더 붙인 이름(Import.Aliases, 쉼표로 이음). 없으면 라벨도 없다.
 )
+
+func meshLabel(labels map[string]string, key string) string {
+	if labels == nil {
+		return ""
+	}
+	if v := labels[key]; v != "" {
+		return v
+	}
+	if strings.HasPrefix(key, "aven.") {
+		if v := labels["keel."+strings.TrimPrefix(key, "aven.")]; v != "" {
+			compat.NoteLegacyResource("mesh-label", "label keel."+strings.TrimPrefix(key, "aven."), "label "+key)
+			return v
+		}
+	}
+	return ""
+}
+
+func resolveEnvNetwork(ctx context.Context, dk Docker, envID string) (string, *node.NetworkInfo, error) {
+	name := EnvNetwork(envID)
+	info, err := dk.NetworkInfo(ctx, name)
+	if err == nil && info != nil {
+		return name, info, nil
+	}
+	alt := compat.AltResource(name)
+	if alt != "" {
+		if info2, err2 := dk.NetworkInfo(ctx, alt); err2 == nil && info2 != nil {
+			compat.NoteLegacyResource("env-network", "docker network "+alt, "docker network "+name)
+			return alt, info2, nil
+		}
+	}
+	if err == nil {
+		err = errors.New("no such network")
+	}
+	return name, nil, err
+}
 
 // Ensure는 설정을 gateway에 반영하고 forwarder 컨테이너를 맞춘다. 결과는 현재 mesh 상태다.
 // forwarder는 이 함수만 만들고 지운다(서버의 일반 컨테이너 작업 대상이 아니다).
@@ -42,30 +78,35 @@ func Ensure(ctx context.Context, g *Gateway, dk Docker, c Config) (Status, error
 		}
 	}
 	nets := map[string]EnvNet{}
+	netNames := map[string]string{}
 	var errs []error
 	for _, im := range c.Imports {
 		if _, ok := nets[im.EnvID]; ok {
 			continue
 		}
-		info, err := dk.NetworkInfo(ctx, EnvNetwork(im.EnvID))
+		name, info, err := resolveEnvNetwork(ctx, dk, im.EnvID)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("network %s: %w", EnvNetwork(im.EnvID), err))
+			errs = append(errs, fmt.Errorf("network %s: %w", name, err))
 			continue
 		}
+		netNames[im.EnvID] = name
 		nets[im.EnvID] = envNetOf(info)
 	}
 	prefer := map[string]int{}
 	for _, im := range c.Imports {
 		labels := existing[ContainerName(im.EnvID, im.Service)]
 		if labels == nil {
+			labels = existing[LegacyContainerName(im.EnvID, im.Service)]
+		}
+		if labels == nil {
 			continue
 		}
-		if local, _, ok := parseSignature(labels[labelMesh]); ok {
+		if local, _, ok := parseSignature(meshLabel(labels, labelMesh)); ok {
 			for p, l := range local {
 				prefer[fmt.Sprintf("%s/%s/%d", im.EnvID, im.Service, p)] = l
 			}
 		}
-		if local, _, ok := parseSignature6(labels[labelMesh]); ok {
+		if local, _, ok := parseSignature6(meshLabel(labels, labelMesh)); ok {
 			for p, l := range local {
 				prefer[fmt.Sprintf("%s/%s/%d/6", im.EnvID, im.Service, p)] = l
 			}
@@ -94,6 +135,9 @@ func Ensure(ctx context.Context, g *Gateway, dk Docker, c Config) (Status, error
 			continue // 네트워크가 없거나 로컬 포트를 열지 못했다(위에서 오류로 알린다)
 		}
 		spec := ForwarderSpecDual(im, bs, byImport6[im.key()])
+		if name := netNames[im.EnvID]; name != "" {
+			spec.Network = name
+		}
 		want[spec.Name] = true
 		if labels := existing[spec.Name]; labels != nil && labels[labelMesh] == spec.Labels[labelMesh] &&
 			labels[labelMeshAliases] == spec.Labels[labelMeshAliases] {
@@ -126,6 +170,9 @@ func Ensure(ctx context.Context, g *Gateway, dk Docker, c Config) (Status, error
 
 // envNetOf는 docker 네트워크 정보에서 gateway 주소를 고른다: 첫 gateway(IPv4 우선), 그리고 IPv4 네트워크에 IPv6도 있으면 그 IPv6 gateway.
 func envNetOf(info *node.NetworkInfo) EnvNet {
+	if info == nil || len(info.Gateways) == 0 {
+		return EnvNet{}
+	}
 	n := EnvNet{Subnets: info.Subnets, Gateway: info.Gateways[0]}
 	if n.Gateway.Is4() {
 		for _, a := range info.Gateways[1:] {
@@ -170,7 +217,7 @@ func ForwarderSpecDual(im Import, local, local6 map[int]netip.AddrPort) node.Run
 	aliases := im.AllAliases()
 	labels := map[string]string{node.LabelManaged: "true", node.LabelRole: node.RoleMeshProxy, node.LabelEnv: im.EnvID,
 		labelMesh: signatureDual(ports, lp, gw, lp6, gw6), labelMeshService: im.Service}
-	if extra := aliases[2:]; len(extra) > 0 {
+	if extra := aliases[3:]; len(extra) > 0 {
 		// 별칭이 바뀌면 forwarder를 다시 만든다(별칭이 없는 forwarder는 라벨도 없어 예전 것과 그대로 같다).
 		labels[labelMeshAliases] = strings.Join(extra, ",")
 	}

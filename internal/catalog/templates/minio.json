@@ -20,8 +20,8 @@
       "variables": {
         "MINIO_ROOT_USER": "keel",
         "MINIO_ROOT_PASSWORD": "${{ secret(32) }}",
-        "S3_ENDPOINT": "http://${{KEEL_PRIVATE_DOMAIN}}:9000",
-        "S3_PUBLIC_ENDPOINT": "https://${{KEEL_PUBLIC_DOMAIN}}"
+        "S3_ENDPOINT": "http://${{AVEN_PRIVATE_DOMAIN}}:9000",
+        "S3_PUBLIC_ENDPOINT": "https://${{AVEN_PUBLIC_DOMAIN}}"
       }
     }
   ]

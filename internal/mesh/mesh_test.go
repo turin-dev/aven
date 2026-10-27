@@ -333,10 +333,10 @@ func TestForwarderSpecAndSignature(t *testing.T) {
 	im := Import{EnvID: envA, EnvName: "production", Service: "db", Ports: []int{5432, 6379}, Node: nodB}
 	gw := netip.MustParseAddr("172.18.0.1")
 	s := ForwarderSpec(im, map[int]netip.AddrPort{5432: netip.AddrPortFrom(gw, 40001), 6379: netip.AddrPortFrom(gw, 40002)})
-	if len(s.Publish) != 0 || len(s.Mounts) != 0 || s.Image != node.TCPForwardImage || s.Network != "keel-"+envA {
+	if len(s.Publish) != 0 || len(s.Mounts) != 0 || s.Image != node.TCPForwardImage || s.Network != "aven-"+envA {
 		t.Fatalf("spec: %+v", s)
 	}
-	if s.Labels[node.LabelRole] != node.RoleMeshProxy || s.Aliases[0] != "db" || s.Aliases[1] != "db.production.keel.internal" {
+	if s.Labels[node.LabelRole] != node.RoleMeshProxy || s.Aliases[0] != "db" || s.Aliases[1] != "db.production.keel.internal" || s.Aliases[2] != "db.production.aven.internal" {
 		t.Fatalf("labels/aliases: %+v %v", s.Labels, s.Aliases)
 	}
 	if !strings.Contains(s.Cmd[1], "TCP-LISTEN:5432,fork,reuseaddr TCP4:172.18.0.1:40001") || !strings.HasSuffix(s.Cmd[1], "wait") {

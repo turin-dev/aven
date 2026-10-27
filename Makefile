@@ -13,7 +13,7 @@ server:
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/aven-server ./cmd/aven-server
 	ln -sf aven-server bin/keel-server
 
-# aven-server serves these at /downloads/aven-agent-linux-{amd64,arm64} (from KEEL_AGENT_BIN_DIR, default: next to aven-server).
+# aven-server serves these at /downloads/aven-agent-linux-{amd64,arm64} (from AVEN_AGENT_BIN_DIR, default: next to aven-server).
 agents:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/aven-agent-linux-amd64 ./cmd/aven-agent

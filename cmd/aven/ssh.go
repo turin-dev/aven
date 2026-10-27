@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/http"
 	"net/url"
@@ -63,10 +64,10 @@ func execURL(base string, l *link, replica string, cmd []string, cols, rows int)
 
 func (c *config) authHeader() http.Header {
 	h := http.Header{}
-	if t := os.Getenv("KEEL_TOKEN"); t != "" {
+	if t := compat.Env("TOKEN"); t != "" {
 		h.Set("Authorization", "Bearer "+t)
 	} else if c.Cookie != "" {
-		h.Set("Cookie", (&http.Cookie{Name: "keel_session", Value: c.Cookie}).String())
+		h.Set("Cookie", (&http.Cookie{Name: "aven_session", Value: c.Cookie}).String())
 	}
 	return h
 }

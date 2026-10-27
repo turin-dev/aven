@@ -1,6 +1,6 @@
 {
   "admin": {
-    "listen": "unix//run/keel/caddy-admin.sock|0600"
+    "listen": "unix//run/aven/caddy-admin.sock|0600"
   },
   "apps": {
     "http": {
@@ -8,7 +8,7 @@
         "per_host": true
       },
       "servers": {
-        "keel": {
+        "aven": {
           "automatic_https": {
             "skip_certificates": [
               "*.preview.example.com"
@@ -18,7 +18,7 @@
             ":443"
           ],
           "logs": {
-            "default_logger_name": "keel"
+            "default_logger_name": "aven"
           },
           "routes": [
             {
@@ -29,7 +29,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=ad5aaa09b0d0866f40832a39dc559d27",
+                          "body": "aven-domain-check=ad5aaa09b0d0866f40832a39dc559d27\nkeel-domain-check=ad5aaa09b0d0866f40832a39dc559d27",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -45,6 +45,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -59,10 +60,10 @@
                   "headers": {
                     "request": {
                       "set": {
-                        "X-Keel-Client-Ip": [
+                        "X-Aven-Client-Ip": [
                           "{http.request.remote.host}"
                         ],
-                        "X-Keel-Client-Proto": [
+                        "X-Aven-Client-Proto": [
                           "{http.request.scheme}"
                         ]
                       }
@@ -71,7 +72,7 @@
                   "stream_close_delay": "30m",
                   "upstreams": [
                     {
-                      "dial": "unix//run/keel/edge.sock"
+                      "dial": "unix//run/aven/edge.sock"
                     }
                   ]
                 }
@@ -101,7 +102,7 @@
                   "stream_close_delay": "30m",
                   "upstreams": [
                     {
-                      "dial": "unix//run/keel/keel-server.sock"
+                      "dial": "unix//run/aven/keel-server.sock"
                     }
                   ]
                 }
@@ -123,7 +124,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=5007f6dab47b7ad9ec5a93a37a917e5f",
+                          "body": "aven-domain-check=5007f6dab47b7ad9ec5a93a37a917e5f\nkeel-domain-check=5007f6dab47b7ad9ec5a93a37a917e5f",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -139,6 +140,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -174,7 +176,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=6b1f4a78dd4acf50cbb8f6e7a27934a7",
+                          "body": "aven-domain-check=6b1f4a78dd4acf50cbb8f6e7a27934a7\nkeel-domain-check=6b1f4a78dd4acf50cbb8f6e7a27934a7",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -190,6 +192,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -225,7 +228,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=2024416c650d4fb7948fbb8bc85afc34",
+                          "body": "aven-domain-check=2024416c650d4fb7948fbb8bc85afc34\nkeel-domain-check=2024416c650d4fb7948fbb8bc85afc34",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -241,6 +244,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -276,7 +280,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=784011622cc1bf1cb7bf58611a6bc355",
+                          "body": "aven-domain-check=784011622cc1bf1cb7bf58611a6bc355\nkeel-domain-check=784011622cc1bf1cb7bf58611a6bc355",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -292,6 +296,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -327,7 +332,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=be1e7e02f290a2a25360a0465f6a42f5",
+                          "body": "aven-domain-check=be1e7e02f290a2a25360a0465f6a42f5\nkeel-domain-check=be1e7e02f290a2a25360a0465f6a42f5",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -343,6 +348,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -406,7 +412,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=4d5e9aa81dcc5bdc407aa7e1b8037f59",
+                          "body": "aven-domain-check=4d5e9aa81dcc5bdc407aa7e1b8037f59\nkeel-domain-check=4d5e9aa81dcc5bdc407aa7e1b8037f59",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -422,6 +428,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -457,7 +464,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=b0263659e9e9ba10cdeb4cd51ecd2a83",
+                          "body": "aven-domain-check=b0263659e9e9ba10cdeb4cd51ecd2a83\nkeel-domain-check=b0263659e9e9ba10cdeb4cd51ecd2a83",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -473,6 +480,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -508,7 +516,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=b90ef991c2d5ecdb92eaafe853c44a5f",
+                          "body": "aven-domain-check=b90ef991c2d5ecdb92eaafe853c44a5f\nkeel-domain-check=b90ef991c2d5ecdb92eaafe853c44a5f",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -524,6 +532,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -576,7 +585,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=969b9610ff3547c15cff192c4e704b8c",
+                          "body": "aven-domain-check=969b9610ff3547c15cff192c4e704b8c\nkeel-domain-check=969b9610ff3547c15cff192c4e704b8c",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -592,6 +601,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -645,7 +655,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=4072d64cd6be1cf72c41c60ed79400f2",
+                          "body": "aven-domain-check=4072d64cd6be1cf72c41c60ed79400f2\nkeel-domain-check=4072d64cd6be1cf72c41c60ed79400f2",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -661,6 +671,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -681,7 +692,7 @@
                   "handler": "headers",
                   "response": {
                     "set": {
-                      "X-Keel-Trace-Id": [
+                      "X-Aven-Trace-Id": [
                         "{http.vars.trace_id}"
                       ]
                     }
@@ -714,7 +725,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=792172e278f0dd9731ac8a8977500767",
+                          "body": "aven-domain-check=792172e278f0dd9731ac8a8977500767\nkeel-domain-check=792172e278f0dd9731ac8a8977500767",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -730,6 +741,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -844,7 +856,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=533992227c97f047604ba88b2c58c5ef",
+                          "body": "aven-domain-check=533992227c97f047604ba88b2c58c5ef\nkeel-domain-check=533992227c97f047604ba88b2c58c5ef",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -860,6 +872,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -873,7 +886,7 @@
                   "stream_close_delay": "30m",
                   "upstreams": [
                     {
-                      "dial": "unix//run/keel/wake.sock"
+                      "dial": "unix//run/aven/wake.sock"
                     }
                   ]
                 }
@@ -895,7 +908,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=869300b832adc7a27823ba076b86fcf4",
+                          "body": "aven-domain-check=869300b832adc7a27823ba076b86fcf4\nkeel-domain-check=869300b832adc7a27823ba076b86fcf4",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -911,6 +924,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -946,7 +960,7 @@
                     {
                       "handle": [
                         {
-                          "body": "keel-domain-check=d6762c99753a017770d200ffbfd7a419",
+                          "body": "aven-domain-check=d6762c99753a017770d200ffbfd7a419\nkeel-domain-check=d6762c99753a017770d200ffbfd7a419",
                           "handler": "static_response",
                           "headers": {
                             "Cache-Control": [
@@ -962,6 +976,7 @@
                       "match": [
                         {
                           "path": [
+                            "/.well-known/aven/domain-check",
                             "/.well-known/keel/domain-check"
                           ]
                         }
@@ -1001,12 +1016,12 @@
             }
           ]
         },
-        "keel-edge-origin": {
+        "aven-edge-origin": {
           "automatic_https": {
             "disable": true
           },
           "listen": [
-            "unix//run/keel/edge-origin.sock"
+            "unix//run/aven/edge-origin.sock"
           ],
           "routes": [
             {
@@ -1016,15 +1031,15 @@
                   "headers": {
                     "request": {
                       "delete": [
-                        "X-Keel-Client-Ip",
-                        "X-Keel-Client-Proto"
+                        "X-Aven-Client-Ip",
+                        "X-Aven-Client-Proto"
                       ],
                       "set": {
                         "X-Forwarded-For": [
-                          "{http.request.header.X-Keel-Client-Ip}"
+                          "{http.request.header.X-Aven-Client-Ip}"
                         ],
                         "X-Forwarded-Proto": [
-                          "{http.request.header.X-Keel-Client-Proto}"
+                          "{http.request.header.X-Aven-Client-Proto}"
                         ]
                       }
                     }
@@ -1058,7 +1073,7 @@
             }
           ]
         },
-        "keel-http": {
+        "aven-http": {
           "automatic_https": {
             "disable": true
           },
@@ -1066,7 +1081,7 @@
             ":80"
           ],
           "logs": {
-            "default_logger_name": "keel"
+            "default_logger_name": "aven"
           },
           "routes": [
             {
@@ -1100,7 +1115,7 @@
             }
           ]
         },
-        "keel-tls-ask": {
+        "aven-tls-ask": {
           "automatic_https": {
             "disable": true
           },
@@ -1116,14 +1131,14 @@
                     "request": {
                       "set": {
                         "Host": [
-                          "keel-tls-ask.invalid"
+                          "aven-tls-ask.invalid"
                         ]
                       }
                     }
                   },
                   "upstreams": [
                     {
-                      "dial": "unix//run/keel/wake.sock"
+                      "dial": "unix//run/aven/wake.sock"
                     }
                   ]
                 }
@@ -1188,7 +1203,7 @@
           "format": "json"
         },
         "include": [
-          "http.log.access.keel"
+          "http.log.access.aven"
         ],
         "writer": {
           "output": "stdout"
@@ -1196,7 +1211,7 @@
       },
       "default": {
         "exclude": [
-          "http.log.access.keel"
+          "http.log.access.aven"
         ]
       }
     }

@@ -28,7 +28,7 @@ export function SystemStatus() {
         <StatusRow label={t("프록시")} ok={d ? d.proxy === "ok" : null} detail={!d ? t("확인 중") : d.proxy === "ok" ? t("정상") : t("응답 없음 ({status}). 프록시 포트와 로그를 확인하세요.", { status: d.proxy })} />
         <StatusRow label={t("Aven 버전")} detail={d?.version ?? "…"} mono />
         <StatusRow label={t("노드")} detail={d?.node ?? "…"} mono />
-        <StatusRow label={t("기본 도메인")} ok={d ? !!d.base_domain : null} detail={d ? (d.base_domain ?? t("설정 안 됨 (KEEL_BASE_DOMAIN). 도메인 자동 생성을 쓸 수 없습니다.")) : "…"} mono={!!d?.base_domain} />
+        <StatusRow label={t("기본 도메인")} ok={d ? !!d.base_domain : null} detail={d ? (d.base_domain ?? t("설정 안 됨 (AVEN_BASE_DOMAIN). 도메인 자동 생성을 쓸 수 없습니다.")) : "…"} mono={!!d?.base_domain} />
         <StatusRow label={t("공개 IPv6")} detail={d ? (d.public_ipv6 ?? t("없음")) : "…"} mono />
         <StatusRow label={t("공개 IPv4")} detail={d ? (d.public_ipv4 ?? t("없음")) : "…"} mono />
         <StatusRow label={t("디스크 여유")} ok={d ? d.disk_free_bytes > 10e9 : null} detail={d ? fmtBytes(d.disk_free_bytes) : "…"} />
@@ -38,10 +38,10 @@ export function SystemStatus() {
             ok={d.mesh.mode === "off" ? null : d.mesh.enabled}
             detail={
               d.mesh.enabled
-                ? `${d.mesh.private_address}:${d.mesh.port} (KEEL_MESH=${d.mesh.mode}, KEEL_MESH_PORT=${d.mesh.port})`
+                ? `${d.mesh.private_address}:${d.mesh.port} (AVEN_MESH=${d.mesh.mode}, AVEN_MESH_PORT=${d.mesh.port})`
                 : d.mesh.mode === "off"
-                  ? t("꺼짐 (KEEL_MESH=off)")
-                  : t("꺼짐: KEEL_PRIVATE_ADDRESS에 Tailscale/WireGuard 사설 IP를 설정하세요")
+                  ? t("꺼짐 (AVEN_MESH=off)")
+                  : t("꺼짐: AVEN_PRIVATE_ADDRESS에 Tailscale/WireGuard 사설 IP를 설정하세요")
             }
             mono={d.mesh.enabled}
           />

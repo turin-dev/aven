@@ -180,7 +180,7 @@ func TestServerConfig(t *testing.T) {
 		t.Fatalf("put: %d %s", w.Code, w.Body)
 	}
 	b, _ := os.ReadFile(envFile)
-	if string(b) != "# aven\nKEEL_SMTP_PASSWORD=hunter22\nKEEL_BASE_DOMAIN=apps.example\n" {
+	if string(b) != "# aven\nKEEL_SMTP_PASSWORD=hunter22\nAVEN_BASE_DOMAIN=apps.example\n" {
 		t.Fatalf("file: %q", b)
 	}
 	v = decodeBody[serverConfigView](t, w)

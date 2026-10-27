@@ -47,8 +47,9 @@ import type { ServiceActions } from "@/lib/useServiceActions";
 import { StatusBadge, TRIGGER_LABEL } from "../StatusBadge";
 import { BrandIcon } from "../ServiceIcon";
 import { Button, ErrorBox, Menu, MenuItem, Spinner, cx, useConfirm } from "../ui";
-import { openKeelAgent } from "../AgentPanel";
+import { openAvenAgent } from "../AgentPanel";
 import { t, tr } from "@/lib/i18n";
+import { readStorage, writeStorage } from "@/lib/legacyStorage";
 
 
 /* ── Stepper ─────────────────────────────────────────────────────────── */
@@ -389,7 +390,7 @@ export function DeploymentMenu({
               icon={<Sparkles />}
               onSelect={() => {
                 close();
-                openKeelAgent({
+                openAvenAgent({
                   serviceId: d.service_id,
                   environmentId: d.environment_id,
                   prompt: d.status === "failed"
@@ -861,20 +862,21 @@ function CronSection({ inst, actions, canEdit }: { inst: ServiceInstance; action
 const INFO_LINK =
   "cursor-pointer text-nowrap text-sm hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-pink-500 focus-visible:ring-0";
 
-const HIDE_SKIPPED_KEY = "keel.deployments.hideSkipped";
+const HIDE_SKIPPED_KEY = "aven.deployments.hideSkipped";
+const LEGACY_HIDE_SKIPPED_KEY = "keel.deployments.hideSkipped";
 const HISTORY_PAGE = 20;
 
 function useHideSkipped() {
   const [hide, setHide] = useState(false);
   useEffect(() => {
     try {
-      setHide(window.localStorage.getItem(HIDE_SKIPPED_KEY) === "1");
+      setHide(readStorage(HIDE_SKIPPED_KEY, LEGACY_HIDE_SKIPPED_KEY) === "1");
     } catch {}
   }, []);
   const toggle = () =>
     setHide((v) => {
       try {
-        window.localStorage.setItem(HIDE_SKIPPED_KEY, v ? "0" : "1");
+        writeStorage(HIDE_SKIPPED_KEY, v ? "0" : "1");
       } catch {}
       return !v;
     });

@@ -49,7 +49,7 @@ func TestRunAPIUsesGraphQLEndpointAndBearerToken(t *testing.T) {
 
 func TestRunAPIReadsQueryFromStdinAndReportsGraphQLErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/graphql/v2" || r.Header.Get("Cookie") != "keel_session=session-cookie" {
+		if r.URL.Path != "/graphql/v2" || r.Header.Get("Cookie") != "aven_session=session-cookie" {
 			t.Errorf("request: %s %s cookie=%q", r.Method, r.URL.Path, r.Header.Get("Cookie"))
 		}
 		io.WriteString(w, `{"data":null,"errors":[{"message":"not found"}]}`)

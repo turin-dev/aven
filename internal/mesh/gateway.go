@@ -321,7 +321,7 @@ func (g *Gateway) Close() {
 func (g *Gateway) serve(ctx context.Context, ln net.Listener) {
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{ALPN},
+		NextProtos: []string{ALPN, LegacyALPN},
 		ClientAuth: tls.RequireAnyClientCert,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return g.Cert()
@@ -422,6 +422,7 @@ func (g *Gateway) handle(ctx context.Context, c *tls.Conn, release func()) {
 		return
 	}
 	cs := c.ConnectionState()
+	noteALPN(cs.NegotiatedProtocol)
 	peer, err := g.verifyPeer(cs.PeerCertificates, "")
 	if err != nil {
 		return
@@ -513,7 +514,7 @@ func (g *Gateway) dialExport(ctx context.Context, peer string, h Header) (net.Co
 func (g *Gateway) clientConfig(node string) *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		NextProtos: []string{ALPN},
+		NextProtos: []string{ALPN, LegacyALPN},
 		ServerName: "keel-mesh",
 		// 시스템 기본 검증(호스트 이름)은 쓰지 않고 VerifyConnection에서 aven CA + node ID + serial로 확인한다.
 		InsecureSkipVerify: true,
@@ -548,6 +549,7 @@ func (g *Gateway) dialPeer(ctx context.Context, node string, h Header) (net.Conn
 			c.Close()
 			return nil, err
 		}
+		noteALPN(c.ConnectionState().NegotiatedProtocol)
 	} else {
 		d := tls.Dialer{NetDialer: &net.Dialer{Timeout: g.timeout()}, Config: g.clientConfig(node)}
 		raw, err := d.DialContext(dctx, "tcp", p.Address)
@@ -555,6 +557,7 @@ func (g *Gateway) dialPeer(ctx context.Context, node string, h Header) (net.Conn
 			return nil, err
 		}
 		c = raw.(*tls.Conn)
+		noteALPN(c.ConnectionState().NegotiatedProtocol)
 	}
 	c.SetDeadline(time.Now().Add(g.timeout()))
 	b, _ := json.Marshal(h)

@@ -5,7 +5,7 @@ import { ApiError, type ID } from "./api";
 export type BucketInfo = {
   bucket: string;
   region: string;
-  /** private endpoint: http://<service>.<env>.keel.internal:9000 */
+  /** private endpoint: http://<service>.<env>.aven.internal:9000 */
   endpoint: string;
   public_endpoint: string | null;
   /** "•••" for viewers (masked = true) */

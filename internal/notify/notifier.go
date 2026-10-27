@@ -119,7 +119,7 @@ func (n *Notifier) Deliver(ctx context.Context, ch *store.NotificationChannel, p
 		start := time.Now()
 		res.Attempts = 1
 		if n.Mailer == nil {
-			res.Err = errors.New("SMTP가 설정되지 않았습니다 (KEEL_SMTP_HOST)")
+			res.Err = errors.New("SMTP가 설정되지 않았습니다 (AVEN_SMTP_HOST)")
 		} else {
 			subject, body := EmailFor(pl, n.PublicURL)
 			res.Err = n.Mailer.Send(ctx, ch.Config.Recipients, subject, body)
@@ -127,9 +127,17 @@ func (n *Notifier) Deliver(ctx context.Context, ch *store.NotificationChannel, p
 		res.Duration = time.Since(start)
 	default:
 		body := Body(ch.Kind, pl)
-		headers := map[string]string{"X-Keel-Event": pl.Kind, "X-Keel-Delivery": pl.ID}
+		sig := ""
 		if ch.Config.Secret != "" {
-			headers["X-Keel-Signature"] = Sign(ch.Config.Secret, body)
+			sig = Sign(ch.Config.Secret, body)
+		}
+		headers := map[string]string{
+			"X-Aven-Event": pl.Kind, "X-Aven-Delivery": pl.ID,
+			"X-Keel-Event": pl.Kind, "X-Keel-Delivery": pl.ID,
+		}
+		if sig != "" {
+			headers["X-Aven-Signature"] = sig
+			headers["X-Keel-Signature"] = sig
 		}
 		res = PostJSON(ctx, n.httpClient(), ch.Config.URL, body, headers, n.backoff())
 	}

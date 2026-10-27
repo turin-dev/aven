@@ -40,7 +40,7 @@ function CliInner() {
   const https = origin.startsWith("https://");
   const has = (name: string) => files.some((f) => f.name === name);
   const unixCmd = `curl -fsSL ${origin}/install.sh | sh -s -- --server ${origin}`;
-  const winCmd = `Invoke-WebRequest ${origin}/downloads/aven-windows-amd64.exe -OutFile keel.exe`;
+  const winCmd = `Invoke-WebRequest ${origin}/downloads/aven-windows-amd64.exe -OutFile aven.exe`;
 
   return (
     <PageShell title="CLI" close={{ href: href("/"), label: t("CLI 닫기") }}>
@@ -55,7 +55,7 @@ function CliInner() {
             {tr("서버 관리자가 {cmd}로 빌드한 {bin} 파일을 aven-server 실행 파일 옆(또는 {env})에 두면 여기에 나타납니다.", {
               cmd: <code className="font-mono">make clis</code>,
               bin: <code className="font-mono">bin/aven-*</code>,
-              env: <code className="font-mono">KEEL_AGENT_BIN_DIR</code>,
+              env: <code className="font-mono">AVEN_AGENT_BIN_DIR</code>,
             })}
           </EmptyState>
         ) : (

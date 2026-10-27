@@ -251,9 +251,9 @@ func TestPooledVarsRoundTrip(t *testing.T) {
 		v[k] = x
 	}
 	applyPooledVars(v, "db-pgbouncer", true)
-	if v["DATABASE_URL"] != "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{db-pgbouncer.KEEL_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}" ||
+	if v["DATABASE_URL"] != "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{db-pgbouncer.AVEN_PRIVATE_DOMAIN}}:5432/${{PGDATABASE}}" ||
 		v["DATABASE_UNPOOLED_URL"] != orig["DATABASE_URL"] || v["DATABASE_PUBLIC_UNPOOLED_URL"] != orig["DATABASE_PUBLIC_URL"] ||
-		!strings.Contains(v["DATABASE_PUBLIC_URL"], "${{db-pgbouncer.KEEL_TCP_PROXY_PORT}}") {
+		!strings.Contains(v["DATABASE_PUBLIC_URL"], "${{db-pgbouncer.AVEN_TCP_PROXY_PORT}}") {
 		t.Fatalf("pooled vars %v", v)
 	}
 	applyPooledVars(v, "db-pgbouncer", true) // 두 번 불러도 직접 연결 값을 잃지 않는다
@@ -328,13 +328,13 @@ func TestPostgresPoolingLifecycle(t *testing.T) {
 	f.waitFor("pooling enabled", func(s *store.PostgresState) bool { return s.PoolingStatus == "enabled" })
 	f.idle()
 	v := f.dbIn().Variables
-	if !strings.Contains(v["DATABASE_URL"], "${{pg-pgbouncer.KEEL_PRIVATE_DOMAIN}}") || v["DATABASE_UNPOOLED_URL"] != directURL ||
-		!strings.Contains(v["DATABASE_PUBLIC_URL"], "pg-pgbouncer.KEEL_TCP_PROXY_DOMAIN") || v["DATABASE_PUBLIC_UNPOOLED_URL"] == "" {
+	if !strings.Contains(v["DATABASE_URL"], "${{pg-pgbouncer.AVEN_PRIVATE_DOMAIN}}") || v["DATABASE_UNPOOLED_URL"] != directURL ||
+		!strings.Contains(v["DATABASE_PUBLIC_URL"], "pg-pgbouncer.AVEN_TCP_PROXY_DOMAIN") || v["DATABASE_PUBLIC_UNPOOLED_URL"] == "" {
 		t.Fatalf("db vars %v", v)
 	}
 	// 해석하면 PgBouncer 주소가 나온다
 	res, err := f.mgr.Resolve(ctx, f.dbIn(), nil)
-	if err != nil || !strings.Contains(res.Vars["DATABASE_URL"], "@pg-pgbouncer.production.keel.internal:5432/keel") {
+	if err != nil || !strings.Contains(res.Vars["DATABASE_URL"], "@pg-pgbouncer.production.keel.internal:5432/aven") {
 		t.Fatalf("resolved %v %v", res.Vars["DATABASE_URL"], err)
 	}
 	deps, _ := f.st.ListDeployments(ctx, webIn.ID, 5)

@@ -34,7 +34,7 @@ export function ProvidedVariables({
         <div id={id} className="animate-fade-in pb-2">
           <p className="mb-2 text-xs leading-[18px] text-gray-500">
             {tr("배포할 때 자동으로 주입됩니다. 같은 이름으로 서비스 변수를 만들면 그 값이 우선합니다. 다른 서비스에서는 {ref}처럼 참조합니다.", {
-              ref: <span className="font-mono text-gray-600">{t("${{서비스.KEEL_PRIVATE_DOMAIN}}")}</span>,
+              ref: <span className="font-mono text-gray-600">{t("${{서비스.AVEN_PRIVATE_DOMAIN}}")}</span>,
             })}
           </p>
           <ul className="space-y-1">

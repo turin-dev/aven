@@ -12,6 +12,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"log/slog"
 	"net"
@@ -47,45 +48,42 @@ type credentials struct {
 	CA          string `json:"ca,omitempty"`          // 서버 CA 인증서 PEM(갱신된 인증서 검증용)
 }
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
+func env(suffix, def string) string { return compat.EnvDefault(suffix, def) }
 
-func envInt(key string, def int) int {
-	if v, err := strconv.Atoi(os.Getenv(key)); err == nil {
-		return v
+func envInt(suffix string, def int) int {
+	if v := compat.Env(suffix); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
 
 func main() {
-	server := flag.String("server", os.Getenv("KEEL_SERVER_URL"), "aven server URL (https://...)")
-	token := flag.String("join-token", os.Getenv("KEEL_JOIN_TOKEN"), "one-time join token (only for the first start)")
-	config := flag.String("config", env("KEEL_AGENT_CREDENTIALS", "/var/lib/keel-agent/credentials.json"), "credentials path")
-	caFile := flag.String("ca-file", os.Getenv("KEEL_CA_FILE"), "extra CA certificate (PEM) to trust for the server")
-	dataDir := flag.String("data", env("KEEL_AGENT_DATA", "/var/lib/keel-agent"), "agent data directory (build work dirs)")
-	httpPort := flag.Int("http-port", envInt("KEEL_HTTP_PORT", 80), "keel-proxy HTTP port on this node")
-	httpsPort := flag.Int("https-port", envInt("KEEL_HTTPS_PORT", 443), "keel-proxy HTTPS port on this node")
-	_ = flag.Int("proxy-admin-port", envInt("KEEL_PROXY_ADMIN_PORT", 2019), "deprecated: keel-proxy's admin API is a unix socket in the keel-proxy-wake volume now (ignored)")
-	proxyBind := flag.String("proxy-bind", os.Getenv("KEEL_PROXY_BIND"), "address keel-proxy binds to (empty: all IPv6+IPv4)")
-	tlsMode := flag.String("tls", env("KEEL_TLS", "auto"), "keel-proxy TLS mode: auto | internal | off")
-	acmeEmail := flag.String("acme-email", os.Getenv("KEEL_ACME_EMAIL"), "ACME account email")
-	railpack := flag.String("railpack", env("KEEL_RAILPACK_BIN", agent.RailpackAuto), "railpack binary path, \"auto\" (default: download the pinned official release on first use, SHA-256 verified) or \"off\"")
-	frontend := flag.String("railpack-frontend", env("KEEL_RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"), "railpack BuildKit frontend image")
-	ipv4 := flag.String("public-ipv4", os.Getenv("KEEL_PUBLIC_IPV4"), "public IPv4 of this node (default: detected)")
-	ipv6 := flag.String("public-ipv6", os.Getenv("KEEL_PUBLIC_IPV6"), "public IPv6 of this node (default: detected)")
-	ipv6Iface := flag.String("ipv6-iface", os.Getenv("KEEL_IPV6_IFACE"), "interface that per-domain public IPv6 addresses are added to (default: the one holding --public-ipv6, else the IPv6 default route's)")
-	private := flag.String("private-address", os.Getenv("KEEL_PRIVATE_ADDRESS"), "private (Tailscale/WireGuard) address of this node")
-	meshMode := flag.String("mesh", env("KEEL_MESH", "auto"), "cross-node private networking gateway: on | off | auto (on when --private-address is a private IP)")
-	meshPort := flag.Int("mesh-port", envInt("KEEL_MESH_PORT", mesh.DefaultPort), "mesh gateway port (listens only on --private-address)")
-	externalUps := flag.String("external-upstreams", os.Getenv("KEEL_EXTERNAL_UPSTREAMS"), "comma-separated host:port targets outside aven that this node's keel-proxy may route to (e.g. a compose container)")
-	proxyNets := flag.String("proxy-networks", os.Getenv("KEEL_PROXY_NETWORKS"), "comma-separated docker networks keel-proxy joins (where the external upstreams live)")
-	meshProxy := flag.String("mesh-proxy", os.Getenv("KEEL_MESH_PROXY"), "HTTP proxy (host:port, loopback or private) used to reach other mesh nodes, e.g. tailscaled's --outbound-http-proxy-listen in userspace networking")
-	meshListen := flag.String("mesh-listen", os.Getenv("KEEL_MESH_LISTEN"), "IP the mesh gateway binds instead of --private-address, e.g. 127.0.0.1 when Tailscale runs with userspace networking and forwards to loopback (loopback or private IPs only)")
-	netLogs := flag.String("network-logs", env("KEEL_NETWORK_LOGS", "on"), "DNS query and network flow logs from the environment bridges (needs CAP_NET_RAW): on | off")
+	server := flag.String("server", compat.Env("SERVER_URL"), "aven server URL (https://...)")
+	token := flag.String("join-token", compat.Env("JOIN_TOKEN"), "one-time join token (only for the first start)")
+	config := flag.String("config", env("AGENT_CREDENTIALS", filepath.Join(compat.DefaultAgentDataDir(), "credentials.json")), "credentials path (AVEN_AGENT_CREDENTIALS)")
+	caFile := flag.String("ca-file", compat.Env("CA_FILE"), "extra CA certificate (PEM) to trust for the server")
+	dataDir := flag.String("data", env("AGENT_DATA", compat.DefaultAgentDataDir()), "agent data directory (AVEN_AGENT_DATA)")
+	httpPort := flag.Int("http-port", envInt("HTTP_PORT", 80), "keel-proxy HTTP port on this node")
+	httpsPort := flag.Int("https-port", envInt("HTTPS_PORT", 443), "keel-proxy HTTPS port on this node")
+	_ = flag.Int("proxy-admin-port", envInt("PROXY_ADMIN_PORT", 2019), "deprecated: keel-proxy's admin API is a unix socket in the keel-proxy-wake volume now (ignored)")
+	proxyBind := flag.String("proxy-bind", compat.Env("PROXY_BIND"), "address keel-proxy binds to (empty: all IPv6+IPv4)")
+	tlsMode := flag.String("tls", env("TLS", "auto"), "keel-proxy TLS mode: auto | internal | off")
+	acmeEmail := flag.String("acme-email", compat.Env("ACME_EMAIL"), "ACME account email")
+	railpack := flag.String("railpack", env("RAILPACK_BIN", agent.RailpackAuto), "railpack binary path, \"auto\" (default: download the pinned official release on first use, SHA-256 verified) or \"off\"")
+	frontend := flag.String("railpack-frontend", env("RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"), "railpack BuildKit frontend image")
+	ipv4 := flag.String("public-ipv4", compat.Env("PUBLIC_IPV4"), "public IPv4 of this node (default: detected)")
+	ipv6 := flag.String("public-ipv6", compat.Env("PUBLIC_IPV6"), "public IPv6 of this node (default: detected)")
+	ipv6Iface := flag.String("ipv6-iface", compat.Env("IPV6_IFACE"), "interface that per-domain public IPv6 addresses are added to (default: the one holding --public-ipv6, else the IPv6 default route's)")
+	private := flag.String("private-address", compat.Env("PRIVATE_ADDRESS"), "private (Tailscale/WireGuard) address of this node")
+	meshMode := flag.String("mesh", env("MESH", "auto"), "cross-node private networking gateway: on | off | auto (on when --private-address is a private IP)")
+	meshPort := flag.Int("mesh-port", envInt("MESH_PORT", mesh.DefaultPort), "mesh gateway port (listens only on --private-address)")
+	externalUps := flag.String("external-upstreams", compat.Env("EXTERNAL_UPSTREAMS"), "comma-separated host:port targets outside aven that this node's keel-proxy may route to (e.g. a compose container)")
+	proxyNets := flag.String("proxy-networks", compat.Env("PROXY_NETWORKS"), "comma-separated docker networks keel-proxy joins (where the external upstreams live)")
+	meshProxy := flag.String("mesh-proxy", compat.Env("MESH_PROXY"), "HTTP proxy (host:port, loopback or private) used to reach other mesh nodes, e.g. tailscaled's --outbound-http-proxy-listen in userspace networking")
+	meshListen := flag.String("mesh-listen", compat.Env("MESH_LISTEN"), "IP the mesh gateway binds instead of --private-address, e.g. 127.0.0.1 when Tailscale runs with userspace networking and forwards to loopback (loopback or private IPs only)")
+	netLogs := flag.String("network-logs", env("NETWORK_LOGS", "on"), "DNS query and network flow logs from the environment bridges (needs CAP_NET_RAW): on | off")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
@@ -123,7 +121,7 @@ func main() {
 	}
 	caddy := proxy.New(proxy.Config{HTTPPort: *httpPort, HTTPSPort: *httpsPort, BindIP: *proxyBind, MetricsHosts: proxy.ParseList(*private),
 		TLS: proxy.TLSMode(*tlsMode), ACMEEmail: *acmeEmail})
-	if err := caddy.EnsureRunning(ctx, node.NetworkName); err != nil {
+	if err := caddy.EnsureRunning(ctx, docker.ActiveBridge(ctx)); err != nil {
 		log.Error("keel-proxy", "err", err)
 		os.Exit(1)
 	}
@@ -160,7 +158,7 @@ func main() {
 		h.NetLog = &netlog.Collector{NodeID: cred.NodeID, Docker: docker, Log: log}
 		go h.NetLog.Run(ctx)
 	}
-	startWake(ctx, h, docker, log)
+	startWake(ctx, h, docker, caddy, log)
 	log.Info("aven-agent starting", "node", cred.NodeID, "server", *server, "version", version)
 	backoff := time.Second
 	for ctx.Err() == nil {

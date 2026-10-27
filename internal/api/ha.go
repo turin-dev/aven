@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/catalog"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/deploy"
 	"github.com/turin-dev/aven/internal/ha"
 	"github.com/turin-dev/aven/internal/node"
@@ -413,7 +414,8 @@ type haClusterView struct {
 	PrimaryServiceID   string         `json:"primary_service_id"`
 	Status             string         `json:"status"`
 	AutoFailover       bool           `json:"auto_failover"`
-	KeelFailover       bool           `json:"keel_failover"` // Aven이 승격하는 엔진(postgres). 아니면 엔진이 스스로 뽑는다
+	AvenFailover       bool           `json:"aven_failover"` // Aven이 승격하는 엔진(postgres). 아니면 엔진이 스스로 뽑는다
+	KeelFailover       bool           `json:"keel_failover"` // 예전 클라이언트가 읽던 같은 값
 	Busy               bool           `json:"busy"`
 	Message            string         `json:"message"`
 	CompanionTemplate  string         `json:"companion_template"`
@@ -438,7 +440,7 @@ func (s *Server) haView(ctx context.Context, hc *haCluster) haClusterView {
 	c := hc.c
 	rt := haRT(c.ID)
 	v := haClusterView{ID: c.ID, Kind: c.Kind, EnvironmentID: c.EnvironmentID, RootServiceID: c.RootServiceID, PrimaryServiceID: c.PrimaryServiceID,
-		Status: c.Status, AutoFailover: c.AutoFailover, KeelFailover: ha.AutoFailoverByKeel(c.Kind), Busy: rt.isBusy(), Message: c.Message,
+		Status: c.Status, AutoFailover: c.AutoFailover, AvenFailover: ha.AutoFailoverByKeel(c.Kind), KeelFailover: ha.AutoFailoverByKeel(c.Kind), Busy: rt.isBusy(), Message: c.Message,
 		CompanionTemplate: c.CompanionTemplate, StandaloneTemplate: c.StandaloneTemplate, Counts: c.Saved.Counts, Members: []haMemberView{}, CreatedAt: c.CreatedAt}
 	if v.Counts == nil {
 		v.Counts = map[string]int{}
@@ -849,7 +851,7 @@ func haEngineRootVars(kind string, hc *haCluster) map[string]string {
 		hosts = append(hosts, ha.HostRef(hc.name(m.ServiceID))+":27017")
 	}
 	return map[string]string{
-		"MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@" + strings.Join(hosts, ",") + "/?replicaSet=${{KEEL_HA_REPLSET}}&authSource=admin",
+		"MONGO_URL": "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@" + strings.Join(hosts, ",") + "/?replicaSet=${{AVEN_HA_REPLSET}}&authSource=admin",
 	}
 }
 
@@ -1747,7 +1749,14 @@ func (s *Server) haReconcileMongo(ctx context.Context, hc *haCluster, states []h
 		return
 	}
 	run := hc.insts[hc.c.PrimaryServiceID]
-	set := hc.insts[hc.c.RootServiceID].Variables["KEEL_HA_REPLSET"]
+	rootVars := hc.insts[hc.c.RootServiceID].Variables
+	set := rootVars["AVEN_HA_REPLSET"]
+	if set == "" {
+		set = rootVars["KEEL_HA_REPLSET"]
+		if set != "" {
+			compat.WarnOnce("var:KEEL_HA_REPLSET", "KEEL_HA_REPLSET is set; AVEN_HA_REPLSET is the new name (the old name still works)")
+		}
+	}
 	if set == "" {
 		set = "rs0"
 	}

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/selfhost"
 )
 
@@ -33,7 +34,9 @@ func (s *Server) serverConfigView() (*serverConfigView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &serverConfigView{File: f.Path, Writable: selfhost.Writable(f.Path), Entries: f.Entries(os.LookupEnv), Server: s.selfInfo()}
+	v := &serverConfigView{File: f.Path, Writable: selfhost.Writable(f.Path), Entries: f.Entries(func(key string) (string, bool) {
+		return compat.LookupEither(os.LookupEnv, key)
+	}), Server: s.selfInfo()}
 	for _, e := range v.Entries {
 		if e.Pending {
 			v.Pending++

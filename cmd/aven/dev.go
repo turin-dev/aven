@@ -296,11 +296,23 @@ func closeDevPorts(listeners []net.Listener) {
 	}
 }
 
+// addDevHost는 host와, 같은 이름의 .keel.internal / .aven.internal 짝을 같은 대상으로 넣는다.
+func addDevHost(m map[string]devHostTarget, host string, t devHostTarget) {
+	host = strings.ToLower(host)
+	m[host] = t
+	switch {
+	case strings.HasSuffix(host, ".aven.internal"):
+		m[strings.TrimSuffix(host, ".aven.internal")+".keel.internal"] = t
+	case strings.HasSuffix(host, ".keel.internal"):
+		m[strings.TrimSuffix(host, ".keel.internal")+".aven.internal"] = t
+	}
+}
+
 func devPrivateDomain(s *devService, environment string) string {
 	if host := strings.TrimSpace(s.instance.PrivateDomain); host != "" {
 		return host
 	}
-	return s.service.Name + "." + environment + ".keel.internal"
+	return s.service.Name + "." + environment + ".aven.internal"
 }
 
 // devHostTarget은 사설 호스트를 바꿀 대상이다. host:<from>은 host:<to>가 되고, 다른 포트는 그대로 둔다.
@@ -340,9 +352,10 @@ func devRewrites(services []*devService, environment string) (local, container m
 	local, container = map[string]devHostTarget{}, map[string]devHostTarget{}
 	for _, s := range services {
 		host := strings.ToLower(devPrivateDomain(s, environment))
-		local[host] = devHostTarget{host: "localhost", fromPort: s.containerPort, toPort: s.localPort}
+		localTarget := devHostTarget{host: "localhost", fromPort: s.containerPort, toPort: s.localPort}
+		addDevHost(local, host, localTarget)
 		if !s.container() {
-			container[host] = devHostTarget{host: "host.docker.internal", fromPort: s.containerPort, toPort: s.localPort}
+			addDevHost(container, host, devHostTarget{host: "host.docker.internal", fromPort: s.containerPort, toPort: s.localPort})
 		}
 	}
 	return local, container
@@ -509,7 +522,7 @@ func cmdDev(c *config, args []string) {
 	}
 	network := ""
 	if docker != "" {
-		network = fmt.Sprintf("keel-dev-%s-%d", devSlug(l.Environment), os.Getpid())
+		network = fmt.Sprintf("aven-dev-%s-%d", devSlug(l.Environment), os.Getpid())
 	}
 	plan, err := devProcessPlan(linkedDir(c), &l, services, docker, network)
 	if err != nil {

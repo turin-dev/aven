@@ -9,13 +9,17 @@ import (
 	"net/netip"
 	"strings"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/netcheck"
 )
 
 // GatewayHeader는 신뢰하는 gateway(Traefik middleware가 붙임)가 모든 요청에 넣는 비밀 헤더다.
 // dokploy-network의 다른 컨테이너는 gateway에 직접 붙어 X-Forwarded-*를 위조할 수 있으므로,
 // unix socket listener도 이 헤더가 맞을 때만 전달 헤더를 믿는다. 검사 후에는 지운다.
-const GatewayHeader = "X-Keel-Gateway"
+const (
+	GatewayHeader       = "X-Aven-Gateway"
+	LegacyGatewayHeader = "X-Keel-Gateway"
+)
 
 // 전달(proxy) 헤더. 신뢰할 수 없는 요청에서는 전부 지운다.
 var forwardHeaders = []string{"X-Forwarded-Proto", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Port", "X-Forwarded-Server", "X-Real-Ip", "Forwarded", "Cf-Connecting-Ip", "True-Client-Ip"}
@@ -27,6 +31,7 @@ type trustedListenerKey struct{}
 func ViaTrustedProxy(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del(GatewayHeader)
+		r.Header.Del(LegacyGatewayHeader)
 		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), trustedListenerKey{}, true)))
 	})
 }
@@ -39,9 +44,16 @@ func ViaGateway(secret string, h http.Handler) http.Handler {
 	}
 	want := sha256.Sum256([]byte(secret))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := sha256.Sum256([]byte(r.Header.Get(GatewayHeader)))
+		next := sha256.Sum256([]byte(r.Header.Get(GatewayHeader)))
+		prev := sha256.Sum256([]byte(r.Header.Get(LegacyGatewayHeader)))
 		r.Header.Del(GatewayHeader)
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		r.Header.Del(LegacyGatewayHeader)
+		okNext := subtle.ConstantTimeCompare(next[:], want[:]) == 1
+		okPrev := subtle.ConstantTimeCompare(prev[:], want[:]) == 1
+		if !okNext && okPrev {
+			compat.NoteLegacyResource("gateway-header", "header "+LegacyGatewayHeader, "header "+GatewayHeader)
+		}
+		if !okNext && !okPrev {
 			for _, k := range forwardHeaders {
 				r.Header.Del(k)
 			}

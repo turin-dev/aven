@@ -19,7 +19,7 @@
       "volumes": [{ "mount_path": "/var/lib/ghost/content" }],
       "domains": [{ "generate": true }],
       "variables": {
-        "url": "https://${{KEEL_PUBLIC_DOMAIN}}",
+        "url": "https://${{AVEN_PUBLIC_DOMAIN}}",
         "database__client": "mysql",
         "database__connection__host": "${{mysql.MYSQLHOST}}",
         "database__connection__port": "${{mysql.MYSQLPORT}}",

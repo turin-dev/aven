@@ -143,8 +143,9 @@ func TestDevProcessPlanKeepsSecretsOutOfDockerArgs(t *testing.T) {
 	}
 	args := strings.Join(plan[0].args, " ")
 	for _, want := range []string{
-		"-e POSTGRES_PASSWORD ", "127.0.0.1:15432:5432/tcp", "source=keel-dev-vol-data,target=/var/lib/postgresql/data",
-		"--network keel-dev-development-1", "--network-alias postgres.development.keel.internal", "--network-alias postgres ",
+		"-e POSTGRES_PASSWORD ", "127.0.0.1:15432:5432/tcp", "source=aven-dev-vol-data,target=/var/lib/postgresql/data",
+		"--network keel-dev-development-1", "--network-alias postgres.development.aven.internal", "--network-alias postgres.development.keel.internal", "--network-alias postgres ",
+		"--label aven.dev.project=prj_1", "--label aven.dev.environment=env_1", "--label aven.dev.service=svc_db",
 		"--label keel.dev.project=prj_1", "--label keel.dev.environment=env_1", "--label keel.dev.service=svc_db",
 		"--entrypoint /bin/sh", "postgres:17-alpine -c postgres -c log_statement=all", "-e DOCKER_HOST_HINT=x",
 	} {
@@ -167,7 +168,7 @@ func TestDevProcessPlanKeepsSecretsOutOfDockerArgs(t *testing.T) {
 	if _, ok := env["DOCKER_HOST_HINT"]; ok && os.Getenv("DOCKER_HOST_HINT") == "" {
 		t.Fatalf("DOCKER_* variable leaked into the docker CLI environment")
 	}
-	if got := plan[0].volumes; len(got) != 1 || got[0] != "keel-dev-vol-data" {
+	if got := plan[0].volumes; len(got) != 1 || got[0] != "aven-dev-vol-data" {
 		t.Fatalf("volumes=%v", got)
 	}
 	var out strings.Builder

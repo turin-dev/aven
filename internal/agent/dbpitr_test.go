@@ -19,7 +19,7 @@ func TestPITRWALMountsDataVolumeReadOnly(t *testing.T) {
 	}
 	s := f.gotSpec
 	if len(s.Mounts) != 1 || !s.Mounts[0].ReadOnly || s.Mounts[0].Volume != "keel-vol-abcdefgh" ||
-		s.Env["PITR_DIR"] != "/var/lib/postgresql/data/keel-pitr/wal" || !strings.Contains(s.Cmd[1], "KEELPITR") {
+		s.Env["PITR_DIR"] != "/var/lib/postgresql/data/aven-pitr/wal" || !strings.Contains(s.Cmd[1], "AVENPITR") || !strings.Contains(s.Cmd[1], "keel-pitr/wal") {
 		t.Fatalf("spec: %+v", s)
 	}
 }
@@ -101,7 +101,7 @@ func TestPITRRestorePostgresNeedsStoppedVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := f.gotSpec
-	if s.Name != "keel-dbr-abc123def" || len(s.Mounts) != 1 || s.Mounts[0].ReadOnly || s.Env["PITR_TARGET"] != "2026-10-18 10:00:00+00" ||
+	if s.Name != "aven-dbr-abc123def" || len(s.Mounts) != 1 || s.Mounts[0].ReadOnly || s.Env["PITR_TARGET"] != "2026-10-18 10:00:00+00" ||
 		s.Env["PITR_ARCHIVE"] != "off" || !strings.Contains(s.Cmd[1], "recovery.signal") || string(f.stdin) != "tar" {
 		t.Fatalf("spec: %+v", s)
 	}

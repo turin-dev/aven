@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --public-url https://aven.example.com
 #
-# First run: installs aven-server, the CLI, agent/CLI downloads and Railpack, writes /etc/keel/aven.env
+# First run: installs aven-server, the CLI, agent/CLI downloads and Railpack, writes /etc/aven/aven.env
 # with a generated admin password, installs the systemd unit and starts it.
 # Later runs: upgrade in place. The env file is kept, the database is copied to $DATA/backups first,
 # and the previous binary is kept as /usr/local/bin/aven-server.prev. Running containers keep running.
@@ -12,7 +12,7 @@
 #   --public-url URL       dashboard URL, https:// (first install; prompted on a terminal)
 #   --base-domain DOMAIN   wildcard domain for service hostnames (default: parent of the public URL host)
 #   --acme-email EMAIL     contact email for Let's Encrypt (optional)
-#   --admin-password PW    password for admin@local (default: generated; or env KEEL_ADMIN_PASSWORD)
+#   --admin-password PW    password for admin@local (default: generated; or env AVEN_ADMIN_PASSWORD, else KEEL_ADMIN_PASSWORD)
 #   --version TAG          release to install, e.g. v0.1.0 (default: latest)
 #   --from-dir DIR         install from a local checkout built with 'make all' instead of a release
 #   --railpack-version V   Railpack release to install if railpack is missing (default: v0.42.0)
@@ -23,20 +23,24 @@
 #
 # Environment: GITHUB_TOKEN, when set, is sent with GitHub requests (API rate limits). AVEN_REPO overrides the
 # owner/repo to download releases from (forks).
-# Runtime names keep the "keel" prefix for compatibility: KEEL_* settings, /etc/keel, /var/lib/keel.
+# Existing installs may still have /etc/keel/aven.env, /var/lib/keel and KEEL_* settings.
+# Those are used when the new paths are absent. AVEN_* is written for a new install.
 set -eu
 
 REPO=${AVEN_REPO:-turin-dev/aven}
-CONF_DIR=/etc/keel
+CONF_DIR=/etc/aven
 ENV_FILE=$CONF_DIR/aven.env
 BIN_DIR=/usr/local/bin
-LIB_DIR=/usr/local/lib/keel
+LIB_DIR=/usr/local/lib/aven
 UNIT=/etc/systemd/system/aven-server.service
 
 PUBLIC_URL=""
 BASE_DOMAIN=""
 ACME_EMAIL=""
-ADMIN_PASSWORD="${KEEL_ADMIN_PASSWORD:-}"
+ADMIN_PASSWORD="${AVEN_ADMIN_PASSWORD:-${KEEL_ADMIN_PASSWORD:-}}"
+if [ -z "${AVEN_ADMIN_PASSWORD:-}" ] && [ -n "${KEEL_ADMIN_PASSWORD:-}" ]; then
+	warn "KEEL_ADMIN_PASSWORD is set; AVEN_ADMIN_PASSWORD is the new name (the old name still works)"
+fi
 VERSION=latest
 FROM_DIR=""
 RAILPACK_VERSION=v0.42.0
@@ -109,6 +113,18 @@ if systemctl is-active --quiet keel-server 2>/dev/null; then
 	die "keel-server.service is running. Switch it to aven-server first (README: 'Upgrading from Keel'); do not run both on the same data directory"
 fi
 
+# 새 경로가 없으면 예전 설치의 env 파일을 그대로 쓴다.
+if [ ! -f "$ENV_FILE" ]; then
+	for old in /etc/keel/aven.env /etc/keel/keel.env; do
+		if [ -f "$old" ]; then
+			ENV_FILE=$old
+			CONF_DIR=$(dirname "$old")
+			warn "$old is in use; /etc/aven/aven.env is the new path (the old file still works)"
+			break
+		fi
+	done
+fi
+
 UPGRADE=0
 [ -f "$ENV_FILE" ] && UPGRADE=1
 
@@ -157,7 +173,7 @@ if [ "$UPGRADE" -eq 0 ]; then
 	if command -v ss >/dev/null 2>&1; then
 		for p in 80 443; do
 			if ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then
-				warn "port $p is already in use; Aven's proxy needs 80/443 (or set KEEL_PROXY_BIND / KEEL_HTTP_PORT / KEEL_HTTPS_PORT, see the guide)"
+				warn "port $p is already in use; Aven's proxy needs 80/443 (or set AVEN_PROXY_BIND / AVEN_HTTP_PORT / AVEN_HTTPS_PORT; KEEL_* still works)"
 			fi
 		done
 	fi
@@ -210,24 +226,43 @@ done
 
 # ---- upgrade: stop and back up ----
 
-DATA=/var/lib/keel
+env_get() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -n1; }
+DATA=/var/lib/aven
 if [ "$UPGRADE" -eq 1 ]; then
-	d=$(sed -n 's/^KEEL_DATA=//p' "$ENV_FILE" | tail -n1)
+	d=$(env_get AVEN_DATA)
+	if [ -z "$d" ]; then
+		d=$(env_get KEEL_DATA)
+		[ -n "$d" ] && warn "KEEL_DATA is set; AVEN_DATA is the new name (the old name still works)"
+	fi
 	[ -n "$d" ] && DATA=$d
+	lib=$(env_get AVEN_AGENT_BIN_DIR)
+	if [ -z "$lib" ]; then
+		lib=$(env_get KEEL_AGENT_BIN_DIR)
+		[ -n "$lib" ] && warn "KEEL_AGENT_BIN_DIR is set; AVEN_AGENT_BIN_DIR is the new name (the old name still works)"
+	fi
+	[ -n "$lib" ] && LIB_DIR=$lib
 	say "upgrading to $VERSION (keeping $ENV_FILE)"
 	if systemctl is-active --quiet aven-server; then
 		systemctl stop aven-server # containers keep running (KillMode=process)
 	fi
-	if [ -f "$DATA/keel.db" ]; then
-		mkdir -p "$DATA/backups"
-		b="$DATA/backups/keel-pre-upgrade-$(date +%Y%m%d-%H%M%S).db"
-		cp -p "$DATA/keel.db" "$b"
-		for x in wal shm; do [ -f "$DATA/keel.db-$x" ] && cp -p "$DATA/keel.db-$x" "$b-$x"; done
-		say "database backup: $b"
-	fi
+	for dbname in aven.db keel.db; do
+		if [ -f "$DATA/$dbname" ]; then
+			mkdir -p "$DATA/backups"
+			b="$DATA/backups/${dbname%.db}-pre-upgrade-$(date +%Y%m%d-%H%M%S).db"
+			cp -p "$DATA/$dbname" "$b"
+			for x in wal shm; do [ -f "$DATA/$dbname-$x" ] && cp -p "$DATA/$dbname-$x" "$b-$x"; done
+			say "database backup: $b"
+		fi
+	done
 	[ -f "$BIN_DIR/aven-server" ] && cp -p "$BIN_DIR/aven-server" "$BIN_DIR/aven-server.prev"
 else
 	say "installing $VERSION"
+	if [ -d /var/lib/keel ] && [ ! -e /var/lib/aven/aven.db ] && [ ! -e /var/lib/aven/keel.db ]; then
+		if [ -f /var/lib/keel/keel.db ] || [ -f /var/lib/keel/aven.db ]; then
+			DATA=/var/lib/keel
+			warn "/var/lib/keel is in use; /var/lib/aven is the new path (the old directory still works)"
+		fi
+	fi
 fi
 
 # ---- install ----
@@ -239,6 +274,9 @@ for f in "$PKG"/lib/*; do
 	[ -f "$f" ] && install -m 0755 "$f" "$LIB_DIR/"
 done
 install -m 0644 "$PKG/aven-server.service" "$UNIT"
+if [ "$ENV_FILE" != /etc/aven/aven.env ]; then
+	sed -i "s|^EnvironmentFile=.*|EnvironmentFile=$ENV_FILE|" "$UNIT"
+fi
 install -d -m 0700 "$CONF_DIR"
 install -m 0600 "$PKG/aven.env.example" "$CONF_DIR/aven.env.example"
 say "installed $BIN_DIR/aven-server, $BIN_DIR/aven and downloads in $LIB_DIR"
@@ -267,21 +305,21 @@ if [ "$UPGRADE" -eq 0 ]; then
 	cat > "$ENV_FILE.new" <<EOF
 # Aven server settings (root, 0600). Every option is described in $CONF_DIR/aven.env.example
 # and docs/self-hosting.md. Restart after changes: systemctl restart aven-server
-KEEL_DATA=$DATA
-KEEL_LISTEN=127.0.0.1:7070
-KEEL_PUBLIC_URL=$PUBLIC_URL
-KEEL_BASE_DOMAIN=$BASE_DOMAIN
-KEEL_TLS=auto
-KEEL_HTTP_PORT=80
-KEEL_HTTPS_PORT=443
-KEEL_ACME_EMAIL=$ACME_EMAIL
+AVEN_DATA=$DATA
+AVEN_LISTEN=127.0.0.1:7070
+AVEN_PUBLIC_URL=$PUBLIC_URL
+AVEN_BASE_DOMAIN=$BASE_DOMAIN
+AVEN_TLS=auto
+AVEN_HTTP_PORT=80
+AVEN_HTTPS_PORT=443
+AVEN_ACME_EMAIL=$ACME_EMAIL
 # Password for the built-in owner account admin@local (at least 8 characters, needed on every start).
-KEEL_ADMIN_PASSWORD=$ADMIN_PASSWORD
+AVEN_ADMIN_PASSWORD=$ADMIN_PASSWORD
 # GitHub OAuth App (callback: $PUBLIC_URL/api/github/oauth/callback). Optional.
-KEEL_GITHUB_CLIENT_ID=
-KEEL_GITHUB_CLIENT_SECRET=
-KEEL_GITHUB_WEBHOOK_SECRET=$(rand 64)
-KEEL_AGENT_BIN_DIR=$LIB_DIR
+AVEN_GITHUB_CLIENT_ID=
+AVEN_GITHUB_CLIENT_SECRET=
+AVEN_GITHUB_WEBHOOK_SECRET=$(rand 64)
+AVEN_AGENT_BIN_DIR=$LIB_DIR
 EOF
 	mv -f "$ENV_FILE.new" "$ENV_FILE"
 	chmod 600 "$ENV_FILE"
@@ -295,7 +333,8 @@ if [ "$START" -eq 0 ]; then
 fi
 systemctl enable --now aven-server >/dev/null 2>&1 || systemctl enable --now aven-server
 
-LISTEN=$(sed -n 's/^KEEL_LISTEN=//p' "$ENV_FILE" | tail -n1)
+LISTEN=$(env_get AVEN_LISTEN)
+[ -n "$LISTEN" ] || LISTEN=$(env_get KEEL_LISTEN)
 [ -n "$LISTEN" ] || LISTEN='[::1]:7070'
 case "$LISTEN" in :*) LISTEN="127.0.0.1$LISTEN" ;; 0.0.0.0:*) LISTEN="127.0.0.1:${LISTEN##*:}" ;; \[::\]:*) LISTEN="[::1]:${LISTEN##*:}" ;; esac
 say "waiting for aven-server on $LISTEN"
@@ -309,11 +348,13 @@ until curl -fsS -o /dev/null "http://$LISTEN/api/cli/downloads" 2>/dev/null; do
 	sleep 1
 done
 
-URL=$(sed -n 's/^KEEL_PUBLIC_URL=//p' "$ENV_FILE" | tail -n1)
+URL=$(env_get AVEN_PUBLIC_URL)
+[ -n "$URL" ] || URL=$(env_get KEEL_PUBLIC_URL)
 echo
 say "aven-server $VERSION is running"
 if [ "$UPGRADE" -eq 0 ]; then
-	BD=$(sed -n 's/^KEEL_BASE_DOMAIN=//p' "$ENV_FILE" | tail -n1)
+	BD=$(env_get AVEN_BASE_DOMAIN)
+	[ -n "$BD" ] || BD=$(env_get KEEL_BASE_DOMAIN)
 	host=${URL#https://}; host=${host%%/*}; host=${host%%:*}
 	cat <<EOF
 
@@ -322,9 +363,9 @@ if [ "$UPGRADE" -eq 0 ]; then
 EOF
 	if [ -n "$GENERATED" ]; then
 		echo "  Password:   $ADMIN_PASSWORD"
-		echo "              (generated; also in $ENV_FILE as KEEL_ADMIN_PASSWORD)"
+		echo "              (generated; also in $ENV_FILE as AVEN_ADMIN_PASSWORD)"
 	else
-		echo "  Password:   the one you passed (KEEL_ADMIN_PASSWORD in $ENV_FILE)"
+		echo "  Password:   the one you passed (AVEN_ADMIN_PASSWORD in $ENV_FILE)"
 	fi
 	cat <<EOF
 

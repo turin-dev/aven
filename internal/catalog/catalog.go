@@ -26,7 +26,7 @@ type ServiceDef struct {
 	PreDeployCommand string
 	Volumes          []string // mount paths
 	Variables        map[string]string
-	Domain           bool // generated domain을 만든다(KEEL_BASE_DOMAIN이 있을 때)
+	Domain           bool // generated domain을 만든다(AVEN_BASE_DOMAIN이 있을 때)
 	// 아래는 템플릿 정의(JSON)에서 오는 추가 설정이다.
 	Domains      []DomainDef    // generated domain(대상 포트 지정 가능)
 	VolumeLimits map[string]int // mount path → size_limit_mb
@@ -54,7 +54,7 @@ type DatabaseDef struct {
 	Variables func(password string) map[string]string
 	// HealthcheckPath가 있으면 http healthcheck를 쓴다(없으면 tcp).
 	HealthcheckPath string
-	// Domain이면 generated domain을 만든다(KEEL_BASE_DOMAIN이 있을 때, 예: bucket의 공개 S3 endpoint).
+	// Domain이면 generated domain을 만든다(AVEN_BASE_DOMAIN이 있을 때, 예: bucket의 공개 S3 endpoint).
 	Domain bool
 }
 
@@ -65,15 +65,15 @@ var Databases = map[string]DatabaseDef{
 			return map[string]string{
 				"POSTGRES_USER":       "postgres",
 				"POSTGRES_PASSWORD":   pw,
-				"POSTGRES_DB":         "keel",
+				"POSTGRES_DB":         "aven",
 				"PGDATA":              "/var/lib/postgresql/data/pgdata",
 				"PGUSER":              "${{POSTGRES_USER}}",
 				"PGPASSWORD":          "${{POSTGRES_PASSWORD}}",
 				"PGDATABASE":          "${{POSTGRES_DB}}",
-				"PGHOST":              "${{KEEL_PRIVATE_DOMAIN}}",
+				"PGHOST":              "${{AVEN_PRIVATE_DOMAIN}}",
 				"PGPORT":              "5432",
 				"DATABASE_URL":        "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{PGHOST}}:${{PGPORT}}/${{PGDATABASE}}",
-				"DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{PGDATABASE}}",
+				"DATABASE_PUBLIC_URL": "postgresql://${{PGUSER}}:${{PGPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{PGDATABASE}}",
 			}
 		},
 	},
@@ -82,14 +82,14 @@ var Databases = map[string]DatabaseDef{
 		Variables: func(pw string) map[string]string {
 			return map[string]string{
 				"MYSQL_ROOT_PASSWORD": pw,
-				"MYSQL_DATABASE":      "keel",
+				"MYSQL_DATABASE":      "aven",
 				"MYSQLUSER":           "root",
 				"MYSQLPASSWORD":       "${{MYSQL_ROOT_PASSWORD}}",
 				"MYSQLDATABASE":       "${{MYSQL_DATABASE}}",
-				"MYSQLHOST":           "${{KEEL_PRIVATE_DOMAIN}}",
+				"MYSQLHOST":           "${{AVEN_PRIVATE_DOMAIN}}",
 				"MYSQLPORT":           "3306",
 				"MYSQL_URL":           "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{MYSQLHOST}}:${{MYSQLPORT}}/${{MYSQLDATABASE}}",
-				"MYSQL_PUBLIC_URL":    "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+				"MYSQL_PUBLIC_URL":    "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
 			}
 		},
 	},
@@ -101,10 +101,10 @@ var Databases = map[string]DatabaseDef{
 				"REDIS_PASSWORD":   pw,
 				"REDISUSER":        "default",
 				"REDISPASSWORD":    "${{REDIS_PASSWORD}}",
-				"REDISHOST":        "${{KEEL_PRIVATE_DOMAIN}}",
+				"REDISHOST":        "${{AVEN_PRIVATE_DOMAIN}}",
 				"REDISPORT":        "6379",
 				"REDIS_URL":        "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{REDISHOST}}:${{REDISPORT}}",
-				"REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+				"REDIS_PUBLIC_URL": "redis://${{REDISUSER}}:${{REDISPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}",
 			}
 		},
 	},
@@ -116,10 +116,10 @@ var Databases = map[string]DatabaseDef{
 				"MONGO_INITDB_ROOT_PASSWORD": pw,
 				"MONGOUSER":                  "${{MONGO_INITDB_ROOT_USERNAME}}",
 				"MONGOPASSWORD":              "${{MONGO_INITDB_ROOT_PASSWORD}}",
-				"MONGOHOST":                  "${{KEEL_PRIVATE_DOMAIN}}",
+				"MONGOHOST":                  "${{AVEN_PRIVATE_DOMAIN}}",
 				"MONGOPORT":                  "27017",
 				"MONGO_URL":                  "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{MONGOHOST}}:${{MONGOPORT}}",
-				"MONGO_PUBLIC_URL":           "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{KEEL_TCP_PROXY_DOMAIN}}:${{KEEL_TCP_PROXY_PORT}}",
+				"MONGO_PUBLIC_URL":           "mongodb://${{MONGOUSER}}:${{MONGOPASSWORD}}@${{AVEN_TCP_PROXY_DOMAIN}}:${{AVEN_TCP_PROXY_PORT}}",
 			}
 		},
 	},

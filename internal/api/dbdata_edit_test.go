@@ -110,9 +110,9 @@ func TestDataRowEditMySQL(t *testing.T) {
 		t.Fatalf("%d %v", code, out)
 	}
 	req := df.run.last()
-	tag := envOf(req, "KEEL_DATA_TAG")
-	want := dbquery.MySQLSessionPrelude + "/* keel-data:" + tag + " */\nUPDATE `shop`.`t` SET `c` = '\\\\''' WHERE `a` = '1' AND `b` = 'x' LIMIT 1;\nSELECT ROW_COUNT() AS affected;\n"
-	if tag == "" || string(req.Stdin) != want {
+	tag := envOf(req, "AVEN_DATA_TAG")
+	want := dbquery.MySQLSessionPrelude + "/* aven-data:" + tag + " */\nUPDATE `shop`.`t` SET `c` = '\\\\''' WHERE `a` = '1' AND `b` = 'x' LIMIT 1;\nSELECT ROW_COUNT() AS affected;\n"
+	if tag == "" || envOf(req, "KEEL_DATA_TAG") != tag || string(req.Stdin) != want {
 		t.Errorf("mysql sql %q", req.Stdin)
 	}
 	if code, _ := df.call(df.srv.dataRowUpdate, "PATCH", "/x", `{"pk":{"a":1},"set":{"c":"y"}}`, pv); code != 400 {
@@ -136,13 +136,13 @@ func TestDataTimeoutCleanupPostgres(t *testing.T) {
 	if code != 504 || len(df.run.reqs) != 2 {
 		t.Fatalf("%d reqs=%d", code, len(df.run.reqs))
 	}
-	tag := envOf(df.run.reqs[0], "KEEL_DATA_TAG")
-	if envOf(df.run.reqs[0], "PGAPPNAME") != "keel-data-"+tag {
+	tag := envOf(df.run.reqs[0], "AVEN_DATA_TAG")
+	if envOf(df.run.reqs[0], "KEEL_DATA_TAG") != tag || envOf(df.run.reqs[0], "PGAPPNAME") != "aven-data-"+tag {
 		t.Errorf("appname %v", df.run.reqs[0].Env)
 	}
 	cl := df.run.reqs[1]
-	if envOf(cl, "KILL_TAG") != tag || envOf(cl, "KEEL_DATA_TAG") != "" || !strings.Contains(cl.Cmd[2], "kill -TERM") ||
-		!strings.Contains(string(cl.Stdin), "application_name = 'keel-data-"+tag+"'") || !strings.Contains(string(cl.Stdin), "pg_cancel_backend") {
+	if envOf(cl, "KILL_TAG") != tag || envOf(cl, "KEEL_DATA_TAG") != "" || envOf(cl, "AVEN_DATA_TAG") != "" || !strings.Contains(cl.Cmd[2], "kill -TERM") ||
+		!strings.Contains(string(cl.Stdin), "application_name IN ('aven-data-"+tag+"', 'keel-data-"+tag+"')") || !strings.Contains(string(cl.Stdin), "pg_cancel_backend") {
 		t.Errorf("cleanup %+v %q", cl.Env, cl.Stdin)
 	}
 	if df.run.nodes[1] != "nod_remote1" || df.run.conts[1] != "keel-postgres-1" {
@@ -168,11 +168,11 @@ func TestDataTimeoutKillQueryMySQL(t *testing.T) {
 	if code != 504 || len(df.run.reqs) != 3 {
 		t.Fatalf("%d reqs=%d", code, len(df.run.reqs))
 	}
-	tag := envOf(df.run.reqs[0], "KEEL_DATA_TAG")
-	if !strings.HasPrefix(string(df.run.reqs[0].Stdin), "/* keel-data:"+tag+" */\n") {
+	tag := envOf(df.run.reqs[0], "AVEN_DATA_TAG")
+	if envOf(df.run.reqs[0], "KEEL_DATA_TAG") != tag || !strings.HasPrefix(string(df.run.reqs[0].Stdin), "/* aven-data:"+tag+" */\n") {
 		t.Errorf("query not tagged %q", df.run.reqs[0].Stdin)
 	}
-	if !strings.Contains(string(df.run.reqs[1].Stdin), "LIKE '%keel-data:"+tag+"%'") || envOf(df.run.reqs[1], "KILL_TAG") != tag {
+	if !strings.Contains(string(df.run.reqs[1].Stdin), "LIKE '%aven-data:"+tag+"%'") || !strings.Contains(string(df.run.reqs[1].Stdin), "LIKE '%keel-data:"+tag+"%'") || envOf(df.run.reqs[1], "KILL_TAG") != tag {
 		t.Errorf("find %q", df.run.reqs[1].Stdin)
 	}
 	if string(df.run.reqs[2].Stdin) != "KILL QUERY 55;\n" {

@@ -123,6 +123,7 @@ type haCluster struct {
 	Kind         string `json:"kind"`
 	Status       string `json:"status"`
 	AutoFailover bool   `json:"auto_failover"`
+	AvenFailover bool   `json:"aven_failover"`
 	KeelFailover bool   `json:"keel_failover"`
 	Message      string `json:"message"`
 	Endpoint     *struct {
@@ -173,7 +174,7 @@ func formatHA(svc, env string, st *haStatus) string {
 	if cl.AutoFailover {
 		auto = "on"
 	}
-	if !cl.KeelFailover {
+	if !cl.AvenFailover && !cl.KeelFailover {
 		auto = "by " + map[string]string{"redis": "Sentinel", "mongo": "replica set election"}[cl.Kind]
 	}
 	fmt.Fprintf(&b, "%s (%s): %s HA cluster, %s, automatic failover %s\n", svc, env, cl.Kind, cl.Status, auto)

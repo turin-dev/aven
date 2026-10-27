@@ -303,7 +303,7 @@ function FeatureFlagDialog({ pid, environment, flag, onClose }: { pid: ID; envir
 
 const SDK_SNIPPET = `import { flags } from "aven-flags";
 
-await flags.init(); // KEEL_URL, KEEL_TOKEN(프로젝트·환경 토큰)
+await flags.init(); // AVEN_URL, AVEN_TOKEN(프로젝트·환경 토큰)
 const on = flags.getBoolean("checkout-v2", { key: userId, plan: user.plan }, false);`;
 
 export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin }: {
@@ -420,7 +420,7 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
       </Card>
       <Card
         title={t("앱에서 읽기")}
-        description={t("SDK는 플래그를 메모리에 두고 백그라운드에서 갱신하므로 읽기가 즉시 끝납니다. 토큰은 계정 → API 토큰에서 프로젝트 또는 환경 범위(viewer면 충분)로 만들고, 서비스 변수 KEEL_URL·KEEL_TOKEN으로 넣으세요. 환경은 배포에 주입되는 KEEL_ENVIRONMENT_ID를 따릅니다.")}
+        description={t("SDK는 플래그를 메모리에 두고 백그라운드에서 갱신하므로 읽기가 즉시 끝납니다. 토큰은 계정 → API 토큰에서 프로젝트 또는 환경 범위(viewer면 충분)로 만들고, 서비스 변수 AVEN_URL·AVEN_TOKEN으로 넣으세요. 환경은 배포에 주입되는 AVEN_ENVIRONMENT_ID를 따릅니다.")}
         action={<CopyButton value={SDK_SNIPPET} />}
       >
         <pre className="overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-4 font-mono text-xs leading-5 text-gray-700">{SDK_SNIPPET}</pre>

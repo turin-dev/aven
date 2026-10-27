@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/edge"
 )
 
@@ -23,7 +24,7 @@ import (
 const (
 	EdgeSocket       = WakeDir + "/edge.sock"
 	EdgeOriginSocket = WakeDir + "/edge-origin.sock"
-	EdgeOriginServer = "keel-edge-origin"
+	EdgeOriginServer = "aven-edge-origin"
 )
 
 // EdgeSink는 Apply 때 호스트별 엣지 정책을 받는 쪽이다(edge.Engine).
@@ -58,7 +59,7 @@ func (h *hostCfg) edgeForward() map[string]any {
 	}
 	return map[string]any{
 		"handler":            "reverse_proxy",
-		"upstreams":          []map[string]any{{"dial": "unix/" + EdgeSocket}},
+		"upstreams":          []map[string]any{{"dial": "unix/" + h.socket("edge.sock")}},
 		"flush_interval":     -1,
 		"stream_close_delay": StreamCloseDelay,
 		"headers": map[string]any{"request": map[string]any{
@@ -78,11 +79,22 @@ func originHeaders() map[string]any {
 	}}
 }
 
-func originServer(routes []map[string]any) map[string]any {
+func (h *hostCfg) socket(name string) string {
+	dir := h.wakeDir
+	if dir == "" {
+		dir = WakeDir
+	}
+	return dir + "/" + name
+}
+
+func originServer(dir string, routes []map[string]any) map[string]any {
+	if dir == "" {
+		dir = WakeDir
+	}
 	routes = append(routes, map[string]any{"handle": []map[string]any{{"handler": "static_response", "status_code": 404, "body": "not found"}}, "terminal": true})
 	// access log는 남기지 않는다(같은 요청이 :443 서버에서 이미 기록된다).
 	return map[string]any{
-		"listen":          []string{"unix/" + EdgeOriginSocket},
+		"listen":          []string{"unix/" + dir + "/edge-origin.sock"},
 		"automatic_https": map[string]any{"disable": true},
 		"routes":          routes,
 	}
@@ -103,13 +115,13 @@ func (c *Caddy) StartEdge(ctx context.Context, hostDir string, log *slog.Logger)
 		l.Close()
 		return nil, err
 	}
-	mb := func(name string, def int) int64 {
-		if n, err := strconv.Atoi(os.Getenv(name)); err == nil && n > 0 {
+	mb := func(suffix string, def int) int64 {
+		if n, err := strconv.Atoi(compat.Env(suffix)); err == nil && n > 0 {
 			return int64(n) << 20
 		}
 		return int64(def) << 20
 	}
-	e := edge.NewEngine(edge.UnixTransport(origin), mb("KEEL_EDGE_CACHE_MB", 256), mb("KEEL_EDGE_CACHE_MAX_ITEM_MB", 32))
+	e := edge.NewEngine(edge.UnixTransport(origin), mb("EDGE_CACHE_MB", 256), mb("EDGE_CACHE_MAX_ITEM_MB", 32))
 	e.Log = log
 	srv := &http.Server{Handler: e, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go srv.Serve(l)

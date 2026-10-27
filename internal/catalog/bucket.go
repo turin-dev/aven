@@ -22,20 +22,20 @@ const (
 // 컨테이너 안(127.0.0.1)에서 쓰므로 로컬/원격 노드 모두 같다. 자격 증명은 환경변수(MC_HOST_*)로만 넘긴다(argv에 없음).
 // sh(PID 1)가 SIGTERM을 minio에 넘기고 minio의 종료 코드로 끝난다.
 const BucketStart = `minio server /data --console-address :9001 & p=$!; trap 'kill -TERM $p' TERM INT; ` +
-	`(i=0; until MC_CONFIG_DIR=/tmp/.mc MC_HOST_keel="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@127.0.0.1:9000" mc mb --ignore-existing "keel/$BUCKET" >/dev/null 2>&1; ` +
+	`(i=0; until MC_CONFIG_DIR=/tmp/.mc MC_HOST_aven="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@127.0.0.1:9000" mc mb --ignore-existing "aven/$BUCKET" >/dev/null 2>&1; ` +
 	`do i=$((i+1)); if [ $i -ge 60 ]; then echo "aven: bucket $BUCKET를 만들지 못했습니다" >&2; break; fi; sleep 1; done) & ` +
 	`wait $p; trap - TERM INT; wait $p`
 
 // bucketDerive는 비밀번호에서 label 용도의 값을 만든다(hex).
 func bucketDerive(pw, label string) string {
 	m := hmac.New(sha256.New, []byte(pw))
-	m.Write([]byte("keel-bucket:" + label))
+	m.Write([]byte("aven-bucket:" + label))
 	return hex.EncodeToString(m.Sum(nil))
 }
 
 // BucketAccessKey와 BucketName은 비밀번호에서 만든 access key ID와 bucket 이름이다.
 func BucketAccessKey(pw string) string {
-	return "KEEL" + strings.ToUpper(bucketDerive(pw, "access-key")[:16])
+	return "AVEN" + strings.ToUpper(bucketDerive(pw, "access-key")[:16])
 }
 func BucketName(pw string) string { return "bucket-" + bucketDerive(pw, "name")[:10] }
 
@@ -47,8 +47,8 @@ func BucketVariables(pw string) map[string]string {
 		"ACCESS_KEY_ID":         BucketAccessKey(pw),
 		"SECRET_ACCESS_KEY":     pw,
 		"REGION":                BucketRegion,
-		"ENDPOINT":              "http://${{KEEL_PRIVATE_DOMAIN}}:9000",
-		"PUBLIC_ENDPOINT":       "https://${{KEEL_PUBLIC_DOMAIN}}",
+		"ENDPOINT":              "http://${{AVEN_PRIVATE_DOMAIN}}:9000",
+		"PUBLIC_ENDPOINT":       "https://${{AVEN_PUBLIC_DOMAIN}}",
 		"MINIO_ROOT_USER":       "${{ACCESS_KEY_ID}}",
 		"MINIO_ROOT_PASSWORD":   "${{SECRET_ACCESS_KEY}}",
 		"MINIO_SITE_REGION":     "${{REGION}}",

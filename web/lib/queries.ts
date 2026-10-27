@@ -54,7 +54,7 @@ export const qk = {
   serverConfig: ["owner", "server-config"] as const,
   ownerSessions: ["owner", "sessions"] as const,
   ownerTokens: ["owner", "tokens"] as const,
-  keelBackups: ["owner", "backups"] as const,
+  avenBackups: ["owner", "backups"] as const,
   workspaceResources: (wsid: ID) => ["workspace-resources", wsid] as const,
   members: (pid: ID) => ["members", pid] as const,
   audit: ["audit"] as const,

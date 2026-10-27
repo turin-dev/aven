@@ -368,7 +368,7 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
 
       <div className="flex max-w-3xl items-start gap-2 text-xs text-gray-500">
         <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
-        {t("변수 값은 보존 표시(preserve)로 내보내고 계획에서도 가려집니다. sealed 변수는 값을 바꿀 수 없습니다. 서비스별 keel.json·railway.toml은 배포할 때 계속 이 설정 위에 적용됩니다.")}
+        {t("변수 값은 보존 표시(preserve)로 내보내고 계획에서도 가려집니다. sealed 변수는 값을 바꿀 수 없습니다. 서비스별 aven.json·keel.json·railway.toml은 배포할 때 계속 이 설정 위에 적용됩니다.")}
       </div>
 
       <Dialog

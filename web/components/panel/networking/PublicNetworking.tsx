@@ -97,7 +97,7 @@ export function PublicNetworking({ svc, env, inst, view }: { svc: CanvasService;
                     variant="accent"
                     onClick={() => setForm("generate")}
                     disabled={genDisabled}
-                    title={guard.generatedDomains ? t("작업 공간 정책으로 제한되어 있습니다") : sys.data && !baseDomain ? t("서버에 KEEL_BASE_DOMAIN이 설정되지 않았습니다") : undefined}
+                    title={guard.generatedDomains ? t("작업 공간 정책으로 제한되어 있습니다") : sys.data && !baseDomain ? t("서버에 AVEN_BASE_DOMAIN이 설정되지 않았습니다") : undefined}
                   >
                     <span className={ACCENT_ICON} aria-hidden="true">
                       <Zap />
@@ -123,7 +123,7 @@ export function PublicNetworking({ svc, env, inst, view }: { svc: CanvasService;
             </div>
           )}
           {form === null && !tcp.enabled && !tcp.available && tcp.reason && <p className="text-xs leading-[18px] text-gray-600">{t("TCP 프록시: {reason}", { reason: tcp.reason })}</p>}
-          {sys.data && !baseDomain && <p className="text-xs leading-[18px] text-gray-600">{t("서버에 KEEL_BASE_DOMAIN이 없어 도메인을 자동 생성할 수 없습니다. 사용자 지정 도메인은 쓸 수 있습니다.")}</p>}
+          {sys.data && !baseDomain && <p className="text-xs leading-[18px] text-gray-600">{t("서버에 AVEN_BASE_DOMAIN이 없어 도메인을 자동 생성할 수 없습니다. 사용자 지정 도메인은 쓸 수 있습니다.")}</p>}
           {error ? <ErrorBox error={error} /> : null}
           {confirmNode}
         </div>

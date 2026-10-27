@@ -77,8 +77,8 @@ export function NetworkDiagnostics({ sid, eid }: { sid: ID; eid: ID }) {
           <p className="text-sm text-gray-500">
             {t("실행 중인 replica 안에서 이름을 조회하고(getent/nslookup) TCP 연결을 시험합니다(nc/bash). 이미지에 도구가 없으면 “도구 없음”으로 표시됩니다.")}
           </p>
-          <Field label={t("호스트")} hint={t("사설 도메인(서비스.환경.keel.internal), 서비스 이름 또는 외부 호스트")}>
-            <Input mono value={host} onChange={(e) => setHost(e.target.value)} placeholder="postgres.production.keel.internal" autoFocus />
+          <Field label={t("호스트")} hint={t("사설 도메인(서비스.환경.aven.internal), 서비스 이름 또는 외부 호스트")}>
+            <Input mono value={host} onChange={(e) => setHost(e.target.value)} placeholder="postgres.production.aven.internal" autoFocus />
           </Field>
           <Field label={t("포트")} hint={t("비우면 DNS만 확인합니다")}>
             <Input type="number" min={1} max={65535} value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" invalid={!validPort} />

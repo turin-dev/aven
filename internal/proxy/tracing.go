@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-const TraceIDHeader = "X-Keel-Trace-Id"
+const TraceIDHeader = "X-Aven-Trace-Id"
 
 // traceHandlers는 trace 대상 라우트의 reverse_proxy 앞에 둘 handler다.
 //
@@ -30,7 +30,7 @@ func (c *Caddy) traceEnv() []string {
 	return []string{
 		"OTEL_EXPORTER_OTLP_ENDPOINT=" + c.cfg.OTLPEndpoint,
 		"OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf",
-		"OTEL_EXPORTER_OTLP_HEADERS=X-Keel-Trace-Token=" + c.cfg.TraceToken,
+		"OTEL_EXPORTER_OTLP_HEADERS=X-Aven-Trace-Token=" + c.cfg.TraceToken,
 	}
 }
 
@@ -40,7 +40,7 @@ func (c *Caddy) traceEnvMatches(ctx context.Context) bool {
 	if len(want) == 0 {
 		return true
 	}
-	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", ContainerName).CombinedOutput()
+	out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", c.Resolve(ctx).Container).CombinedOutput()
 	if err != nil {
 		return false
 	}
@@ -49,9 +49,14 @@ func (c *Caddy) traceEnvMatches(ctx context.Context) bool {
 		have[strings.TrimSpace(l)] = true
 	}
 	for _, kv := range want {
-		if !have[kv] {
-			return false
+		if have[kv] {
+			continue
 		}
+		legacy := strings.ReplaceAll(kv, "X-Aven-Trace-Token=", "X-Keel-Trace-Token=")
+		if legacy != kv && have[legacy] {
+			continue
+		}
+		return false
 	}
 	return true
 }
@@ -80,6 +85,6 @@ func (c *Caddy) applyUntraced(ctx context.Context, routes []Route, cause error) 
 	if err := c.do(ctx, http.MethodPost, "/load", body); err != nil {
 		return err
 	}
-	slog.Warn("edge tracing disabled: keel-proxy rejected the tracing handler (needs Caddy 2.11+; docker pull "+c.cfg.Image+" and restart aven-server)", "err", cause)
+	slog.Warn("edge tracing disabled: "+c.Resolve(ctx).Container+" rejected the tracing handler (needs Caddy 2.11+; docker pull "+c.cfg.Image+" and restart aven-server)", "err", cause)
 	return nil
 }

@@ -40,7 +40,7 @@ func TestBuildTracedRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	byHost := map[string]string{}
-	for _, r := range cfg.Apps.HTTP.Servers["keel"].Routes {
+	for _, r := range cfg.Apps.HTTP.Servers["aven"].Routes {
 		h, _ := json.Marshal(r.Handle)
 		m, _ := json.Marshal(r.Match)
 		for _, host := range []string{"traced", "plain", "paths"} {
@@ -70,13 +70,13 @@ func TestTraceEnv(t *testing.T) {
 		t.Errorf("no tracing config: %v", env)
 	}
 	env := New(Config{OTLPEndpoint: "http://host.docker.internal:4318", TraceToken: "tok"}).traceEnv()
-	if len(env) != 3 || env[2] != "OTEL_EXPORTER_OTLP_HEADERS=X-Keel-Trace-Token=tok" {
+	if len(env) != 3 || env[2] != "OTEL_EXPORTER_OTLP_HEADERS=X-Aven-Trace-Token=tok" {
 		t.Errorf("trace env: %v", env)
 	}
 }
 
 func TestParseAccessLogTraceID(t *testing.T) {
-	line := `{"level":"info","ts":1700000000.5,"logger":"http.log.access.keel","msg":"handled request","request":{"remote_ip":"1.2.3.4","method":"GET","host":"a.example.com","uri":"/x","headers":{}},"duration":0.01,"size":5,"status":200,"traceID":"4bf92f3577b34da6a3ce929d0e0e4736"}`
+	line := `{"level":"info","ts":1700000000.5,"logger":"http.log.access.aven","msg":"handled request","request":{"remote_ip":"1.2.3.4","method":"GET","host":"a.example.com","uri":"/x","headers":{}},"duration":0.01,"size":5,"status":200,"traceID":"4bf92f3577b34da6a3ce929d0e0e4736"}`
 	l, ok := ParseAccessLog(line)
 	if !ok || l.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
 		t.Errorf("trace id: %+v %v", l, ok)

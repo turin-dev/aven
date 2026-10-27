@@ -42,7 +42,7 @@ export type Project = {
   created_at: string;
   /** v1.6: the workspace this project belongs to (ws_default = shared "Team" workspace). */
   workspace_id: ID;
-  /** v1.6: which user's GitHub connection the project uses for private clones / commit statuses (null = server KEEL_GITHUB_TOKEN). */
+  /** v1.6: which user's GitHub connection the project uses for private clones / commit statuses (null = server AVEN_GITHUB_TOKEN). */
   github_user_id: ID | null;
   default_environment_id: ID;
   notify_webhook_url: string | null;
@@ -167,7 +167,7 @@ export type ProjectGithubAccount = { user_id: ID; user_name: string; login?: str
 export type ProjectDetail = Project & {
   environments: Environment[];
   services: Service[];
-  /** v1.6: the GitHub account the project clones with (null = server KEEL_GITHUB_TOKEN). */
+  /** v1.6: the GitHub account the project clones with (null = server AVEN_GITHUB_TOKEN). */
   github_account?: ProjectGithubAccount | null;
   /** The caller is a server owner without project membership, so deploys use someone else's GitHub connection (allowed, audited). */
   github_borrowed?: boolean;
@@ -308,7 +308,7 @@ export type DnsRecord = {
   note?: string;
 };
 export type DomainStatus = "active" | "pending_dns" | "proxied" | "error";
-/** P1: ownership verification. `txt` is always present so the UI can show the `_keel-verify` record. */
+/** P1: ownership verification. `txt` is always present so the UI can show the `_aven-verify` record. */
 export type DomainVerification = {
   method: "legacy" | "txt" | "http" | "dns" | "";
   verified_at?: string | null;
@@ -400,7 +400,7 @@ export type ServiceInstance = {
   domains: Domain[];
   private_domain: string;
   tcp_proxy: { container_port: number; public_port: number } | null;
-  /** P5: custom private DNS name (`<name>.<env>.keel.internal`, staged until the next deploy). Empty = service name. */
+  /** P5: custom private DNS name (`<name>.<env>.aven.internal`, staged until the next deploy). Empty = service name. */
   private_dns_name?: string | null;
   /** P8: outbound IPv6 (applies immediately, never a pending change). null/absent = node default (on). */
   outbound_ipv6?: boolean | null;
@@ -439,7 +439,7 @@ export type SelfUpdate = {
   /** Commits ahead of the running deployment (0 when unknown). */
   behind: number; commits?: SelfUpdateCommit[]; error?: string; available: boolean; interval: string;
 };
-/** One KEEL_* setting of aven-server itself (GET /api/owner/server-config). Secret values are never sent. */
+/** One AVEN_* setting of aven-server itself (GET /api/owner/server-config). Secret values are never sent. */
 export type ServerConfigEntry = {
   name: string;
   group: "general" | "network" | "github" | "smtp" | "advanced" | "fixed" | "other";
@@ -455,7 +455,7 @@ export type ServerConfig = { file: string; writable: boolean; pending: number; e
 /** GET /api/owner/self-service */
 export type SelfServiceStatus = {
   enabled: boolean;
-  /** Set by KEEL_SELF_SERVICE: the dashboard cannot change it. */
+  /** Set by AVEN_SELF_SERVICE: the dashboard cannot change it. */
   from_env: boolean;
   service_id?: ID; service_name?: string; project_id?: ID; workspace_id?: ID; environment_id?: ID; repo_url?: string; branch?: string;
   server: SelfServerInfo;
@@ -561,7 +561,7 @@ export type PortDetection = { source: "proc" | "unavailable"; reason?: string; n
 export type PrivateNetworkView = {
   /** Endpoint label (custom private_dns_name or the service name). */
   dns_name: string;
-  /** `<dns_name>.<env>.keel.internal` */
+  /** `<dns_name>.<env>.aven.internal` */
   fqdn: string;
   /** Every name that resolves to the service inside the environment (service name, fqdn, custom names). */
   aliases: string[];
@@ -672,7 +672,7 @@ export type CronRun = {
   status: "running" | "succeeded" | "failed";
 };
 
-export type KeelEvent = {
+export type AvenEvent = {
   id: ID;
   project_id: ID;
   environment_id: ID | null;
@@ -836,7 +836,7 @@ export type InstanceOverview = {
   users: { total: number; active: number; disabled: number; admins: number };
   pending_invites: number;
   workspaces: AdminWorkspace[];
-  nodes: Pick<KeelNode, "id" | "name" | "status" | "is_local" | "schedulable">[];
+  nodes: Pick<AvenNode, "id" | "name" | "status" | "is_local" | "schedulable">[];
   generated_at: string;
 };
 
@@ -884,11 +884,11 @@ export type Me = {
   workspaces?: Workspace[];
   /** Effective role per visible project. */
   projects: Record<ID, ProjectRole>;
-  /** Server owner (users.role=owner, KEEL_SUPERADMINS or the built-in account) using a session/env token. */
+  /** Server owner (users.role=owner, AVEN_SUPERADMINS or the built-in account) using a session/env token. */
   instance_owner?: boolean;
   /** Admin panel features this account may use (all for owners; owners can withhold some from server admins). */
   admin_caps?: AdminCapID[];
-  /** The server has a GitHub OAuth App (KEEL_GITHUB_CLIENT_ID/SECRET). */
+  /** The server has a GitHub OAuth App (AVEN_GITHUB_CLIENT_ID/SECRET). */
   github_app_configured?: boolean;
   /** This user has connected their own GitHub account (connections are per user). */
   github_connected?: boolean;
@@ -977,7 +977,7 @@ export type InstanceNotice = {
 };
 export type OwnerAccount = {
   id: ID; email: string; name: string; builtin: boolean; disabled: boolean; totp_enabled: boolean; superadmin: boolean;
-  /** role = users.role owner, builtin = KEEL_ADMIN_PASSWORD account, env = KEEL_SUPERADMINS only. */
+  /** role = users.role owner, builtin = AVEN_ADMIN_PASSWORD account, env = AVEN_SUPERADMINS only. */
   source: "role" | "builtin" | "env";
   last_login_at: string | null; created_at: string;
 };
@@ -1002,7 +1002,7 @@ export type OwnerOverview = {
   counts: { sessions: number; api_tokens: number; users: number };
   server: {
     version: string; node: string; go_version: string; pid: number; started_at: string; uptime_seconds: number;
-    systemd: boolean; data_dir: string; db_bytes: number; public_url: string;
+    systemd: boolean; data_dir: string; db_name?: string; db_bytes: number; public_url: string;
     admin_password_set: boolean; legacy_api_token_set: boolean; github_webhook_secret_set: boolean; github_oauth_configured: boolean;
     legacy_agents_disabled: boolean; secure_cookie: boolean; trusted_proxies: number; smtp_configured: boolean;
   };
@@ -1011,7 +1011,7 @@ export type OwnerSession = Omit<SessionInfo, "current"> & {
   current: boolean; saml_authenticated: boolean; email: string; name: string; user_role: InstanceRole; builtin: boolean; disabled: boolean;
 };
 export type OwnerToken = ApiToken & { email: string; user_name: string; user_role: InstanceRole | "" };
-export type KeelBackup = { name: string; bytes: number; modified_at: string };
+export type AvenBackup = { name: string; bytes: number; modified_at: string };
 
 export type AuditEntry = { id: ID; actor_id: ID; actor: string; kind: string; target: string; message: string; ip: string; created_at: string };
 
@@ -1036,7 +1036,7 @@ export type ServiceAdmin = {
   service_id: ID;
   instance_id: ID;
   current_deployment_id: ID | null;
-  node: KeelNode | null;
+  node: AvenNode | null;
   containers: ServiceAdminContainer[];
   containers_error?: string;
   holds: OwnerHold[];
@@ -1248,7 +1248,7 @@ export type SystemStatus = {
   /** v1.5 */
   smtp_configured?: boolean;
   pricing?: UsagePricing | null;
-  /** v1.5: local node mesh settings (KEEL_MESH, KEEL_MESH_PORT, KEEL_PRIVATE_ADDRESS). */
+  /** v1.5: local node mesh settings (AVEN_MESH, AVEN_MESH_PORT, AVEN_PRIVATE_ADDRESS). */
   mesh?: { mode: "on" | "off" | "auto"; port: number; private_address: string | null; enabled: boolean };
 };
 
@@ -1280,7 +1280,7 @@ export type MeshStatus = {
   reason?: string;
 };
 
-export type KeelNode = {
+export type AvenNode = {
   id: ID;
   name: string;
   is_local: boolean;
@@ -1293,13 +1293,13 @@ export type KeelNode = {
   memory_bytes: number;
   disk_free_bytes: number;
   labels: Record<string, string>;
-  /** 공개 진입 방식: direct(공인 주소) | cloudflare_tunnel(공인 주소 없이 Cloudflare 터널). 로컬 노드는 KEEL_INGRESS_MODE가 우선. */
+  /** 공개 진입 방식: direct(공인 주소) | cloudflare_tunnel(공인 주소 없이 Cloudflare 터널). 로컬 노드는 AVEN_INGRESS_MODE가 우선. */
   ingress_mode?: NodeIngressMode;
-  /** 커스텀 도메인이 CNAME으로 가리킬 이름(비우면 A/AAAA 안내). 로컬 노드는 KEEL_INGRESS_HOSTNAME이 우선. */
+  /** 커스텀 도메인이 CNAME으로 가리킬 이름(비우면 A/AAAA 안내). 로컬 노드는 AVEN_INGRESS_HOSTNAME이 우선. */
   ingress_hostname?: string;
-  /** TCP 프록시 접속 호스트(비우면 기존 방식). 로컬 노드는 KEEL_TCP_PROXY_DOMAIN이 우선. */
+  /** TCP 프록시 접속 호스트(비우면 기존 방식). 로컬 노드는 AVEN_TCP_PROXY_DOMAIN이 우선. */
   tcp_hostname?: string;
-  /** §7 도메인별 공개 IPv6 풀(CIDR, /64~/120). 비면 도메인이 노드 기본 IPv6를 같이 쓴다. 로컬 노드는 KEEL_IPV6_POOL이 우선. */
+  /** §7 도메인별 공개 IPv6 풀(CIDR, /64~/120). 비면 도메인이 노드 기본 IPv6를 같이 쓴다. 로컬 노드는 AVEN_IPV6_POOL이 우선. */
   ipv6_pool?: string;
   /** §7 (GET /nodes only) 풀의 주소를 노드에 붙인 상태. 풀이 없으면 null. */
   ipv6_status?: NodeIPv6Status | null;
@@ -1406,7 +1406,7 @@ export type GithubStatus = { webhook_url: string; secret_configured: boolean; to
 export type GithubConnection = {
   app_configured: boolean;
   connected: boolean;
-  /** where clone/API tokens come from: the connection, KEEL_GITHUB_TOKEN, or nothing */
+  /** where clone/API tokens come from: the connection, AVEN_GITHUB_TOKEN, or nothing */
   source: "oauth" | "env" | "";
   login?: string;
   scopes?: string;
@@ -1525,6 +1525,21 @@ export function isTerminal(s: DeploymentStatus): boolean {
 /** Variables aven injects into every instance (docs/api-v1.md, "Variable rules"). */
 export const INJECTED_VARS = [
   "PORT",
+  "AVEN_SERVICE_NAME",
+  "AVEN_SERVICE_ID",
+  "AVEN_ENVIRONMENT_NAME",
+  "AVEN_ENVIRONMENT_ID",
+  "AVEN_PROJECT_NAME",
+  "AVEN_PROJECT_ID",
+  "AVEN_PRIVATE_DOMAIN",
+  "AVEN_PUBLIC_DOMAIN",
+  "AVEN_DEPLOYMENT_ID",
+  "AVEN_GIT_COMMIT_SHA",
+  "AVEN_GIT_BRANCH",
+  "AVEN_TCP_PROXY_DOMAIN",
+  "AVEN_TCP_PROXY_PORT",
+  "AVEN_VOLUME_MOUNT_PATH",
+  // Copied from AVEN_* so existing ${{KEEL_*}} references keep resolving.
   "KEEL_SERVICE_NAME",
   "KEEL_SERVICE_ID",
   "KEEL_ENVIRONMENT_NAME",
@@ -1705,7 +1720,7 @@ export type CliDownload = { name: string; os: "linux" | "darwin" | "windows"; ar
 export type CliDownloads = { version: string; files: CliDownload[]; install_script: string };
 
 export const api = {
-  // auth. Without email the password is checked against KEEL_ADMIN_PASSWORD (built-in owner).
+  // auth. Without email the password is checked against AVEN_ADMIN_PASSWORD (built-in owner).
   // 401 {"error":"totp_required"} → ask for a 2FA code and send it as totp_code.
   login: (input: { email?: string; password: string; totp_code?: string }) =>
     request<void>("POST", "/auth/login", input, { noRedirect: true }),
@@ -1777,10 +1792,10 @@ export const api = {
   ownerRevokeTokens: (input: { user_id: ID } | { scope: "non_owners" }) => request<{ revoked?: number }>("POST", "/owner/tokens/revoke", input),
   transferOwnership: (input: { user_id: ID; stay_owner: boolean }) => request<{ owner: ID; still_owner: boolean }>("POST", "/owner/transfer", input),
   lockdown: (message: string) => request<{ sessions_revoked: number; tokens_revoked: number }>("POST", "/owner/lockdown", { message }),
-  keelBackups: () => request<KeelBackup[]>("GET", "/owner/backups"),
-  createKeelBackup: () => request<KeelBackup>("POST", "/owner/backups"),
-  deleteKeelBackup: (name: string) => request<void>("DELETE", `/owner/backups/${enc(name)}`),
-  keelBackupUrl: (name: string) => `/api/owner/backups/${enc(name)}`,
+  avenBackups: () => request<AvenBackup[]>("GET", "/owner/backups"),
+  createAvenBackup: () => request<AvenBackup>("POST", "/owner/backups"),
+  deleteAvenBackup: (name: string) => request<void>("DELETE", `/owner/backups/${enc(name)}`),
+  avenBackupUrl: (name: string) => `/api/owner/backups/${enc(name)}`,
   restartServer: () => request<{ restarting: boolean }>("POST", "/owner/restart"),
   resourceLimits: () => request<WorkspaceResources[]>("GET", "/instance/resource-limits"),
   workspaceResources: (wsid: ID) => request<WorkspaceResources>("GET", `/workspaces/${enc(wsid)}/resource-limits`),
@@ -1981,7 +1996,7 @@ export const api = {
   verifyDomain: (sid: ID, eid: ID, host: string) => request<Domain>("POST", `${inst(sid, eid)}/domains/${enc(host)}/verify`, {}),
   /** P4: everything Settings > Networking shows, in one call. */
   networking: (sid: ID, eid: ID) => request<InstanceNetworking>("GET", `${inst(sid, eid)}/networking`),
-  /** P5: is `<name>.<env>.keel.internal` free in this environment? */
+  /** P5: is `<name>.<env>.aven.internal` free in this environment? */
   privateDnsAvailable: (sid: ID, eid: ID, name: string) =>
     request<{ available: boolean; reason?: string }>("GET", `${inst(sid, eid)}/private-dns/available?name=${enc(name)}`),
 
@@ -2078,16 +2093,16 @@ export const api = {
 
   // events
   events: (pid: ID, environment_id?: ID, limit = 50) =>
-    request<KeelEvent[]>(
+    request<AvenEvent[]>(
       "GET",
       `/projects/${enc(pid)}/events?${environment_id ? `environment_id=${enc(environment_id)}&` : ""}limit=${limit}`,
     ),
 
   // nodes (v1.2)
-  nodes: () => request<KeelNode[]>("GET", "/nodes"),
+  nodes: () => request<AvenNode[]>("GET", "/nodes"),
   createJoinToken: (input: { name?: string; ttl_s?: number }) => request<JoinToken>("POST", "/nodes/join-tokens", input),
   updateNode: (nid: ID, input: { name?: string; schedulable?: boolean; labels?: Record<string, string> } & NodeIngressInput) =>
-    request<KeelNode>("PATCH", `/nodes/${enc(nid)}`, input),
+    request<AvenNode>("PATCH", `/nodes/${enc(nid)}`, input),
   deleteNode: (nid: ID, force = false) => request<void>("DELETE", `/nodes/${enc(nid)}${force ? "?force=1" : ""}`),
   nodeMetrics: (nid: ID, range: MetricRange) => request<{ points: NodeMetricPoint[] }>("GET", `/nodes/${enc(nid)}/metrics?range=${range}`),
 

@@ -46,12 +46,12 @@ func cmdGitHub(c *config, args []string) {
 		case g.Connected:
 			fmt.Printf("connected as %s (scopes: %s, since %s)\n", g.Login, g.Scopes, g.ConnectedAt)
 		case g.Source == "env":
-			fmt.Println("not connected; using KEEL_GITHUB_TOKEN from the server environment")
+			fmt.Println("not connected; using AVEN_GITHUB_TOKEN from the server environment")
 		default:
 			fmt.Println("not connected: private repositories cannot be cloned")
 		}
 		if !g.AppConfigured {
-			fmt.Printf("OAuth App not configured: create one on GitHub (Settings › Developer settings › OAuth Apps) with callback URL\n  %s\nand set KEEL_GITHUB_CLIENT_ID / KEEL_GITHUB_CLIENT_SECRET on the server\n", g.CallbackURL)
+			fmt.Printf("OAuth App not configured: create one on GitHub (Settings › Developer settings › OAuth Apps) with callback URL\n  %s\nand set AVEN_GITHUB_CLIENT_ID / AVEN_GITHUB_CLIENT_SECRET on the server (KEEL_GITHUB_CLIENT_ID / KEEL_GITHUB_CLIENT_SECRET still work)\n", g.CallbackURL)
 		}
 		fmt.Printf("webhook URL: %s (secret %s)\n", g.WebhookURL, map[bool]string{true: "configured", false: "MISSING"}[g.SecretConfigured])
 	case "connect":

@@ -96,7 +96,7 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
     <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px]">
       <Field label={t("보관 위치")}>
         <Select value={destId} onChange={(e) => setDest(e.target.value)} aria-label={t("보관 위치")} className="w-full">
-          <option value="">{t("로컬 (KEEL_DATA)")}</option>
+          <option value="">{t("로컬 (AVEN_DATA)")}</option>
           {(dests.data ?? [])
             .filter((d: BackupDestination) => d.type === "s3")
             .map((d) => (

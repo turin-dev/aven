@@ -18,9 +18,9 @@
       "domains": [{ "generate": true }],
       "variables": {
         "N8N_PORT": "5678",
-        "N8N_HOST": "${{KEEL_PUBLIC_DOMAIN}}",
+        "N8N_HOST": "${{AVEN_PUBLIC_DOMAIN}}",
         "N8N_PROTOCOL": "https",
-        "WEBHOOK_URL": "https://${{KEEL_PUBLIC_DOMAIN}}/",
+        "WEBHOOK_URL": "https://${{AVEN_PUBLIC_DOMAIN}}/",
         "N8N_ENCRYPTION_KEY": "${{ secret(32) }}",
         "GENERIC_TIMEZONE": "UTC"
       }

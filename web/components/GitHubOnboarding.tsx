@@ -6,8 +6,10 @@ import type { Me } from "@/lib/api";
 import { BrandIcon } from "./ServiceIcon";
 import { Button, Dialog } from "./ui";
 import { t } from "@/lib/i18n";
+import { readStorage, writeStorage } from "@/lib/legacyStorage";
 
-const dismissKey = (uid: string) => `keel.github-onboarding.dismissed.${uid}`;
+const dismissKey = (uid: string) => `aven.github-onboarding.dismissed.${uid}`;
+const legacyDismissKey = (uid: string) => `keel.github-onboarding.dismissed.${uid}`;
 
 /**
  * GitHub 연결은 사용자별이라 새 계정은 먼저 자기 GitHub 계정을 연결해야 비공개 저장소를 배포할 수 있다.
@@ -25,11 +27,7 @@ export function GitHubOnboarding({ me }: { me: Me | undefined }) {
     if (!me || me.auth !== "session" || me.mfa_setup_required || pathname.startsWith("/account")) return;
     if (!me.github_app_configured || me.github_connected) return;
     let dismissed = false;
-    try {
-      dismissed = window.localStorage.getItem(dismissKey(me.id)) === "1";
-    } catch {
-      /* ignore */
-    }
+    dismissed = readStorage(dismissKey(me.id), legacyDismissKey(me.id)) === "1";
     if (welcome || !dismissed) setOpen(true);
   }, [me, pathname, welcome]);
 
@@ -44,11 +42,7 @@ export function GitHubOnboarding({ me }: { me: Me | undefined }) {
 
   if (!me) return null;
   const later = () => {
-    try {
-      window.localStorage.setItem(dismissKey(me.id), "1");
-    } catch {
-      /* ignore */
-    }
+    writeStorage(dismissKey(me.id), "1");
     setOpen(false);
   };
   return (

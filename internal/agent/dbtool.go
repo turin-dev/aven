@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/node"
 )
 
@@ -105,8 +106,13 @@ func (h *Handler) dbToolSpec(ctx context.Context, r agentprotocol.DBToolRequest,
 	if l[node.LabelManaged] != "true" || l[node.LabelRole] != node.RoleApp || l[node.LabelEnv] == "" || l[node.LabelService] == "" || l[node.LabelProject] == "" {
 		return node.RunSpec{}, fmt.Errorf("container %s is not a aven database container", r.Container)
 	}
-	if "keel-"+l[node.LabelEnv] != r.Network {
+	wantNet := compat.Prefix + "-" + l[node.LabelEnv]
+	legacyNet := compat.LegacyPrefix + "-" + l[node.LabelEnv]
+	if r.Network != wantNet && r.Network != legacyNet {
 		return node.RunSpec{}, fmt.Errorf("container %s is not in network %s", r.Container, r.Network)
+	}
+	if r.Network == legacyNet {
+		compat.NoteLegacyResource("network:"+legacyNet, "docker network "+legacyNet, "docker network "+wantNet)
 	}
 	if r.Action != "" {
 		return h.pitrToolSpec(ctx, r, restore, st)
@@ -135,10 +141,10 @@ func (h *Handler) dbToolSpec(ctx context.Context, r agentprotocol.DBToolRequest,
 		}
 	}
 	var tool *agentprotocol.DBTool
-	prefix := "keel-dbb-"
+	prefix := "aven-dbb-"
 	if restore {
 		tool, err = agentprotocol.DBRestoreTool(r.Kind, host, r.Port, creds)
-		prefix = "keel-dbr-"
+		prefix = "aven-dbr-"
 	} else {
 		tool, err = agentprotocol.DBDumpTool(r.Kind, host, r.Port, creds)
 	}

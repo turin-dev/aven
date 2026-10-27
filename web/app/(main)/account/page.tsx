@@ -51,7 +51,7 @@ function Profile() {
   const [done, setDone] = useState(false);
   return (
     <div className={STACK}>
-      <H2 sub={`${me.email} · ${ROLE_LABEL[me.role] ?? me.role}${me.builtin ? ` · ${t("기본 계정(KEEL_ADMIN_PASSWORD)")}` : ""}`}>{t("프로필")}</H2>
+      <H2 sub={`${me.email} · ${ROLE_LABEL[me.role] ?? me.role}${me.builtin ? ` · ${t("기본 계정(AVEN_ADMIN_PASSWORD)")}` : ""}`}>{t("프로필")}</H2>
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -104,7 +104,7 @@ function PasswordForm({ builtin }: { builtin: boolean }) {
   const [done, setDone] = useState(false);
   if (builtin)
     return (
-      <Card title={t("비밀번호")} description={t("기본 admin 계정의 비밀번호는 서버의 KEEL_ADMIN_PASSWORD 환경변수입니다. 바꾸면 이 계정의 세션이 모두 끊깁니다.")} />
+      <Card title={t("비밀번호")} description={t("기본 admin 계정의 비밀번호는 서버의 AVEN_ADMIN_PASSWORD 환경변수입니다. 바꾸면 이 계정의 세션이 모두 끊깁니다.")} />
     );
   return (
     <form
@@ -387,7 +387,7 @@ function Tokens() {
   return (
     <div className={STACK}>
       {node}
-      <H2 sub={t("CLI(KEEL_TOKEN)와 CI에서 쓰는 토큰입니다. 토큰은 만든 사람의 권한을 넘지 못하고, environment 토큰은 그 환경의 리소스만 바꿀 수 있습니다.")}>
+      <H2 sub={t("CLI(AVEN_TOKEN)와 CI에서 쓰는 토큰입니다. 토큰은 만든 사람의 권한을 넘지 못하고, environment 토큰은 그 환경의 리소스만 바꿀 수 있습니다.")}>
         {t("API 토큰")}
       </H2>
       {created && (

@@ -103,7 +103,7 @@ function CDNSection({
         label={t("CDN 캐싱")}
         keywords="edge cdn cache caching x-cache 캐시"
         badge={busy === "cdn-enabled" ? <Spinner className="size-3" /> : null}
-        description={t("정적 자산과 선택적으로 HTML을 엣지(keel-proxy)에 캐시합니다. 이 서비스 도메인의 지연 시간과 원본 부하를 줄입니다. 응답의 x-cache 헤더(HIT · STALE · MISS · DYNAMIC)로 확인하세요.")}
+        description={t("정적 자산과 선택적으로 HTML을 엣지(aven-proxy)에 캐시합니다. 이 서비스 도메인의 지연 시간과 원본 부하를 줄입니다. 응답의 x-cache 헤더(HIT · STALE · MISS · DYNAMIC)로 확인하세요.")}
       >
         <ToggleCard
           checked={c.enabled}

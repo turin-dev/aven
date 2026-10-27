@@ -584,7 +584,7 @@ export function CreatePalette({
           {view === "repo" && repos.error && !ghDisconnected && <ErrorBox className="mx-3 mb-2" error={repos.error} />}
           {view === "repo" && ghDisconnected && gh.data && !gh.data.token_configured && (
             <p className="px-3 pb-2 pt-1 text-xs text-gray-400">
-              {t("비공개 저장소는 서버에 KEEL_GITHUB_TOKEN을 설정해야 클론할 수 있습니다.")}
+              {t("비공개 저장소는 서버에 AVEN_GITHUB_TOKEN을 설정해야 클론할 수 있습니다.")}
             </p>
           )}
           {view === "template" && (

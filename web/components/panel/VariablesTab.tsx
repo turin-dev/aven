@@ -56,12 +56,12 @@ function useSuggestions(svc: CanvasService, env: Environment) {
       const groupIcon = <BrandIcon name={iconKey(s)} className="size-3.5" />;
       const sealed = new Set(s.instance.sealed_variables ?? []);
       for (const k of Object.keys(s.instance.variables).sort()) out.push({ ref: `${s.name}.${k}`, group: s.name, groupIcon, ...sealedHint(sealed.has(k)) });
-      for (const k of ["KEEL_PRIVATE_DOMAIN", "KEEL_PUBLIC_DOMAIN", "PORT", "KEEL_TCP_PROXY_DOMAIN", "KEEL_TCP_PROXY_PORT"])
-        if (!(k in s.instance.variables)) out.push({ ref: `${s.name}.${k}`, group: s.name, groupIcon, hint: t("keel 제공") });
+      for (const k of ["AVEN_PRIVATE_DOMAIN", "AVEN_PUBLIC_DOMAIN", "PORT", "AVEN_TCP_PROXY_DOMAIN", "AVEN_TCP_PROXY_PORT"])
+        if (!(k in s.instance.variables)) out.push({ ref: `${s.name}.${k}`, group: s.name, groupIcon, hint: t("aven 제공") });
     }
     const own = new Set(svc.instance.sealed_variables ?? []);
     for (const k of Object.keys(svc.instance.variables).sort()) out.push({ ref: k, group: t("이 서비스"), ...sealedHint(own.has(k)) });
-    for (const k of INJECTED_VARS) if (!(k in svc.instance.variables)) out.push({ ref: k, group: t("keel 제공 변수") });
+    for (const k of INJECTED_VARS) if (!(k in svc.instance.variables)) out.push({ ref: k, group: t("aven 제공 변수") });
     return out;
   }, [canvas.data, shared.data, svc]);
 }
@@ -182,10 +182,10 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
   const provided = INJECTED_VARS.filter((k) => !(k in draft));
   const refOptions: RefOption[] = [
     ...others.flatMap((s) =>
-      [...Object.keys(s.instance.variables).sort(), "KEEL_PRIVATE_DOMAIN", ...(s.instance.domains.length ? ["KEEL_PUBLIC_DOMAIN"] : [])].map((k) => {
+      [...Object.keys(s.instance.variables).sort(), "AVEN_PRIVATE_DOMAIN", ...(s.instance.domains.length ? ["AVEN_PUBLIC_DOMAIN"] : [])].map((k) => {
         const value = `\${{${s.name}.${k}}}`;
         const prefix = s.name.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
-        const base = k.startsWith("KEEL_") ? `${prefix}_${k.replace(/^KEEL_/, "")}` : k;
+        const base = k.startsWith("AVEN_") ? `${prefix}_${k.replace(/^AVEN_/, "")}` : k;
         // 이름이 다른 값과 겹치면 서비스 이름을 앞에 붙인다. 이미 같은 참조가 있으면 비활성.
         const name = base in draft && draft[base] !== value ? `${prefix}_${k}` : base;
         return { name, value, hint: s.name, icon: <BrandIcon name={iconKey(s)} />, exists: Object.values(draft).includes(value) };

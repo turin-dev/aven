@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/store"
 	"github.com/turin-dev/aven/internal/vars"
 )
@@ -38,8 +39,15 @@ func (m *Manager) Load(ctx context.Context, instanceID string) (*Target, error) 
 	return &Target{Project: p, Env: env, Service: svc, Instance: in}, nil
 }
 
-// PrivateDomain은 환경 네트워크 안의 서비스 주소다.
-func PrivateDomain(service, env string) string { return service + "." + env + ".keel.internal" }
+// PrivateDomain은 환경 네트워크 안의 서비스 주소다(<svc>.<env>.keel.internal). 주입 변수, DB 백업, TCP proxy,
+// HA 멤버 주소가 이 값을 쓴다. 아직 다시 배포하지 않은 컨테이너와 옛 agent의 forwarder에는 .keel.internal alias만
+// 있고, HA replica set 설정에도 이 이름이 저장돼 있으므로 대표 주소는 keel.internal로 둔다.
+func PrivateDomain(service, env string) string { return compat.LegacyPrivateHost(service, env) }
+
+// AvenPrivateDomain은 새 이름 <svc>.<env>.aven.internal이다. 새로 배포한 컨테이너에 alias로만 붙는다.
+func AvenPrivateDomain(service, env string) string {
+	return compat.PrivateHost(service, env)
+}
 
 // PrivateDNSName은 사설 네트워크의 대표 이름이다: 설정한 private_dns_name, 없으면 서비스 이름.
 func PrivateDNSName(service, dns string) string {
@@ -49,18 +57,22 @@ func PrivateDNSName(service, dns string) string {
 	return service
 }
 
-// PrivateAliases는 환경 네트워크에서 서비스 컨테이너에 붙는 이름이다. 서비스 이름 alias(<svc>, <svc>.<env>.keel.internal)는
-// 하위 호환을 위해 항상 붙이고, private_dns_name이 있고 서비스 이름과 다르면 <dns>, <dns>.<env>.keel.internal을 더한다.
+// PrivateAliases는 환경 네트워크에서 서비스 컨테이너에 붙는 이름이다.
+// 대표 주소 <svc>.<env>.keel.internal과 새 이름 <svc>.<env>.aven.internal을 함께 붙인다.
 func PrivateAliases(service, env, dns string) []string {
-	out := []string{service, PrivateDomain(service, env)}
+	out := []string{service, PrivateDomain(service, env), AvenPrivateDomain(service, env)}
 	if dns != "" && dns != service {
-		out = append(out, dns, PrivateDomain(dns, env))
+		out = append(out, dns, PrivateDomain(dns, env), AvenPrivateDomain(dns, env))
 	}
 	return out
 }
 
-// EnvNetwork는 환경별 docker 네트워크 이름이다.
-func EnvNetwork(envID string) string { return "keel-" + envID }
+// EnvNetwork는 환경별 docker 네트워크 이름이다. 예전 keel-<id> 네트워크가 있으면
+// Docker.ResolveNetwork가 그 이름을 그대로 쓴다.
+func EnvNetwork(envID string) string { return compat.Prefix + "-" + envID }
+
+// LegacyEnvNetwork는 예전 설치의 환경 네트워크 이름이다.
+func LegacyEnvNetwork(envID string) string { return compat.LegacyPrefix + "-" + envID }
 
 // TCPProxyHostFor는 인스턴스의 TCP proxy 호스트다(TCPProxyEndpoint, tcpproxy.go). 원격 노드에서 도는 인스턴스는 그 노드의
 // tcp_hostname, 없으면 공인 주소(IPv6 우선)다(KEEL_TCP_PROXY_DOMAIN은 로컬 노드를 가리키는 이름이므로 쓰지 않는다).
@@ -89,35 +101,35 @@ func (m *Manager) TCPProxyHost() string {
 // injected는 자동 주입 변수다. 사용자 변수가 같은 이름이면 사용자 값이 이긴다.
 func (m *Manager) injected(p *store.Project, env *store.Environment, svc *store.Service, sp *store.Spec, dep *store.Deployment, volumes []*store.Volume, tcpHost string) map[string]string {
 	v := map[string]string{
-		"KEEL_SERVICE_NAME":     svc.Name,
-		"KEEL_SERVICE_ID":       svc.ID,
-		"KEEL_ENVIRONMENT_NAME": env.Name,
-		"KEEL_ENVIRONMENT_ID":   env.ID,
-		"KEEL_PROJECT_NAME":     p.Name,
-		"KEEL_PROJECT_ID":       p.ID,
-		"KEEL_PRIVATE_DOMAIN":   PrivateDomain(PrivateDNSName(svc.Name, sp.PrivateDNSName), env.Name),
+		"AVEN_SERVICE_NAME":     svc.Name,
+		"AVEN_SERVICE_ID":       svc.ID,
+		"AVEN_ENVIRONMENT_NAME": env.Name,
+		"AVEN_ENVIRONMENT_ID":   env.ID,
+		"AVEN_PROJECT_NAME":     p.Name,
+		"AVEN_PROJECT_ID":       p.ID,
+		"AVEN_PRIVATE_DOMAIN":   PrivateDomain(PrivateDNSName(svc.Name, sp.PrivateDNSName), env.Name),
 		"PORT":                  "8080",
 	}
 	if sp.Port != nil && *sp.Port > 0 {
 		v["PORT"] = strconv.Itoa(*sp.Port)
 	}
 	if len(sp.Domains) > 0 {
-		v["KEEL_PUBLIC_DOMAIN"] = sp.Domains[0].Host
+		v["AVEN_PUBLIC_DOMAIN"] = sp.Domains[0].Host
 	}
 	if sp.TCPProxy != nil && sp.TCPProxy.PublicPort > 0 {
-		v["KEEL_TCP_PROXY_DOMAIN"] = tcpHost
-		v["KEEL_TCP_PROXY_PORT"] = strconv.Itoa(sp.TCPProxy.PublicPort)
+		v["AVEN_TCP_PROXY_DOMAIN"] = tcpHost
+		v["AVEN_TCP_PROXY_PORT"] = strconv.Itoa(sp.TCPProxy.PublicPort)
 	}
 	if len(volumes) > 0 {
-		v["KEEL_VOLUME_MOUNT_PATH"] = volumes[0].MountPath
+		v["AVEN_VOLUME_MOUNT_PATH"] = volumes[0].MountPath
 	}
 	if dep != nil {
-		v["KEEL_DEPLOYMENT_ID"] = dep.ID
+		v["AVEN_DEPLOYMENT_ID"] = dep.ID
 		if dep.CommitSHA != nil {
-			v["KEEL_GIT_COMMIT_SHA"] = *dep.CommitSHA
+			v["AVEN_GIT_COMMIT_SHA"] = *dep.CommitSHA
 		}
 		if dep.Branch != nil {
-			v["KEEL_GIT_BRANCH"] = *dep.Branch
+			v["AVEN_GIT_BRANCH"] = *dep.Branch
 		}
 	}
 	return v
@@ -215,6 +227,8 @@ func (m *Manager) Scope(ctx context.Context, envID string, ov *Override) (*vars.
 		for k, v := range user {
 			merged[k] = v
 		}
+		// 사용자가 KEEL_*를 직접 넣었으면 그 값을 두고, 아니면 AVEN_*를 KEEL_*로도 복사한다.
+		compat.InjectedAlias(merged)
 		if env.Kind == store.EnvPreview && env.BaseEnvironmentID != nil && (ov == nil || ov.InstanceID != in.ID) {
 			if latest, err := m.Store.LatestDeployment(ctx, in.ID); err == nil && latest.Trigger == "github" &&
 				latest.Status == store.DepSkipped && latest.Error == nil {

@@ -1,4 +1,4 @@
-/* Dev-only fake tracing API for the mock backend (NEXT_PUBLIC_KEEL_MOCK=1). Shapes follow lib/tracing.ts. */
+/* Dev-only fake tracing API for the mock backend (NEXT_PUBLIC_AVEN_MOCK=1). Shapes follow lib/tracing.ts. */
 
 import type { CanvasData } from "../api";
 import type { TraceSpan, TraceSummary, TracingSetting } from "../tracing";
@@ -117,7 +117,7 @@ function spans(eid: string, t: Stored): TraceSpan[] {
   const edge = base({
     name: t.root_name,
     component: "edge",
-    service_name: "keel-edge",
+    service_name: "aven-edge",
     service_id: undefined,
     kind: "server",
     status: t.error_count ? "error" : "ok",
@@ -125,7 +125,7 @@ function spans(eid: string, t: Stored): TraceSpan[] {
     end_time: iso(t0 + t.duration_ms),
     duration_ms: t.duration_ms,
     attributes: { "http.request.method": method, "url.path": path.replace("{id}", "42"), "http.route": path, "http.response.status_code": t.error_count ? 502 : 200, "client.address": "2a02:810d:4b3f::1c" },
-    resource_attributes: { "service.name": "keel-edge" },
+    resource_attributes: { "service.name": "aven-edge" },
   });
   const out: TraceSpan[] = [edge];
   const srvStart = t0 + Math.min(1.2, t.duration_ms * 0.05);

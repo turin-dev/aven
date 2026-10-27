@@ -240,7 +240,7 @@ const en: Record<string, string> = {
   "새 접근 그룹": "New access group",
   "생성 도메인 제한": "Generated domain restriction",
   "서버 관리자가 아니면 공개 TCP 프록시를 만들 수 없습니다. 켜져 있는 동안 데이터베이스와 새 환경에 TCP 프록시가 자동으로 생기지 않습니다.": "Only server admins can create public TCP proxies. While this is on, databases and new environments don't get TCP proxies automatically.",
-  "서버 관리자가 아니면 서비스 도메인(KEEL_BASE_DOMAIN 아래)을 만들 수 없습니다. 켜져 있는 동안 템플릿 서비스와 새 환경에는 누구에게도 도메인이 자동 생성되지 않습니다. 사용자 지정 도메인과 비공개 네트워크는 그대로입니다.": "Only server admins can create service domains (under KEEL_BASE_DOMAIN). While this is on, template services and new environments don't get a domain generated automatically for anyone. Custom domains and the private network are unchanged.",
+  "서버 관리자가 아니면 서비스 도메인(AVEN_BASE_DOMAIN 아래)을 만들 수 없습니다. 켜져 있는 동안 템플릿 서비스와 새 환경에는 누구에게도 도메인이 자동 생성되지 않습니다. 사용자 지정 도메인과 비공개 네트워크는 그대로입니다.": "Only server admins can create service domains (under AVEN_BASE_DOMAIN). While this is on, template services and new environments don't get a domain generated automatically for anyone. Custom domains and the private network are unchanged.",
   "승인된 출처": "Approved sources",
   "승인된 출처에서만 배포": "Deploy only from approved sources",
   "승인된 GitHub 조직의 저장소만 배포합니다. 다른 저장소(개인 저장소 포함), Docker 이미지, Function, Compose 이미지, 사용자 템플릿, CLI 업로드(aven up)는 막고 내장 데이터베이스(공식 이미지)는 허용합니다. 새 배포·새 서비스·소스 변경에 적용되며 기존 배포는 그대로입니다.": "Only repositories from approved GitHub organizations can be deployed. Other repositories (including personal ones), Docker images, functions, Compose images, user templates, and CLI uploads (aven up) are blocked. Built-in databases (official images) are still allowed. This applies to new deployments, new services, and source changes; existing deployments are unchanged.",

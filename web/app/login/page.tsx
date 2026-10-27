@@ -76,7 +76,7 @@ function LoginForm() {
           : err instanceof ApiError && err.status === 401 && !needCode
           ? email.trim()
             ? t("이메일 또는 비밀번호가 맞지 않습니다.")
-            : t("비밀번호가 맞지 않습니다. 이메일 없이 로그인하면 서버의 KEEL_ADMIN_PASSWORD 값을 씁니다.")
+            : t("비밀번호가 맞지 않습니다. 이메일 없이 로그인하면 서버의 AVEN_ADMIN_PASSWORD 값을 씁니다.")
           : err,
       );
       setLoading(false);
@@ -133,7 +133,7 @@ function LoginForm() {
 
   return (
     <form onSubmit={submit} className="grid gap-4">
-      <Field label={t("이메일")} hint={t("비워 두면 기본 admin 계정(KEEL_ADMIN_PASSWORD)으로 로그인합니다.")}>
+      <Field label={t("이메일")} hint={t("비워 두면 기본 admin 계정(AVEN_ADMIN_PASSWORD)으로 로그인합니다.")}>
         <Input
           type="email"
           autoFocus
