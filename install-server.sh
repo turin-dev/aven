@@ -1,7 +1,8 @@
 #!/bin/sh
 # Aven server installer and upgrader.
 #
-#   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --public-url https://aven.example.com
+#   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+#   ... | sudo sh -s -- --yes --public-url https://aven.example.com     (unattended)
 #
 # First run: installs aven-server, the CLI, agent/CLI downloads and Railpack, writes /etc/aven/aven.env
 # with a generated admin password, installs the systemd unit and starts it.
@@ -21,6 +22,10 @@
 #   --no-start             install only; do not enable or start aven-server
 #   -y, --yes              never prompt
 #
+# On a terminal the script asks for every first-install setting it was not given, shows a summary and
+# asks before changing anything. Upgrades ask once for confirmation. With -y or without a terminal it
+# never asks and fails on a missing --public-url.
+#
 # Environment: GITHUB_TOKEN, when set, is sent with GitHub requests (API rate limits). AVEN_REPO overrides the
 # owner/repo to download releases from (forks).
 # Existing installs may still have /etc/keel/aven.env, /var/lib/keel and KEEL_* settings.
@@ -33,6 +38,11 @@ ENV_FILE=$CONF_DIR/aven.env
 BIN_DIR=/usr/local/bin
 LIB_DIR=/usr/local/lib/aven
 UNIT=/etc/systemd/system/aven-server.service
+
+say() { printf 'aven: %s\n' "$*"; }
+warn() { printf 'aven: warning: %s\n' "$*" >&2; }
+die() { printf 'aven: error: %s\n' "$*" >&2; exit 1; }
+need_arg() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 PUBLIC_URL=""
 BASE_DOMAIN=""
@@ -48,11 +58,6 @@ RAILPACK=1
 INSTALL_DOCKER=0
 START=1
 YES=0
-
-say() { printf 'aven: %s\n' "$*"; }
-warn() { printf 'aven: warning: %s\n' "$*" >&2; }
-die() { printf 'aven: error: %s\n' "$*" >&2; exit 1; }
-need_arg() { [ "$2" -ge 2 ] || die "$1 needs a value"; }
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -101,14 +106,6 @@ else
 	die "sha256sum or openssl is required"
 fi
 
-if ! command -v docker >/dev/null 2>&1; then
-	[ "$INSTALL_DOCKER" -eq 1 ] || die "Docker is required. Install it first (curl -fsSL https://get.docker.com | sh) or pass --install-docker"
-	say "installing Docker with get.docker.com"
-	curl -fsSL https://get.docker.com | sh
-	systemctl enable --now docker
-fi
-docker info >/dev/null 2>&1 || die "Docker is installed but not running (systemctl start docker)"
-
 if systemctl is-active --quiet keel-server 2>/dev/null; then
 	die "keel-server.service is running. Switch it to aven-server first (README: 'Upgrading from Keel'); do not run both on the same data directory"
 fi
@@ -128,48 +125,186 @@ fi
 UPGRADE=0
 [ -f "$ENV_FILE" ] && UPGRADE=1
 
-tty_ok() { [ "$YES" -eq 0 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; }
+# ---- questions (on a terminal only) ----
+
+# /dev/tty exists even without a controlling terminal (cron, CI, ssh without -t); only opening it tells.
+TTY=0
+[ "$YES" -eq 0 ] && (exec </dev/tty >/dev/tty) 2>/dev/null && TTY=1
+tty_ok() { [ "$TTY" -eq 1 ]; }
+tell() { printf '%s\n' "$*" >/dev/tty; }
 ask() { # ask VAR "prompt" default
 	printf '%s' "$2" >/dev/tty
 	[ -n "$3" ] && printf ' [%s]' "$3" >/dev/tty
 	printf ': ' >/dev/tty
 	_a=""
-	read -r _a </dev/tty || true
+	read -r _a </dev/tty || die "no answer (input closed); pass the options on the command line"
 	[ -n "$_a" ] || _a=$3
 	eval "$1=\$_a"
 }
-safe() { # reject characters that would break the env file
-	case "$2" in *[!A-Za-z0-9.:/_@+-]*) die "$1 contains unexpected characters: $2" ;; esac
+ask_secret() { # ask_secret VAR "prompt"; the answer is not echoed
+	printf '%s: ' "$2" >/dev/tty
+	_a=""
+	trap 'stty echo </dev/tty 2>/dev/null; exit 130' INT TERM
+	stty -echo </dev/tty 2>/dev/null || true
+	read -r _a </dev/tty || _a=""
+	stty echo </dev/tty 2>/dev/null || true
+	trap - INT TERM
+	printf '\n' >/dev/tty
+	eval "$1=\$_a"
 }
+confirm() { # confirm "question" y|n; succeeds on yes
+	if [ "$2" = y ]; then _d=Y/n; else _d=y/N; fi
+	while :; do
+		printf '%s? [%s]: ' "$1" "$_d" >/dev/tty
+		_a=""
+		read -r _a </dev/tty || die "no answer (input closed); pass the options on the command line"
+		[ -n "$_a" ] || _a=$2
+		case "$_a" in
+			[Yy]|[Yy][Ee][Ss]) return 0 ;;
+			[Nn]|[Nn][Oo]) return 1 ;;
+		esac
+		tell "  Answer y or n."
+	done
+}
+valid() { case "$1" in *[!A-Za-z0-9.:/_@+-]*) return 1 ;; esac; }
+safe() { # reject characters that would break the env file
+	valid "$2" || die "$1 contains unexpected characters: $2"
+}
+url_problem() { # prints what is wrong with dashboard URL $1, nothing if it is fine
+	case "$1" in
+		"") echo "is required for the first install" ;;
+		https://?*) valid "$1" || echo "contains unexpected characters" ;;
+		*) echo "must be an https:// URL" ;;
+	esac
+}
+domain_problem() {
+	case "$1" in
+		"") echo "is required" ;;
+		.*|*.|*..*|*[!A-Za-z0-9.-]*) echo "must be a domain name such as apps.example.com" ;;
+	esac
+}
+email_problem() {
+	case "$1" in
+		"") ;;
+		?*@?*.?*) valid "$1" || echo "contains unexpected characters" ;;
+		*) echo "must be an email address" ;;
+	esac
+}
+password_problem() {
+	[ ${#1} -ge 8 ] || { echo "the admin password must have at least 8 characters"; return; }
+	case "$1" in *[\"\'\\\$\`\ ]*) echo "the admin password must not contain quotes, backslashes, \$, backticks or spaces" ;; esac
+}
+have_railpack() { command -v railpack >/dev/null 2>&1 || [ -x "$BIN_DIR/railpack" ]; }
+gh_curl() {
+	if [ -n "${GITHUB_TOKEN:-}" ]; then
+		curl --proto =https --tlsv1.2 -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" "$@"
+	else
+		curl --proto =https --tlsv1.2 -fsSL --retry 3 "$@"
+	fi
+}
+
+if [ "$UPGRADE" -eq 0 ] && tty_ok; then
+	tell ""
+	tell "Aven server installer"
+	tell "A few questions first; press Enter to take the value in brackets. Nothing is changed until you confirm."
+	tell ""
+fi
+
+NEED_DOCKER=0
+if ! command -v docker >/dev/null 2>&1; then
+	if [ "$INSTALL_DOCKER" -eq 0 ] && tty_ok && confirm "Docker is not installed. Install it with get.docker.com" y; then
+		INSTALL_DOCKER=1
+	fi
+	[ "$INSTALL_DOCKER" -eq 1 ] || die "Docker is required. Install it first (curl -fsSL https://get.docker.com | sh) or pass --install-docker"
+	NEED_DOCKER=1
+else
+	docker info >/dev/null 2>&1 || die "Docker is installed but not running (systemctl start docker)"
+fi
 
 if [ "$UPGRADE" -eq 0 ]; then
 	if [ -z "$PUBLIC_URL" ] && tty_ok; then
-		ask PUBLIC_URL "Dashboard URL (https://...)" ""
+		tell "The dashboard is served on its own name, for example https://aven.example.com."
+		while :; do
+			ask PUBLIC_URL "Dashboard URL" ""
+			case "$PUBLIC_URL" in ""|*://*) ;; *) PUBLIC_URL="https://$PUBLIC_URL" ;; esac
+			PUBLIC_URL=${PUBLIC_URL%/}
+			p=$(url_problem "$PUBLIC_URL")
+			[ -z "$p" ] && break
+			tell "  The URL $p."
+		done
 	fi
-	case "$PUBLIC_URL" in
-		https://?*) ;;
-		"") die "--public-url is required for the first install" ;;
-		*) die "--public-url must be an https:// URL" ;;
-	esac
 	PUBLIC_URL=${PUBLIC_URL%/}
-	safe --public-url "$PUBLIC_URL"
+	p=$(url_problem "$PUBLIC_URL")
+	[ -z "$p" ] || die "--public-url $p"
 	host=${PUBLIC_URL#https://}
 	host=${host%%/*}
 	host=${host%%:*}
+	if command -v getent >/dev/null 2>&1 && ! getent ahosts "$host" >/dev/null 2>&1; then
+		warn "$host does not resolve yet; point it at this server before signing in (Let's Encrypt needs it)"
+	fi
+
 	if [ -z "$BASE_DOMAIN" ]; then
 		def=${host#*.}
 		[ "$def" = "$host" ] && def=$host
-		if tty_ok; then ask BASE_DOMAIN "Base domain for services (*.domain)" "$def"; else BASE_DOMAIN=$def; fi
+		if tty_ok; then
+			tell ""
+			tell "Services get generated names under a base domain, for example web-production.$def."
+			tell "It needs a wildcard DNS record (*.domain) pointing at this server."
+			while :; do
+				ask BASE_DOMAIN "Base domain for services" "$def"
+				p=$(domain_problem "$BASE_DOMAIN")
+				[ -z "$p" ] && break
+				tell "  The base domain $p."
+			done
+		else
+			BASE_DOMAIN=$def
+		fi
 	fi
-	safe --base-domain "$BASE_DOMAIN"
+	p=$(domain_problem "$BASE_DOMAIN")
+	[ -z "$p" ] || die "--base-domain $p"
+
 	if [ -z "$ACME_EMAIL" ] && tty_ok; then
-		ask ACME_EMAIL "Email for Let's Encrypt (optional)" ""
+		tell ""
+		while :; do
+			ask ACME_EMAIL "Email for Let's Encrypt expiry notices (optional, Enter to skip)" ""
+			p=$(email_problem "$ACME_EMAIL")
+			[ -z "$p" ] && break
+			tell "  The email $p."
+		done
 	fi
-	[ -z "$ACME_EMAIL" ] || safe --acme-email "$ACME_EMAIL"
+	p=$(email_problem "$ACME_EMAIL")
+	[ -z "$p" ] || die "--acme-email $p"
+
+	if [ -z "$ADMIN_PASSWORD" ] && tty_ok; then
+		tell ""
+		tell "You sign in as admin@local."
+		while :; do
+			ask_secret pw "Password (at least 8 characters; Enter to generate one)"
+			[ -n "$pw" ] || break
+			p=$(password_problem "$pw")
+			if [ -n "$p" ]; then
+				tell "  $p."
+				continue
+			fi
+			ask_secret pw2 "Repeat the password"
+			if [ "$pw" = "$pw2" ]; then
+				ADMIN_PASSWORD=$pw
+				break
+			fi
+			tell "  The passwords do not match."
+		done
+		pw="" pw2=""
+	fi
 	if [ -n "$ADMIN_PASSWORD" ]; then
-		[ ${#ADMIN_PASSWORD} -ge 8 ] || die "the admin password must have at least 8 characters"
-		case "$ADMIN_PASSWORD" in *[\"\'\\\$\`\ ]*) die "the admin password must not contain quotes, backslashes, \$, backticks or spaces" ;; esac
+		p=$(password_problem "$ADMIN_PASSWORD")
+		[ -z "$p" ] || die "$p"
 	fi
+
+	if [ "$RAILPACK" -eq 1 ] && ! have_railpack && tty_ok; then
+		tell ""
+		confirm "Install Railpack $RAILPACK_VERSION to build apps that have no Dockerfile" y || RAILPACK=0
+	fi
+
 	if command -v ss >/dev/null 2>&1; then
 		for p in 80 443; do
 			if ss -Htln "sport = :$p" 2>/dev/null | grep -q .; then
@@ -179,20 +314,55 @@ if [ "$UPGRADE" -eq 0 ]; then
 	fi
 fi
 
+if [ -z "$FROM_DIR" ] && [ "$VERSION" = latest ]; then
+	VERSION=$(gh_curl -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+	[ -n "$VERSION" ] || die "could not find the latest release of $REPO (pass --version, or --from-dir for a local build)"
+fi
+[ -n "$FROM_DIR" ] || safe --version "$VERSION"
+
+if tty_ok; then
+	if [ -n "$FROM_DIR" ]; then src="the local build in $FROM_DIR"; else src="$VERSION from github.com/$REPO"; fi
+	if [ "$UPGRADE" -eq 1 ]; then
+		tell ""
+		tell "Upgrade aven-server to $src."
+		tell "  $ENV_FILE is kept and the database is backed up first."
+		tell "  aven-server restarts; running services keep running."
+		tell ""
+		confirm "Upgrade now" y || { say "nothing was changed"; exit 0; }
+	else
+		if [ "$NEED_DOCKER" -eq 1 ]; then d_line="install with get.docker.com"; else d_line="installed"; fi
+		if have_railpack; then r_line="already installed"; elif [ "$RAILPACK" -eq 1 ]; then r_line="install $RAILPACK_VERSION"; else r_line="skip"; fi
+		if [ -n "$ADMIN_PASSWORD" ]; then pw_line="the one you chose"; else pw_line="generated, shown at the end"; fi
+		if [ "$START" -eq 1 ]; then s_line="start aven-server and enable it at boot"; else s_line="install only (--no-start)"; fi
+		tell ""
+		tell "Summary"
+		tell "  Version:         $src"
+		tell "  Dashboard:       $PUBLIC_URL"
+		tell "  Service domains: *.$BASE_DOMAIN"
+		tell "  Let's Encrypt:   ${ACME_EMAIL:-no email}"
+		tell "  admin@local:     $pw_line"
+		tell "  Docker:          $d_line"
+		tell "  Railpack:        $r_line"
+		tell "  Settings:        $ENV_FILE"
+		tell "  Then:            $s_line"
+		tell ""
+		confirm "Install now" y || { say "nothing was changed"; exit 0; }
+	fi
+fi
+
+if [ "$NEED_DOCKER" -eq 1 ]; then
+	say "installing Docker with get.docker.com"
+	curl -fsSL https://get.docker.com | sh
+	systemctl enable --now docker
+	docker info >/dev/null 2>&1 || die "Docker was installed but is not running (systemctl start docker)"
+fi
+
 # ---- fetch ----
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 PKG=$TMP/pkg
 mkdir -p "$PKG/lib"
-
-gh_curl() {
-	if [ -n "${GITHUB_TOKEN:-}" ]; then
-		curl --proto =https --tlsv1.2 -fsSL --retry 3 -H "Authorization: Bearer $GITHUB_TOKEN" "$@"
-	else
-		curl --proto =https --tlsv1.2 -fsSL --retry 3 "$@"
-	fi
-}
 
 if [ -n "$FROM_DIR" ]; then
 	[ -x "$FROM_DIR/bin/aven-server" ] || die "$FROM_DIR/bin/aven-server not found (run 'make all' first)"
@@ -205,11 +375,6 @@ if [ -n "$FROM_DIR" ]; then
 	cp "$FROM_DIR/deploy/aven-server.service" "$FROM_DIR/deploy/aven.env.example" "$PKG/"
 	VERSION=$(cd "$FROM_DIR" && git describe --tags --always 2>/dev/null || echo local)
 else
-	if [ "$VERSION" = latest ]; then
-		VERSION=$(gh_curl -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
-		[ -n "$VERSION" ] || die "could not find the latest release of $REPO (pass --version, or --from-dir for a local build)"
-	fi
-	safe --version "$VERSION"
 	NAME="aven_${VERSION}_linux_${ARCH}"
 	BASE="https://github.com/$REPO/releases/download/$VERSION"
 	say "downloading $NAME.tar.gz"
@@ -281,7 +446,7 @@ install -d -m 0700 "$CONF_DIR"
 install -m 0600 "$PKG/aven.env.example" "$CONF_DIR/aven.env.example"
 say "installed $BIN_DIR/aven-server, $BIN_DIR/aven and downloads in $LIB_DIR"
 
-if [ "$RAILPACK" -eq 1 ] && ! command -v railpack >/dev/null 2>&1 && [ ! -x "$BIN_DIR/railpack" ]; then
+if [ "$RAILPACK" -eq 1 ] && ! have_railpack; then
 	case "$ARCH" in amd64) rp=x86_64 ;; arm64) rp=arm64 ;; esac
 	RP="railpack-$RAILPACK_VERSION-$rp-unknown-linux-musl.tar.gz"
 	RPBASE="https://github.com/railwayapp/railpack/releases/download/$RAILPACK_VERSION"

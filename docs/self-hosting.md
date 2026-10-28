@@ -35,15 +35,21 @@ Use whatever name you like for the dashboard; it only has to match `AVEN_PUBLIC_
 On a fresh server with DNS in place, one command installs the latest release:
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+```
+
+On a terminal the script walks you through the first install: it asks for the dashboard URL, the base domain for generated service names, an optional Let's Encrypt email and the `admin@local` password (Enter generates one), offers to install Docker and Railpack when they are missing, then shows a summary and changes nothing until you confirm. Invalid answers are asked again. Upgrades ask once. For unattended installs pass the settings as options and add `--yes`:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
-  | sudo sh -s -- --public-url https://aven.example.com --acme-email you@example.com
+  | sudo sh -s -- --yes --public-url https://aven.example.com --acme-email you@example.com
 ```
 
 The script checks the system (root, systemd, amd64/arm64, Docker, ports 80/443), downloads the release for your architecture from GitHub Releases and verifies its SHA-256 checksum. It installs `aven-server`, the `aven` CLI, the agent and CLI downloads, and Railpack. It writes `/etc/aven/aven.env` with a generated admin password and webhook secret, installs and starts the systemd unit, waits until the server answers, and prints the sign-in details and the DNS names to create. Then continue with [First sign-in](#7-first-sign-in-and-onboarding).
 
 | Option | Meaning |
 | --- | --- |
-| `--public-url URL` | Dashboard URL, `https://` (prompted on a terminal if omitted) |
+| `--public-url URL` | Dashboard URL, `https://` (asked on a terminal if omitted; required with `--yes`) |
 | `--base-domain DOMAIN` | Wildcard domain for services (default: parent domain of the public URL) |
 | `--acme-email EMAIL` | Let's Encrypt contact (optional) |
 | `--admin-password PW` | Use this password for `admin@local` instead of generating one |

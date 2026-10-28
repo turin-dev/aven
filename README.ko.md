@@ -37,11 +37,10 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 - 여러 서버를 쓸 경우 Tailscale이나 WireGuard 같은 사설망으로 서로 닿는 추가 서버(선택)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
-  | sudo sh -s -- --public-url https://aven.example.com
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
 ```
 
-스크립트는 릴리스 체크섬을 확인하고 `aven-server`, CLI, Railpack을 설치합니다. 관리자 비밀번호를 만들어 `/etc/aven/aven.env`에 쓰고, 서비스를 시작한 뒤 로그인 정보와 만들어야 할 DNS 레코드를 알려 줍니다. `aven.example.com`(생성 도메인을 쓰려면 `AVEN_BASE_DOMAIN`과 함께 `*.apps.example.com`도)을 서버로 향하게 하고 로그인한 다음, *어드민 → Owner · 초기 설정*의 체크리스트를 따라가세요.
+터미널에서 실행하면 대시보드 주소, 서비스용 기본 도메인, Let's Encrypt 이메일, 관리자 비밀번호를 차례로 묻고 요약을 보여 준 뒤 확인을 받고 설치합니다. 스크립트는 릴리스 체크섬을 확인하고 `aven-server`, CLI, Railpack을 설치합니다. 설정을 `/etc/aven/aven.env`에 쓰고(관리자 비밀번호를 정하지 않으면 새로 만듭니다), 서비스를 시작한 뒤 로그인 정보와 만들어야 할 DNS 레코드를 알려 줍니다. `aven.example.com`(생성 도메인을 쓰려면 `AVEN_BASE_DOMAIN`과 함께 `*.apps.example.com`도)을 서버로 향하게 하고 로그인한 다음, *어드민 → Owner · 초기 설정*의 체크리스트를 따라가세요.
 
 그다음 프로젝트를 열고 캔버스에서 **추가**를 눌러 첫 서비스를 배포합니다. DNS, 설정, 직접 설치, 백업, 업그레이드, 서버 추가는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
 

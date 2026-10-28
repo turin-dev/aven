@@ -35,15 +35,21 @@ proxy가 첫 요청 때 인증서를 받을 수 있도록 미리 만들어 둡�
 DNS를 준비한 새 서버라면 명령 하나로 최신 릴리스를 설치할 수 있습니다.
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+```
+
+터미널에서 실행하면 첫 설치를 대화형으로 진행합니다. 대시보드 주소, 생성 서비스 이름에 쓸 기본 도메인, Let's Encrypt 이메일(선택), `admin@local` 비밀번호(Enter를 누르면 생성)를 묻고, Docker나 Railpack이 없으면 설치할지 묻습니다. 마지막에 요약을 보여 주고, 확인하기 전에는 아무것도 바꾸지 않습니다. 잘못된 답은 다시 묻고, 업그레이드는 한 번만 확인합니다. 무인 설치는 설정을 옵션으로 넘기고 `--yes`를 붙입니다.
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
-  | sudo sh -s -- --public-url https://aven.example.com --acme-email you@example.com
+  | sudo sh -s -- --yes --public-url https://aven.example.com --acme-email you@example.com
 ```
 
 스크립트는 시스템(root, systemd, amd64/arm64, Docker, 80/443 포트)을 확인하고, GitHub Releases에서 아키텍처에 맞는 릴리스를 내려받아 SHA-256 체크섬을 검증합니다. `aven-server`, `aven` CLI, agent와 CLI 다운로드 파일, Railpack을 설치합니다. 관리자 비밀번호와 웹훅 비밀값을 생성해 `/etc/aven/aven.env`를 만들고, systemd unit을 설치해 시작한 뒤, 서버가 응답할 때까지 기다렸다가 로그인 정보와 만들어야 할 DNS 이름을 출력합니다. 그다음 [첫 로그인](#7-첫-로그인과-온보딩)으로 넘어가세요.
 
 | 옵션 | 뜻 |
 | --- | --- |
-| `--public-url URL` | 대시보드 주소, `https://`(생략하면 터미널에서 묻습니다) |
+| `--public-url URL` | 대시보드 주소, `https://`(생략하면 터미널에서 묻고, `--yes`에서는 필수) |
 | `--base-domain DOMAIN` | 서비스용 와일드카드 도메인(기본값: 공개 URL의 상위 도메인) |
 | `--acme-email EMAIL` | Let's Encrypt 연락처(선택) |
 | `--admin-password PW` | `admin@local` 비밀번호를 생성하지 않고 이 값 사용 |
