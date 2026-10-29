@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Unplug, Webhook } from "lucide-react";
+import { AlertTriangle, Check, Unplug, Webhook } from "lucide-react";
 import { api } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
@@ -36,6 +36,8 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
   }, [params, qc, router]);
 
   const c = conn.data;
+  // OAuth 승인은 GitHub 화면으로 이동해야 하므로 API 경로로 바로 간다(세션 쿠키로 인증).
+  const startHref = `/api/github/oauth/start${typeof window !== "undefined" && window.location.pathname.startsWith("/account") ? "?from=account" : ""}`;
   return (
     <Card
       title={
@@ -53,31 +55,49 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
         <div className="space-y-5">
           {c.connected ? (
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm">
-                <Check className="size-4 text-success" />
-                <span>
-                  <b className="text-foreground">{c.login}</b> {t("계정으로 연결됨")}
-                  {c.connected_at && <span className="text-gray-500"> · {fmtRelative(c.connected_at)}</span>}
-                </span>
+              {c.expired ? (
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertTriangle className="size-4 text-danger" />
+                  <span>
+                    <b className="text-foreground">{c.login}</b> {t("계정의 GitHub 토큰이 만료되어 갱신하지 못했습니다. 다시 연결하세요.")}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-sm">
+                  <Check className="size-4 text-success" />
+                  <span>
+                    <b className="text-foreground">{c.login}</b> {t("계정으로 연결됨")}
+                    {c.connected_at && <span className="text-gray-500"> · {fmtRelative(c.connected_at)}</span>}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                {c.expired && (
+                  <a href={startHref}>
+                    <Button variant="primary">
+                      <BrandIcon name="github" className="size-4" /> {t("다시 연결")}
+                    </Button>
+                  </a>
+                )}
+                <Button
+                  variant="outline"
+                  loading={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await api.githubDisconnect();
+                      toast(t("GitHub 연결을 해제했습니다"));
+                      qc.invalidateQueries({ queryKey: qk.github });
+                    } catch (e) {
+                      toast(errorMessage(e), "error");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  <Unplug className="size-4" /> {t("연결 해제")}
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                loading={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    await api.githubDisconnect();
-                    toast(t("GitHub 연결을 해제했습니다"));
-                    qc.invalidateQueries({ queryKey: qk.github });
-                  } catch (e) {
-                    toast(errorMessage(e), "error");
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                <Unplug className="size-4" /> {t("연결 해제")}
-              </Button>
             </div>
           ) : c.app_configured ? (
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -90,8 +110,7 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
                   t("연결된 계정이 없어 비공개 저장소를 클론할 수 없습니다.")
                 )}
               </p>
-              {/* OAuth 승인은 GitHub 화면으로 이동해야 하므로 API 경로로 바로 간다(세션 쿠키로 인증). */}
-              <a href={`/api/github/oauth/start${typeof window !== "undefined" && window.location.pathname.startsWith("/account") ? "?from=account" : ""}`}>
+              <a href={startHref}>
                 <Button variant="primary">
                   <BrandIcon name="github" className="size-4" /> {t("GitHub 연결")}
                 </Button>

@@ -1411,6 +1411,11 @@ export type GithubConnection = {
   login?: string;
   scopes?: string;
   connected_at?: string;
+  /** set when GitHub issues expiring user tokens (8h); aven refreshes them before they expire. null for non-expiring tokens. */
+  expires_at?: string | null;
+  refresh_expires_at?: string | null;
+  /** the token expired and can no longer be refreshed: the user has to reconnect */
+  expired?: boolean;
   callback_url: string;
   webhook_url: string;
   secret_configured: boolean;

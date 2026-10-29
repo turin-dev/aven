@@ -2,8 +2,11 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
+	"github.com/turin-dev/aven/internal/ghoauth"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -23,11 +26,20 @@ func (m *Manager) UserGitHubConnection(ctx context.Context, userID string) *stor
 	return c
 }
 
+// githubRefreshMargin: 만료까지 이만큼 남으면 미리 갱신한다(클론·API 호출 도중에 만료되지 않게).
+const githubRefreshMargin = 10 * time.Minute
+
 // UserGitHubToken은 사용자가 연결한 GitHub 토큰(평문)이다. 없거나 복호화하지 못하면 "".
+// 만료되는 토큰(GitHub의 expiring user tokens, 8시간)이면 만료 전에 refresh token으로 갱신해 저장한다.
 func (m *Manager) UserGitHubToken(ctx context.Context, userID string) string {
 	c := m.UserGitHubConnection(ctx, userID)
 	if c == nil {
 		return ""
+	}
+	if githubTokenStale(c) {
+		if nc := m.refreshGitHubToken(ctx, c); nc != nil {
+			c = nc
+		}
 	}
 	tok, err := m.Store.Unseal(c.Token)
 	if err != nil {
@@ -37,6 +49,68 @@ func (m *Manager) UserGitHubToken(ctx context.Context, userID string) string {
 		return ""
 	}
 	return tok
+}
+
+func githubTokenStale(c *store.GitHubConnection) bool {
+	return c.RefreshToken != "" && !c.ExpiresAt.IsZero() && time.Until(c.ExpiresAt) < githubRefreshMargin
+}
+
+// refreshGitHubToken은 연결의 토큰을 갱신하고 새 연결을 돌려준다. 갱신하지 못하면 nil이다(호출자는 기존 토큰을 쓴다).
+func (m *Manager) refreshGitHubToken(ctx context.Context, c *store.GitHubConnection) *store.GitHubConnection {
+	if m.Cfg.GitHubClientID == "" || m.Cfg.GitHubClientSecret == "" {
+		return nil
+	}
+	m.ghRefresh.Lock()
+	defer m.ghRefresh.Unlock()
+	// 기다리는 동안 다른 요청이 갱신했을 수 있다.
+	cur, err := m.Store.GetGitHubConnection(ctx, c.UserID)
+	if err != nil {
+		return nil
+	}
+	if !githubTokenStale(cur) {
+		return cur
+	}
+	refresh, err := m.Store.Unseal(cur.RefreshToken)
+	if err != nil {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	t, err := ghoauth.Refresh(rctx, m.Cfg.GitHubOAuthBase, m.Cfg.GitHubClientID, m.Cfg.GitHubClientSecret, refresh)
+	if err != nil {
+		// 다른 서버(HA)가 같은 refresh token을 먼저 썼으면 저장된 새 토큰을 쓴다.
+		if again, gerr := m.Store.GetGitHubConnection(ctx, c.UserID); gerr == nil && again.RefreshToken != cur.RefreshToken {
+			return again
+		}
+		if m.Log != nil {
+			var oe *ghoauth.Error
+			if errors.As(err, &oe) {
+				m.Log.Warn("github token refresh rejected; the user must reconnect GitHub", "user", c.UserID, "login", c.Login, "err", err)
+			} else {
+				m.Log.Warn("github token refresh failed", "user", c.UserID, "login", c.Login, "err", err)
+			}
+		}
+		return nil
+	}
+	ok, err := m.Store.RefreshGitHubTokens(rctx, c.UserID, cur.RefreshToken,
+		store.GitHubTokens{Access: t.Access, Refresh: t.Refresh, ExpiresAt: t.ExpiresAt, RefreshExpiresAt: t.RefreshExpiresAt})
+	if err != nil || !ok {
+		if m.Log != nil && err != nil {
+			m.Log.Warn("github token refresh not saved", "user", c.UserID, "err", err)
+		}
+		if again, gerr := m.Store.GetGitHubConnection(ctx, c.UserID); gerr == nil {
+			return again
+		}
+		return nil
+	}
+	if m.Log != nil {
+		m.Log.Info("github token refreshed", "user", c.UserID, "login", c.Login, "expires_at", t.ExpiresAt)
+	}
+	nc, err := m.Store.GetGitHubConnection(ctx, c.UserID)
+	if err != nil {
+		return nil
+	}
+	return nc
 }
 
 // EnvGitHubToken은 KEEL_GITHUB_TOKEN이다(사용자 연결이 없는 프로젝트의 대체값).

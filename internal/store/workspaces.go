@@ -529,33 +529,110 @@ func (s *Store) EffectiveProjectRole(ctx context.Context, pid string, u *User) (
 
 // ---------------- GitHub connections (사용자별) ----------------
 
-// GitHubConnection은 사용자가 대시보드에서 연결한 GitHub 계정이다. Token은 암호문이다(밖으로 내보내지 않는다).
+// GitHubConnection은 사용자가 대시보드에서 연결한 GitHub 계정이다. Token과 RefreshToken은 암호문이다(밖으로 내보내지 않는다).
+// 만료가 없는 토큰이면 RefreshToken과 두 만료 시각이 비어 있다(zero).
 type GitHubConnection struct {
-	UserID      string    `json:"user_id"`
-	Login       string    `json:"login"`
-	Scopes      string    `json:"scopes"`
-	ConnectedAt time.Time `json:"connected_at"`
-	Token       string    `json:"-"`
+	UserID           string    `json:"user_id"`
+	Login            string    `json:"login"`
+	Scopes           string    `json:"scopes"`
+	ConnectedAt      time.Time `json:"connected_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
+	Token            string    `json:"-"`
+	RefreshToken     string    `json:"-"`
+}
+
+// GitHubTokens는 저장할 토큰(평문)과 만료 시각이다. 만료가 없으면 Refresh와 시각을 비운다.
+type GitHubTokens struct {
+	Access           string
+	Refresh          string
+	ExpiresAt        time.Time
+	RefreshExpiresAt time.Time
+}
+
+// migrateGitHubTokenRefresh는 만료되는 GitHub 사용자 토큰(8시간)을 갱신할 refresh token과 만료 시각을 저장한다.
+// 이미 있는 컬럼은 건너뛴다(예전 버전으로 되돌린 DB에서 다시 돌 수 있다).
+func migrateGitHubTokenRefresh(ctx context.Context, tx *Store) error {
+	cols, err := tx.tableColumns(ctx, "github_connections")
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for _, c := range cols {
+		have[c] = true
+	}
+	for _, c := range []string{"refresh_token", "expires_at", "refresh_expires_at"} {
+		if have[c] {
+			continue
+		}
+		if _, err := tx.q.ExecContext(ctx, `ALTER TABLE github_connections ADD COLUMN `+c+` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func optTS(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return ts(t)
+}
+
+func parseOptTS(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	return parseTS(s)
 }
 
 func (s *Store) GetGitHubConnection(ctx context.Context, userID string) (*GitHubConnection, error) {
 	var c GitHubConnection
-	var at string
-	err := s.q.QueryRowContext(ctx, `SELECT user_id, login, scopes, token, connected_at FROM github_connections WHERE user_id=?`, userID).
-		Scan(&c.UserID, &c.Login, &c.Scopes, &c.Token, &at)
+	var at, exp, rexp string
+	err := s.q.QueryRowContext(ctx, `SELECT user_id, login, scopes, token, refresh_token, connected_at, expires_at, refresh_expires_at
+		FROM github_connections WHERE user_id=?`, userID).
+		Scan(&c.UserID, &c.Login, &c.Scopes, &c.Token, &c.RefreshToken, &at, &exp, &rexp)
 	if err != nil {
 		return nil, notFound(err)
 	}
-	c.ConnectedAt = parseTS(at)
+	c.ConnectedAt, c.ExpiresAt, c.RefreshExpiresAt = parseTS(at), parseOptTS(exp), parseOptTS(rexp)
 	return &c, nil
 }
 
-// SetGitHubConnection은 토큰(평문)을 암호화해 사용자 연결을 저장한다(이전 연결을 바꾼다).
+// SetGitHubConnection은 만료가 없는 토큰(평문)으로 사용자 연결을 저장한다(SetGitHubConnectionTokens).
 func (s *Store) SetGitHubConnection(ctx context.Context, userID, token, login, scopes string) error {
-	_, err := s.q.ExecContext(ctx, `INSERT INTO github_connections (user_id, login, scopes, token, connected_at) VALUES (?,?,?,?,?)
-		ON CONFLICT(user_id) DO UPDATE SET login=excluded.login, scopes=excluded.scopes, token=excluded.token, connected_at=excluded.connected_at`,
-		userID, login, scopes, s.Seal(token), ts(time.Now()))
+	return s.SetGitHubConnectionTokens(ctx, userID, login, scopes, GitHubTokens{Access: token})
+}
+
+// SetGitHubConnectionTokens는 토큰을 암호화해 사용자 연결을 저장한다(이전 연결을 바꾼다).
+func (s *Store) SetGitHubConnectionTokens(ctx context.Context, userID, login, scopes string, t GitHubTokens) error {
+	refresh := ""
+	if t.Refresh != "" {
+		refresh = s.Seal(t.Refresh)
+	}
+	_, err := s.q.ExecContext(ctx, `INSERT INTO github_connections (user_id, login, scopes, token, refresh_token, connected_at, expires_at, refresh_expires_at)
+		VALUES (?,?,?,?,?,?,?,?)
+		ON CONFLICT(user_id) DO UPDATE SET login=excluded.login, scopes=excluded.scopes, token=excluded.token, refresh_token=excluded.refresh_token,
+			connected_at=excluded.connected_at, expires_at=excluded.expires_at, refresh_expires_at=excluded.refresh_expires_at`,
+		userID, login, scopes, s.Seal(t.Access), refresh, ts(time.Now()), optTS(t.ExpiresAt), optTS(t.RefreshExpiresAt))
 	return err
+}
+
+// RefreshGitHubTokens는 갱신한 토큰을 저장한다. prevRefresh(저장돼 있던 refresh_token 암호문)가 그대로일 때만 바꾸고,
+// 다른 요청이 먼저 갱신했으면 false다(refresh token은 한 번만 쓸 수 있다). connected_at은 그대로 둔다.
+func (s *Store) RefreshGitHubTokens(ctx context.Context, userID, prevRefresh string, t GitHubTokens) (bool, error) {
+	refresh := ""
+	if t.Refresh != "" {
+		refresh = s.Seal(t.Refresh)
+	}
+	res, err := s.q.ExecContext(ctx, `UPDATE github_connections SET token=?, refresh_token=?, expires_at=?, refresh_expires_at=?
+		WHERE user_id=? AND refresh_token=?`,
+		s.Seal(t.Access), refresh, optTS(t.ExpiresAt), optTS(t.RefreshExpiresAt), userID, prevRefresh)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // GitHubConnectionOwner는 GitHub를 연결한 활성 사용자의 공개 정보다(토큰 없음).

@@ -61,6 +61,7 @@ var migrations = []func(ctx context.Context, tx *Store) error{
 	migrateDomainIPv6,
 	migrateOwnerTools,
 	migrateServiceHolds,
+	migrateGitHubTokenRefresh,
 }
 
 // noForeignKeyMigrations는 외래 키 검사를 끄고 돌리는 마이그레이션이다(테이블을 다시 만드는 경우). PRAGMA foreign_keys는
