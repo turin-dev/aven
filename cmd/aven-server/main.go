@@ -199,7 +199,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		OTLPEndpoint:       otlpEndpoint(),
 		IPv6Iface:          strings.TrimSpace(compat.Env("IPV6_IFACE")),
 		SelfServiceID:      strings.TrimSpace(compat.Env("SELF_SERVICE")),
-		SelfEnvFile:        env("SELF_ENV_FILE", selfhost.DefaultEnvFile),
+		SelfEnvFile:        env("SELF_ENV_FILE", compat.DefaultEnvFile()),
 	}
 	// 도메인별 공개 IPv6: AVEN_IPV6_POOL(CIDR, /64~/120)이 있으면 로컬 노드 풀로 쓴다(PATCH /api/nodes/node_local 값보다 우선).
 	if v := strings.TrimSpace(compat.Env("IPV6_POOL")); v != "" {

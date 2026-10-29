@@ -82,7 +82,7 @@ type Config struct {
 	OTLPEndpoint string // KEEL_OTLP_ENDPOINT: 컨테이너가 span을 보낼 OTLP/HTTP 주소(기본 DefaultOTLPEndpoint)
 	// SelfServiceID는 aven-server 자신을 빌드·배포하는 서비스(KEEL_SELF_SERVICE)다. 비우면 self 배포를 쓰지 않는다(docs/selfhost.md).
 	SelfServiceID string
-	// SelfEnvFile은 aven-server 컨테이너에 넘길 env 파일(KEEL_SELF_ENV_FILE, 기본 selfhost.DefaultEnvFile)이다.
+	// SelfEnvFile은 aven-server 컨테이너에 넘길 env 파일(AVEN_SELF_ENV_FILE, 기본 compat.DefaultEnvFile: 예전 설치는 /etc/keel)이다.
 	SelfEnvFile string
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/events"
 	"github.com/turin-dev/aven/internal/logbook"
 	"github.com/turin-dev/aven/internal/node"
@@ -116,7 +117,7 @@ func (m *Manager) selfEnvFile() string {
 	if m.Cfg.SelfEnvFile != "" {
 		return m.Cfg.SelfEnvFile
 	}
-	return selfhost.DefaultEnvFile
+	return compat.DefaultEnvFile() // /etc/aven/aven.env, 없으면 예전 설치의 /etc/keel/aven.env·keel.env
 }
 
 // IsSelfService는 서비스가 aven-server 자신을 배포하는 self 서비스인지 알려준다.
