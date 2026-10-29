@@ -40,7 +40,7 @@ Run these from `website/`. Then open http://localhost:8080 (or http://localhost:
 
 ## Deploy
 
-The production site runs on Aven itself, built from this directory (root directory `/website`) and deployed on every push to `main` that changes `website/**`. It needs one variable, `APP_KEY`; everything else has defaults in the `Dockerfile`.
+The production site runs on Aven itself and is deployed with `aven up` from this directory. It needs one variable, `APP_KEY`; everything else has defaults in the `Dockerfile`.
 
 ## Contributing
 
