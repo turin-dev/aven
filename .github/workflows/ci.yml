@@ -46,6 +46,23 @@ jobs:
           node-version: 24
       - run: node --test sdk/index.test.ts
 
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer
+      - run: composer validate --no-check-publish
+      - run: composer install --no-interaction --prefer-dist
+      - run: cp .env.example .env && php artisan key:generate
+      - run: php artisan test
+      - run: docker build -t aven-website:ci .
+
   image:
     runs-on: ubuntu-latest
     steps:

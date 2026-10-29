@@ -8,3 +8,4 @@ sdk/node_modules
 *.db
 *.env
 !deploy/*.env.example
+website

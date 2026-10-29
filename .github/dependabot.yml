@@ -10,9 +10,17 @@ updates:
     schedule: { interval: weekly }
     groups:
       web: { patterns: ["*"], update-types: [minor, patch] }
+  - package-ecosystem: composer
+    directory: /website
+    schedule: { interval: weekly }
+    groups:
+      website: { patterns: ["*"], update-types: [minor, patch] }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: monthly }
   - package-ecosystem: docker
     directory: /
+    schedule: { interval: monthly }
+  - package-ecosystem: docker
+    directory: /website
     schedule: { interval: monthly }
