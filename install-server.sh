@@ -230,7 +230,7 @@ while [ $# -gt 0 ]; do
 		-y|--yes) YES=1; shift ;;
 		-h|--help)
 			if [ -f "$0" ] && head -n1 "$0" | grep -q '^#!'; then sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
-			else echo "usage: install-server.sh --public-url https://... [options]; see https://github.com/$REPO/blob/main/install-server.sh"; fi
+			else echo "usage: curl -fsSL .../install-server.sh | sudo sh [-s -- options]; see https://github.com/$REPO/blob/main/install-server.sh"; fi
 			exit 0 ;;
 		*) die "unknown option: $1 (see --help)" ;;
 	esac
