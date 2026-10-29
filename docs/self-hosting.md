@@ -38,7 +38,7 @@ On a fresh server with DNS in place, one command installs the latest release:
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
 ```
 
-On a terminal the script walks you through the first install: it asks for the dashboard URL, the base domain for generated service names, an optional Let's Encrypt email and the `admin@local` password (Enter generates one), offers to install Docker and Railpack when they are missing, then shows a summary and changes nothing until you confirm. Invalid answers are asked again. Upgrades ask once. For unattended installs pass the settings as options and add `--yes`:
+On a terminal the script walks you through the first install: it asks for the dashboard URL (Enter without one installs on `http://localhost:7070`), the base domain for generated service names, an optional Let's Encrypt email and the `admin@local` password (Enter generates one), offers to install Docker and Railpack when they are missing, then shows a summary and changes nothing until you confirm. Invalid answers are asked again. Upgrades ask once. For unattended installs pass the settings as options and add `--yes`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
@@ -49,7 +49,7 @@ The script checks the system (root, systemd, amd64/arm64, Docker, ports 80/443),
 
 | Option | Meaning |
 | --- | --- |
-| `--public-url URL` | Dashboard URL, `https://` (asked on a terminal if omitted; required with `--yes`) |
+| `--public-url URL` | Dashboard URL, `https://` (asked on a terminal if omitted). Without a domain the dashboard is `http://localhost:7070` on the server only; open it through `ssh -L 7070:localhost:7070` and add a domain later |
 | `--base-domain DOMAIN` | Wildcard domain for services (default: parent domain of the public URL) |
 | `--acme-email EMAIL` | Let's Encrypt contact (optional) |
 | `--admin-password PW` | Use this password for `admin@local` instead of generating one |

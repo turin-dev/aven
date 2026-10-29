@@ -10,7 +10,8 @@
 # and the previous binary is kept as /usr/local/bin/aven-server.prev. Running containers keep running.
 #
 # Options:
-#   --public-url URL       dashboard URL, https:// (first install; prompted on a terminal)
+#   --public-url URL       dashboard URL, https:// (first install; prompted on a terminal). Without one
+#                          the dashboard is http://localhost:7070, reachable from this server only
 #   --base-domain DOMAIN   wildcard domain for service hostnames (default: parent of the public URL host)
 #   --acme-email EMAIL     contact email for Let's Encrypt (optional)
 #   --admin-password PW    password for admin@local (default: generated; or env AVEN_ADMIN_PASSWORD, else KEEL_ADMIN_PASSWORD)
@@ -24,7 +25,7 @@
 #
 # On a terminal the script asks for every first-install setting it was not given, shows a summary and
 # asks before changing anything. Upgrades ask once for confirmation. With -y or without a terminal it
-# never asks and fails on a missing --public-url. NO_COLOR turns colors off; TERM=dumb gives plain output.
+# never asks. NO_COLOR turns colors off; TERM=dumb gives plain output.
 #
 # Environment: GITHUB_TOKEN, when set, is sent with GitHub requests (API rate limits). AVEN_REPO overrides the
 # owner/repo to download releases from (forks).
@@ -108,6 +109,13 @@ EOF
 	done <<EOF
 $_rows
 EOF
+	_bv=$B_V
+	_cols=$( (stty size <&1) 2>/dev/null | cut -d' ' -f2) || _cols=""
+	[ -n "$_cols" ] || _cols=$COLS
+	if [ $((_w + 4)) -gt "$_cols" ] 2>/dev/null; then
+		# too wide for the terminal: drop the side borders so nothing wraps
+		_bv="" _w=$((_cols - 5))
+	fi
 	if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
 		printf '%s%s%s%s%s\n' "$ACC" "$B_TL" "$(rep "$B_H" $((_w + 2)))" "$B_TR" "$RST"
 		while IFS= read -r _r; do
@@ -118,7 +126,8 @@ EOF
 				"*"*) _c="$ACC$G_STAR$RST $BOLD${_r#?}$RST"; _n=$((${#_r} + 1)) ;;
 				*) _c="  $_r"; _n=$((2 + ${#_r})) ;;
 			esac
-			printf '%s%s%s %s%s %s%s%s\n' "$ACC" "$B_V" "$RST" "$_c" "$(rep ' ' $((_w - _n)))" "$ACC" "$B_V" "$RST"
+			if [ -n "$_bv" ]; then printf '%s%s%s %s%s %s%s%s\n' "$ACC" "$_bv" "$RST" "$_c" "$(rep ' ' $((_w - _n)))" "$ACC" "$_bv" "$RST"
+			else printf ' %s\n' "$_c"; fi
 		done <<EOF
 $_rows
 EOF
@@ -332,7 +341,7 @@ ui_input() {
 		printf '%s%s%s%s%s\n' "$DIM" "$B_BL" "$(rep "$B_H" $((_bw - 2)))" "$B_BR" "$RST"
 		if [ -n "$UI_ERR" ]; then printf '  %s%s %s%s\n' "$RED" "$G_ELB" "$UI_ERR" "$RST"
 		else printf '  %s%s%s\n' "$DIM" "$_if" "$RST"; fi
-		printf '%s[3A%s[5G' "$ESC" "$ESC"
+		printf '%s[%dA%s[5G' "$ESC" $((2 + $(rows_of "${UI_ERR:-$_if}" 4))) "$ESC"
 	} >/dev/tty
 	[ -z "$_ih" ] || _above=$((_above + $(rows_of "$_ih" 1)))
 	_a=""
@@ -424,9 +433,10 @@ safe() { # reject characters that would break the env file
 }
 url_problem() { # prints what is wrong with dashboard URL $1, nothing if it is fine
 	case "$1" in
-		"") echo "is required for the first install" ;;
+		http://localhost|http://localhost:*|http://127.0.0.1|http://127.0.0.1:*)
+			case "${1##*:}" in *[!0-9]*|"") echo "needs a port, e.g. http://localhost:7070" ;; esac ;;
 		https://?*) valid "$1" || echo "contains unexpected characters" ;;
-		*) echo "must be an https:// URL" ;;
+		*) echo "must be an https:// URL (or http://localhost:PORT)" ;;
 	esac
 }
 domain_problem() {
@@ -485,29 +495,38 @@ else
 	docker info >/dev/null 2>&1 || die "Docker is installed but not running (systemctl start docker)"
 fi
 
+LOCAL=0 # no domain: the dashboard is only on this server, at http://localhost:PORT
+LISTEN_ADDR=127.0.0.1:7070
 if [ "$UPGRADE" -eq 0 ]; then
 	if [ -z "$PUBLIC_URL" ] && tty_ok; then
 		while :; do
-			ui_input PUBLIC_URL "Dashboard URL" "The address you open Aven at, on its own name." "" "e.g. aven.example.com (https:// is added)"
+			ui_input PUBLIC_URL "Dashboard URL" "The address you open Aven at, on its own name." "" "e.g. aven.example.com, or Enter for localhost only"
 			case "$PUBLIC_URL" in ""|*://*) ;; *) PUBLIC_URL="https://$PUBLIC_URL" ;; esac
 			PUBLIC_URL=${PUBLIC_URL%/}
+			[ -n "$PUBLIC_URL" ] || break
 			p=$(url_problem "$PUBLIC_URL")
 			[ -z "$p" ] && break
 			UI_ERR="The URL $p."
 		done
-		ui_done "Dashboard URL" "$PUBLIC_URL"
+		if [ -n "$PUBLIC_URL" ]; then ui_done "Dashboard URL" "$PUBLIC_URL"
+		else ui_done "Dashboard URL" "no domain: http://localhost:7070 on this server"; fi
+	fi
+	if [ -z "$PUBLIC_URL" ]; then
+		PUBLIC_URL=http://localhost:7070
+		tty_ok || warn "No --public-url: the dashboard will be at http://localhost:7070 on this server only."
 	fi
 	PUBLIC_URL=${PUBLIC_URL%/}
 	p=$(url_problem "$PUBLIC_URL")
 	[ -z "$p" ] || die "--public-url $p"
-	host=${PUBLIC_URL#https://}
+	case "$PUBLIC_URL" in http://*) LOCAL=1; LISTEN_ADDR="127.0.0.1:${PUBLIC_URL##*:}" ;; esac
+	host=${PUBLIC_URL#*://}
 	host=${host%%/*}
 	host=${host%%:*}
-	if command -v getent >/dev/null 2>&1 && ! getent ahosts "$host" >/dev/null 2>&1; then
+	if [ "$LOCAL" -eq 0 ] && command -v getent >/dev/null 2>&1 && ! getent ahosts "$host" >/dev/null 2>&1; then
 		warn "$host does not resolve yet. Point it at this server; Let's Encrypt needs it."
 	fi
 
-	if [ -z "$BASE_DOMAIN" ]; then
+	if [ -z "$BASE_DOMAIN" ] && [ "$LOCAL" -eq 0 ]; then
 		def=${host#*.}
 		[ "$def" = "$host" ] && def=$host
 		if tty_ok; then
@@ -522,10 +541,12 @@ if [ "$UPGRADE" -eq 0 ]; then
 			BASE_DOMAIN=$def
 		fi
 	fi
-	p=$(domain_problem "$BASE_DOMAIN")
-	[ -z "$p" ] || die "--base-domain $p"
+	if [ -n "$BASE_DOMAIN" ]; then
+		p=$(domain_problem "$BASE_DOMAIN")
+		[ -z "$p" ] || die "--base-domain $p"
+	fi
 
-	if [ -z "$ACME_EMAIL" ] && tty_ok; then
+	if [ -z "$ACME_EMAIL" ] && [ "$LOCAL" -eq 0 ] && tty_ok; then
 		while :; do
 			ui_input ACME_EMAIL "Email for Let's Encrypt" "Certificate expiry notices go here. Optional." "" "Enter to skip"
 			p=$(email_problem "$ACME_EMAIL")
@@ -608,14 +629,17 @@ EOF
 		if [ "$NEED_DOCKER" -eq 1 ]; then d_line="install with get.docker.com"; else d_line="installed"; fi
 		if have_railpack; then r_line="already installed"; elif [ "$RAILPACK" -eq 1 ]; then r_line="install $RAILPACK_VERSION"; else r_line="skip"; fi
 		if [ -n "$ADMIN_PASSWORD" ]; then pw_line="the one you chose"; else pw_line="generated, shown at the end"; fi
+		if [ "$LOCAL" -eq 1 ]; then dash_line="$PUBLIC_URL (this server only)"; else dash_line=$PUBLIC_URL; fi
+		if [ -n "$BASE_DOMAIN" ]; then svc_line="*.$BASE_DOMAIN"; else svc_line="no generated domains (add later)"; fi
+		if [ "$LOCAL" -eq 1 ]; then le_line="not used"; else le_line=${ACME_EMAIL:-no email}; fi
 		if [ "$START" -eq 1 ]; then s_line="start aven-server, enable at boot"; else s_line="install only (--no-start)"; fi
 		box >/dev/tty <<EOF
 *Ready to install
 
 Version${TAB}$src
-Dashboard${TAB}$PUBLIC_URL
-Services${TAB}*.$BASE_DOMAIN
-Let's Encrypt${TAB}${ACME_EMAIL:-no email}
+Dashboard${TAB}$dash_line
+Services${TAB}$svc_line
+Let's Encrypt${TAB}$le_line
 admin@local${TAB}$pw_line
 Docker${TAB}$d_line
 Railpack${TAB}$r_line
@@ -752,7 +776,7 @@ if [ "$UPGRADE" -eq 0 ]; then
 # Aven server settings (root, 0600). Every option is described in $CONF_DIR/aven.env.example
 # and docs/self-hosting.md. Restart after changes: systemctl restart aven-server
 AVEN_DATA=$DATA
-AVEN_LISTEN=127.0.0.1:7070
+AVEN_LISTEN=$LISTEN_ADDR
 AVEN_PUBLIC_URL=$PUBLIC_URL
 AVEN_BASE_DOMAIN=$BASE_DOMAIN
 AVEN_TLS=auto
@@ -767,6 +791,13 @@ AVEN_GITHUB_CLIENT_SECRET=
 AVEN_GITHUB_WEBHOOK_SECRET=$(rand 64)
 AVEN_AGENT_BIN_DIR=$LIB_DIR
 EOF
+	if [ "$LOCAL" -eq 1 ]; then
+		cat >> "$ENV_FILE.new" <<EOF
+# No domain yet: the dashboard is plain http on $LISTEN_ADDR. Safari drops Secure cookies on http://localhost.
+# Remove this line when AVEN_PUBLIC_URL becomes https.
+AVEN_INSECURE_COOKIE=1
+EOF
+	fi
 	mv -f "$ENV_FILE.new" "$ENV_FILE"
 	chmod 600 "$ENV_FILE"
 	say "Wrote $ENV_FILE"
@@ -803,8 +834,20 @@ URL=$(env_get AVEN_PUBLIC_URL)
 if [ "$UPGRADE" -eq 0 ]; then
 	BD=$(env_get AVEN_BASE_DOMAIN)
 	[ -n "$BD" ] || BD=$(env_get KEEL_BASE_DOMAIN)
-	host=${URL#https://}; host=${host%%/*}; host=${host%%:*}
+	host=${URL#*://}; host=${host%%/*}; host=${host%%:*}
 	if [ -n "$GENERATED" ]; then pw_row=$ADMIN_PASSWORD; else pw_row="the one you chose"; fi
+	if [ "$LOCAL" -eq 1 ]; then
+		port=${URL##*:}
+		next="From another computer, tunnel it first:
+  ssh -L $port:localhost:$port root@$(uname -n)
+To add a domain later, set AVEN_PUBLIC_URL=https://...
+and AVEN_BASE_DOMAIN in $ENV_FILE, then restart."
+	else
+		next="Point these names at this server (A and/or AAAA):
+  $host"
+		[ -z "$BD" ] || next="$next
+  *.$BD"
+	fi
 	echo
 	box <<EOF
 *Aven is running
@@ -813,9 +856,7 @@ Dashboard${TAB}$URL
 Email${TAB}admin@local
 Password${TAB}$pw_row
 
-Point these names at this server (A and/or AAAA):
-  $host
-  *.$BD
+$next
 EOF
 	if [ -n "$GENERATED" ]; then
 		detail "The password is also in $ENV_FILE as AVEN_ADMIN_PASSWORD."

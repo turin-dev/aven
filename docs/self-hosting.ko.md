@@ -38,7 +38,7 @@ DNS를 준비한 새 서버라면 명령 하나로 최신 릴리스를 설치할
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
 ```
 
-터미널에서 실행하면 첫 설치를 대화형으로 진행합니다. 대시보드 주소, 생성 서비스 이름에 쓸 기본 도메인, Let's Encrypt 이메일(선택), `admin@local` 비밀번호(Enter를 누르면 생성)를 묻고, Docker나 Railpack이 없으면 설치할지 묻습니다. 마지막에 요약을 보여 주고, 확인하기 전에는 아무것도 바꾸지 않습니다. 잘못된 답은 다시 묻고, 업그레이드는 한 번만 확인합니다. 무인 설치는 설정을 옵션으로 넘기고 `--yes`를 붙입니다.
+터미널에서 실행하면 첫 설치를 대화형으로 진행합니다. 대시보드 주소(비워 두면 `http://localhost:7070`으로 설치), 생성 서비스 이름에 쓸 기본 도메인, Let's Encrypt 이메일(선택), `admin@local` 비밀번호(Enter를 누르면 생성)를 묻고, Docker나 Railpack이 없으면 설치할지 묻습니다. 마지막에 요약을 보여 주고, 확인하기 전에는 아무것도 바꾸지 않습니다. 잘못된 답은 다시 묻고, 업그레이드는 한 번만 확인합니다. 무인 설치는 설정을 옵션으로 넘기고 `--yes`를 붙입니다.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh \
@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.
 
 | 옵션 | 뜻 |
 | --- | --- |
-| `--public-url URL` | 대시보드 주소, `https://`(생략하면 터미널에서 묻고, `--yes`에서는 필수) |
+| `--public-url URL` | 대시보드 주소, `https://`(생략하면 터미널에서 묻습니다). 도메인 없이 설치하면 대시보드는 서버 안의 `http://localhost:7070`이 되고, `ssh -L 7070:localhost:7070`으로 열 수 있습니다. 도메인은 나중에 붙이면 됩니다 |
 | `--base-domain DOMAIN` | 서비스용 와일드카드 도메인(기본값: 공개 URL의 상위 도메인) |
 | `--acme-email EMAIL` | Let's Encrypt 연락처(선택) |
 | `--admin-password PW` | `admin@local` 비밀번호를 생성하지 않고 이 값 사용 |
