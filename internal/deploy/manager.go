@@ -53,6 +53,10 @@ type Config struct {
 	NodeHostname   string
 	ProxyBind      string // TCP proxy publish 주소. 비우면 IPv4+IPv6 모두
 	GitHubToken    string
+	// GitHubClientID/GitHubClientSecret는 대시보드 GitHub 연결의 OAuth App이다. 만료되는 사용자 토큰을 refresh token으로 갱신할 때 쓴다.
+	GitHubClientID     string
+	GitHubClientSecret string
+	GitHubOAuthBase    string // 기본 https://github.com
 	// ExternalUpstreams는 로컬 keel-proxy가 보낼 수 있는 aven 밖의 upstream(host:port)이다(KEEL_EXTERNAL_UPSTREAMS).
 	ExternalUpstreams []string
 	// ProxyNetworks는 로컬 keel-proxy를 더 붙일 docker 네트워크다(KEEL_PROXY_NETWORKS, 외부 upstream이 사는 네트워크).
@@ -93,6 +97,8 @@ type Manager struct {
 	Timeouts Timeouts
 	Log      *slog.Logger
 	HTTPLogs *HTTPLogHub
+	// ghRefresh는 GitHub 토큰 갱신을 한 번에 하나씩 한다(refresh token은 한 번만 쓸 수 있다).
+	ghRefresh sync.Mutex
 	// NetworkLogs는 노드 수집기의 DNS/flow 기록을 보관하고 로그 화면과 CLI에 보낸다.
 	NetworkLogs *NetworkLogHub
 

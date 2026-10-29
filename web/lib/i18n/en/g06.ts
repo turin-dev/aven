@@ -175,6 +175,7 @@ const en: Record<string, string> = {
   "GitHub 연결": "Connect GitHub",
   "내 GitHub 계정을 연결하면 내가 소유한 프로젝트가 비공개 저장소를 클론하고, 커밋에 배포 상태를 표시하고, 저장소에 웹훅을 자동으로 만들 수 있습니다. 이 연결은 당신 계정에만 적용됩니다.": "Connect your GitHub account so projects you own can clone private repositories, show deployment status on commits, and create webhooks on repositories automatically. This connection applies only to your account.",
   "계정으로 연결됨": "connected as",
+  "계정의 GitHub 토큰이 만료되어 갱신하지 못했습니다. 다시 연결하세요.": "'s GitHub token expired and could not be refreshed. Reconnect it.",
   "GitHub를 연결했습니다": "Connected to GitHub",
   "GitHub 연결을 해제했습니다": "Disconnected from GitHub",
   "지금은 서버의 {token}을 씁니다. 내 계정을 연결하면 그 대신 내 계정을 씁니다.": "The server's {token} is used for now. Connecting your account uses your account instead.",

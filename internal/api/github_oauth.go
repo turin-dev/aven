@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/turin-dev/aven/internal/ghoauth"
+	"github.com/turin-dev/aven/internal/store"
 )
 
 // 받은 토큰은 마스터 키로 암호화해 저장한다(store.github_connections). 저장소 목록·웹훅 등록은 요청한 사용자의 토큰을 쓰고,
@@ -170,7 +173,7 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	tok, scopes, err := s.githubExchange(ctx, code, s.githubCallbackURL(r))
+	t, err := s.githubExchange(ctx, code, s.githubCallbackURL(r))
 	if err != nil {
 		back("error", err.Error())
 		return
@@ -178,11 +181,12 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	var me struct {
 		Login string `json:"login"`
 	}
-	if _, err := s.githubCall(ctx, tok, http.MethodGet, "/user", nil, &me); err != nil {
+	if _, err := s.githubCall(ctx, t.Access, http.MethodGet, "/user", nil, &me); err != nil {
 		back("error", "GitHub 계정을 읽지 못했습니다: "+err.Error())
 		return
 	}
-	if err := s.Store.SetGitHubConnection(ctx, principalID(r), tok, me.Login, scopes); err != nil {
+	if err := s.Store.SetGitHubConnectionTokens(ctx, principalID(r), me.Login, t.Scope,
+		store.GitHubTokens{Access: t.Access, Refresh: t.Refresh, ExpiresAt: t.ExpiresAt, RefreshExpiresAt: t.RefreshExpiresAt}); err != nil {
 		back("error", err.Error())
 		return
 	}
@@ -190,33 +194,13 @@ func (s *Server) githubOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	back("connected", "")
 }
 
-// githubExchange는 승인 코드를 access token으로 바꾼다.
-func (s *Server) githubExchange(ctx context.Context, code, redirect string) (token, scopes string, err error) {
-	form := url.Values{"client_id": {s.GitHubClientID}, "client_secret": {s.GitHubClientSecret}, "code": {code}, "redirect_uri": {redirect}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.githubOAuthBase()+"/login/oauth/access_token", strings.NewReader(form.Encode()))
+// githubExchange는 승인 코드를 토큰으로 바꾼다. 앱에서 토큰 만료를 켰으면 refresh token과 만료 시각도 함께 온다.
+func (s *Server) githubExchange(ctx context.Context, code, redirect string) (*ghoauth.Token, error) {
+	t, err := ghoauth.Exchange(ctx, s.githubOAuthBase(), s.GitHubClientID, s.GitHubClientSecret, code, redirect)
 	if err != nil {
-		return "", "", err
+		return nil, fmt.Errorf("GitHub 토큰 교환 실패: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("GitHub 토큰 교환 실패: %w", err)
-	}
-	defer resp.Body.Close()
-	var out struct {
-		AccessToken string `json:"access_token"`
-		Scope       string `json:"scope"`
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
-		return "", "", fmt.Errorf("GitHub 토큰 교환 응답을 읽지 못했습니다: %w", err)
-	}
-	if out.Error != "" || out.AccessToken == "" {
-		return "", "", fmt.Errorf("GitHub 토큰 교환 실패: %s %s", out.Error, out.Description)
-	}
-	return out.AccessToken, out.Scope, nil
+	return t, nil
 }
 
 // githubCall은 GitHub REST API를 token으로 부른다. 2xx가 아니면 GitHub의 message를 담은 오류다.
@@ -276,6 +260,18 @@ func (s *Server) githubConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if c := s.Deploy.UserGitHubConnection(r.Context(), principalID(r)); c != nil {
 		out["connected"], out["login"], out["scopes"], out["connected_at"], out["source"] = true, c.Login, c.Scopes, c.ConnectedAt, "oauth"
+		// expired: 토큰이 만료됐고 갱신할 수도 없다(refresh token 없음·만료) → 다시 연결해야 한다.
+		// 만료가 없는 토큰이면 expires_at은 null이다.
+		out["expires_at"], out["refresh_expires_at"], out["expired"] = nil, nil, false
+		if !c.ExpiresAt.IsZero() {
+			now := time.Now()
+			out["expires_at"] = c.ExpiresAt
+			if !c.RefreshExpiresAt.IsZero() {
+				out["refresh_expires_at"] = c.RefreshExpiresAt
+			}
+			canRefresh := c.RefreshToken != "" && (c.RefreshExpiresAt.IsZero() || now.Before(c.RefreshExpiresAt))
+			out["expired"] = now.After(c.ExpiresAt) && !canRefresh
+		}
 	} else if s.Deploy.EnvGitHubToken() != "" {
 		out["source"] = "env"
 	}

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,14 +25,41 @@ type fakeGitHub struct {
 	patched int
 	revoked string
 	tokens  []string // Authorization으로 받은 토큰
+	// expiring이면 앱에서 토큰 만료를 켠 것처럼 refresh token과 만료 시각을 준다(refresh token은 한 번만 쓸 수 있다).
+	expiring  bool
+	refresh   string // 지금 유효한 refresh token
+	refreshes int
 }
 
 func (f *fakeGitHub) handler(t *testing.T) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /login/oauth/access_token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
-		if r.Form.Get("client_id") != "cid" || r.Form.Get("client_secret") != "csecret" || r.Form.Get("code") != "good-code" {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if r.Form.Get("client_id") != "cid" || r.Form.Get("client_secret") != "csecret" {
+			json.NewEncoder(w).Encode(map[string]string{"error": "incorrect_client_credentials"})
+			return
+		}
+		if r.Form.Get("grant_type") == "refresh_token" {
+			if f.refresh == "" || r.Form.Get("refresh_token") != f.refresh {
+				json.NewEncoder(w).Encode(map[string]string{"error": "bad_refresh_token", "error_description": "The refresh token passed is incorrect or expired."})
+				return
+			}
+			f.refreshes++
+			f.refresh = fmt.Sprintf("ghr_%d", f.refreshes+1)
+			json.NewEncoder(w).Encode(map[string]any{"access_token": fmt.Sprintf("gho_refreshed_%d", f.refreshes), "refresh_token": f.refresh,
+				"expires_in": 28800, "refresh_token_expires_in": 15897600, "scope": "", "token_type": "bearer"})
+			return
+		}
+		if r.Form.Get("code") != "good-code" {
 			json.NewEncoder(w).Encode(map[string]string{"error": "bad_verification_code"})
+			return
+		}
+		if f.expiring {
+			f.refresh = "ghr_1"
+			json.NewEncoder(w).Encode(map[string]any{"access_token": "gho_oauthtoken", "refresh_token": f.refresh, "expires_in": 28800,
+				"refresh_token_expires_in": 15897600, "scope": "", "token_type": "bearer"})
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"access_token": "gho_oauthtoken", "scope": "admin:repo_hook,repo", "token_type": "bearer"})
