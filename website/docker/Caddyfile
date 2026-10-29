@@ -1,0 +1,22 @@
+# FrankenPHP's default Caddyfile plus long cache lifetimes for static files.
+{
+	skip_install_trust
+	{$CADDY_GLOBAL_OPTIONS}
+	frankenphp {
+		{$FRANKENPHP_CONFIG}
+	}
+}
+
+{$SERVER_NAME:localhost} {
+	root {$SERVER_ROOT:public/}
+	encode zstd br gzip
+
+	# Fonts never change; CSS/JS are versioned with ?v=<mtime>.
+	@immutable path /fonts/* /css/* /js/*
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+	# Images keep their names when replaced, so cache them for a week.
+	@images path /img/* /apple-touch-icon.png /sitemap.xsl
+	header @images Cache-Control "public, max-age=604800"
+
+	php_server
+}
