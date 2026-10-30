@@ -35,8 +35,10 @@ proxy가 첫 요청 때 인증서를 받을 수 있도록 미리 만들어 둡�
 DNS를 준비한 새 서버라면 명령 하나로 최신 릴리스를 설치할 수 있습니다.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
 ```
+
+일반 사용자로 실행하면 스크립트가 `sudo`로 스스로를 다시 실행합니다. `sudo sh`로 파이프하면 sudo-rs(Ubuntu 25.10부터 기본 sudo)가 스크립트를 터미널의 백그라운드에 두어 질문을 할 수 없으므로, `--yes`가 없으면 안내를 출력하고 멈춥니다.
 
 터미널에서 실행하면 첫 설치를 대화형으로 진행합니다. 대시보드 주소(비워 두면 `http://localhost:7070`으로 설치), 생성 서비스 이름에 쓸 기본 도메인, Let's Encrypt 이메일(선택), `admin@local` 비밀번호(Enter를 누르면 생성)를 묻고, Docker나 Railpack이 없으면 설치할지 묻습니다. 마지막에 요약을 보여 주고, 확인하기 전에는 아무것도 바꾸지 않습니다. 잘못된 답은 다시 묻고, 업그레이드는 한 번만 확인합니다. 무인 설치는 설정을 옵션으로 넘기고 `--yes`를 붙입니다.
 

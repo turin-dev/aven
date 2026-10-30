@@ -19,7 +19,7 @@ class SiteController extends Controller
         App::setLocale($locale);
 
         $release = $this->latestRelease();
-        $install = 'curl -fsSL https://'.config('site.install_host').' | sudo sh';
+        $install = 'curl -fsSL https://'.config('site.install_host').' | sh';
 
         return view('home', [
             'locale' => $locale,
@@ -40,7 +40,7 @@ class SiteController extends Controller
             ->view($full ? 'llms-full' : 'llms', [
                 'repo' => self::REPO,
                 'release' => $this->latestRelease(),
-                'install' => 'curl -fsSL https://'.config('site.install_host').' | sudo sh',
+                'install' => 'curl -fsSL https://'.config('site.install_host').' | sh',
                 'compare' => config('compare'),
                 'ko' => fn (string $key) => trans($key, [], 'ko'),
             ])

@@ -1,9 +1,13 @@
 #!/bin/sh
 # Aven server installer and upgrader.
 #
-#   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
 #   ... | sudo sh -s -- --yes --public-url https://aven.example.com     (unattended)
 #   ... | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>   (region server)
+#
+# Pipe it into plain `sh`: run as a normal user, it runs itself again with sudo, with the terminal as input.
+# Piped into `sudo sh`, sudo-rs (the default sudo since Ubuntu 25.10) keeps the script in the background
+# of the terminal, where it cannot ask questions; there it stops and says so unless --yes is given.
 #
 # On a terminal the first question is the role of this machine: the main server (dashboard and API) or a
 # region server that joins an existing main server as an extra node. A region server gets aven-agent,
@@ -123,7 +127,8 @@ EOF
 $_rows
 EOF
 	_bv=$B_V
-	_cols=$( (stty size <&1) 2>/dev/null | cut -d' ' -f2) || _cols=""
+	_cols=""
+	[ "$BG" -eq 1 ] || _cols=$( (stty size <&1) 2>/dev/null | cut -d' ' -f2) || _cols=""
 	[ -n "$_cols" ] || _cols=$COLS
 	if [ $((_w + 4)) -gt "$_cols" ] 2>/dev/null; then
 		# too wide for the terminal: drop the side borders so nothing wraps
@@ -193,6 +198,7 @@ spin() {
 
 TMP=$(mktemp -d)
 TTY=0 STTY_SAVED=""
+BG=0 # in the background of the terminal (see bg_tty): stty and /dev/tty reads would stop the script
 cleanup() {
 	if [ "$TTY" -eq 1 ]; then
 		[ -z "$STTY_SAVED" ] || stty "$STTY_SAVED" </dev/tty 2>/dev/null || true
@@ -205,6 +211,41 @@ cleanup() {
 IN_BOX=0 # the cursor is inside an input box: move below it before exiting
 trap cleanup EXIT
 trap '[ "$IN_BOX" -eq 0 ] || printf "%s[2B\n" "$ESC" >/dev/tty; exit 130' INT TERM
+
+# bg_tty: the script runs in the background of its controlling terminal. sudo-rs does this to
+# `curl ... | sudo sh`; stty and reads on /dev/tty then stop the script with SIGTTOU/SIGTTIN.
+bg_tty() { # stat after "comm) ": state ppid pgrp session tty_nr tpgid
+	_st=$(cat /proc/$$/stat 2>/dev/null) || return 1
+	set -- ${_st##*) }
+	[ "${5:-0}" != 0 ] && [ "${6:--1}" != -1 ] && [ "$6" != "$3" ]
+}
+
+# Not root: run again with sudo and the terminal as input, so sudo keeps the script in the foreground.
+if [ "$(id -u)" -ne 0 ]; then
+	case " $* " in
+		*" -h "*|*" --help "*) ;; # the help needs no root
+		*)
+			command -v sudo >/dev/null 2>&1 || die "run as root (sudo was not found)"
+			if [ -f "$0" ] && head -n1 "$0" | grep -q '^#!'; then
+				SELF=$0
+			else
+				# piped into sh: the script is not on disk, so download it again
+				SELF=$TMP/install-server.sh
+				{ curl --proto =https --tlsv1.2 -fsSL --retry 3 -o "$SELF" \
+					"${AVEN_INSTALLER_URL:-https://raw.githubusercontent.com/$REPO/main/install-server.sh}" &&
+					head -n1 "$SELF" | grep -q '^#!'; } || die "could not download the installer to run it with sudo; run it as root"
+			fi
+			# sudo resets the environment; pass on the settings this script reads
+			set -- sh "$SELF" "$@"
+			for _n in AVEN_ADMIN_PASSWORD KEEL_ADMIN_PASSWORD AVEN_JOIN_TOKEN KEEL_JOIN_TOKEN AVEN_REPO GITHUB_TOKEN NO_COLOR TERM COLORTERM LANG LC_ALL LC_CTYPE; do
+				eval "[ -z \"\${$_n+x}\" ] || set -- \"$_n=\$$_n\" \"\$@\""
+			done
+			_rc=0
+			if (exec </dev/tty) 2>/dev/null; then sudo env "$@" </dev/tty || _rc=$?
+			else sudo env "$@" || _rc=$?; fi
+			exit "$_rc" ;;
+	esac
+fi
 
 PUBLIC_URL=""
 BASE_DOMAIN=""
@@ -256,7 +297,7 @@ while [ $# -gt 0 ]; do
 		-y|--yes) YES=1; shift ;;
 		-h|--help)
 			if [ -f "$0" ] && head -n1 "$0" | grep -q '^#!'; then sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
-			else echo "usage: curl -fsSL .../install-server.sh | sudo sh [-s -- options]; see https://github.com/$REPO/blob/main/install-server.sh"; fi
+			else echo "usage: curl -fsSL .../install-server.sh | sh [-s -- options]; see https://github.com/$REPO/blob/main/install-server.sh"; fi
 			exit 0 ;;
 		*) die "unknown option: $1 (see --help)" ;;
 	esac
@@ -264,7 +305,7 @@ done
 
 # ---- checks ----
 
-[ "$(id -u)" -eq 0 ] || die "run as root (pipe into 'sudo sh -s -- ...')"
+[ "$(id -u)" -eq 0 ] || die "run as root (pipe into 'sh -s -- ...'; it runs sudo itself)"
 [ "$(uname -s)" = Linux ] || die "only Linux is supported"
 case "$(uname -m)" in
 	x86_64|amd64) ARCH=amd64 ;;
@@ -283,6 +324,17 @@ fi
 
 if systemctl is-active --quiet keel-server 2>/dev/null; then
 	die "keel-server.service is running. Switch it to aven-server first (README: 'Upgrading from Keel'); do not run both on the same data directory"
+fi
+if command -v docker >/dev/null 2>&1 &&
+	[ -n "$(docker ps -q --filter label=aven.self=server 2>/dev/null)$(docker ps -q --filter label=keel.self=server 2>/dev/null)" ]; then
+	die "aven-server runs as a Docker container here (Aven on Aven). Upgrade it by deploying the aven-server service from the dashboard; to go back to the systemd unit see docs/selfhost.md. Do not run both on the same data directory"
+fi
+
+bg_tty && BG=1
+if [ "$BG" -eq 1 ] && [ "$YES" -eq 0 ] && (exec </dev/tty) 2>/dev/null; then
+	die "the installer runs in the background of this terminal and cannot ask its questions. sudo-rs (the default sudo since Ubuntu 25.10) does this when a script is piped into 'sudo sh'. Pipe it into plain 'sh' instead; it runs sudo itself:
+  curl -fsSL https://install.aven.turin.my | sh
+Or pass --yes and the options (see --help)."
 fi
 
 # 새 경로가 없으면 예전 설치의 env 파일을 그대로 쓴다.
@@ -322,7 +374,8 @@ if tty_ok; then
 	STTY_SAVED=$(stty -g </dev/tty 2>/dev/null || true)
 	[ "${TERM:-dumb}" = dumb ] || PRETTY=1
 fi
-COLS=$( (stty size </dev/tty) 2>/dev/null | cut -d' ' -f2) || COLS=""
+COLS=""
+[ "$BG" -eq 1 ] || COLS=$( (stty size </dev/tty) 2>/dev/null | cut -d' ' -f2) || COLS=""
 [ -n "$COLS" ] || COLS=$(tput cols 2>/dev/null || echo 80)
 [ "$COLS" -gt 20 ] 2>/dev/null || COLS=80
 

@@ -37,7 +37,7 @@ You need:
 - optionally more servers for multi-node setups, reachable from each other over a private network such as Tailscale or WireGuard.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
 ```
 
 On a terminal the script asks for the dashboard URL, the base domain for services, a Let's Encrypt email and the admin password, shows a summary and installs after you confirm. It verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/aven/aven.env` (generating the admin password unless you chose one), starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `AVEN_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · Setup*.
