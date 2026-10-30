@@ -10,7 +10,7 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * Serves install-server.sh from the aven repository's main branch, so
- * `curl -fsSL https://install.aven.turin.my | sudo sh` always runs the current installer.
+ * `curl -fsSL https://install.aven.turin.my | sh` always runs the current installer.
  */
 class InstallController extends Controller
 {
@@ -42,7 +42,7 @@ class InstallController extends Controller
 
     private function preview(): Response
     {
-        $install = 'curl -fsSL https://'.config('site.install_host').' | sudo sh';
+        $install = 'curl -fsSL https://'.config('site.install_host').' | sh';
 
         return response()->view('install-preview', [
             'install' => $install,

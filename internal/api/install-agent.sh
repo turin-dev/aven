@@ -101,7 +101,14 @@ if [ -f "$CRED" ]; then
 	[ -n "$TOKEN" ] && say "already enrolled ($CRED exists); the token is not used (pass --reenroll to join again)"
 	TOKEN=""
 elif [ -z "$TOKEN" ]; then
-	if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+	# Only in the foreground of the terminal: piped into `sudo sh`, sudo-rs (Ubuntu 25.10+) keeps the
+	# script in the background, where stty and read on /dev/tty stop it (SIGTTOU/SIGTTIN).
+	fg_tty() { # stat after "comm) ": state ppid pgrp session tty_nr tpgid
+		_st=$(cat /proc/$$/stat 2>/dev/null) || return 1
+		set -- ${_st##*) }
+		[ "${6:--1}" = "${3:-}" ]
+	}
+	if fg_tty && [ -r /dev/tty ] && [ -w /dev/tty ]; then
 		printf 'Join token: ' >/dev/tty
 		stty -echo </dev/tty 2>/dev/null || true
 		read -r TOKEN </dev/tty || true

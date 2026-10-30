@@ -35,8 +35,10 @@ Use whatever name you like for the dashboard; it only has to match `AVEN_PUBLIC_
 On a fresh server with DNS in place, one command installs the latest release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
 ```
+
+Run it as a normal user: the script runs itself again with `sudo`. Piped into `sudo sh` instead, sudo-rs (the default sudo since Ubuntu 25.10) keeps it in the background of the terminal, where it cannot ask questions, so it stops unless `--yes` is given.
 
 On a terminal the script walks you through the first install: it asks for the dashboard URL (Enter without one installs on `http://localhost:7070`), the base domain for generated service names, an optional Let's Encrypt email and the `admin@local` password (Enter generates one), offers to install Docker and Railpack when they are missing, then shows a summary and changes nothing until you confirm. Invalid answers are asked again. Upgrades ask once. For unattended installs pass the settings as options and add `--yes`:
 

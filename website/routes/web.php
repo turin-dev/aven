@@ -17,7 +17,7 @@ Route::withoutMiddleware([
     ShareErrorsFromSession::class,
     PreventRequestForgery::class,
 ])->group(function () {
-    // install.aven.turin.my: the installer script itself, for `curl … | sudo sh`.
+    // install.aven.turin.my: the installer script itself, for `curl … | sh`.
     Route::domain(config('site.install_host'))->group(function () {
         Route::get('/', InstallController::class)->name('install');
         Route::get('/install-server.sh', InstallController::class);
