@@ -190,6 +190,12 @@ DB 마이그레이션은 시작할 때 자동으로 실행됩니다. 되돌리�
 curl -fsSL https://aven.example.com/install-agent.sh | sudo sh -s -- --server https://aven.example.com --token <TOKEN>
 ```
 
+서버 설치 스크립트로도 됩니다. 새 서버에서 `install-server.sh`를 실행하고 첫 질문("What is this server?")에서 **Region server**를 고르면 메인 서버 URL, 참여 토큰, 사설 주소(선택)를 묻고, 원하면 Docker를 설치한 뒤 메인 서버의 `install-agent.sh`를 실행합니다. 무인 설치:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>
+```
+
 토큰은 한 번만 쓸 수 있고 만료됩니다. agent는 자기 키를 만들고 Aven 내부 CA에서 인증서를 받습니다. 나중에 같은 명령을 다시 실행하면 저장된 자격 증명을 유지한 채 agent를 업그레이드합니다.
 
 서버들이 사설망(WireGuard, Tailscale)으로 연결되어 있다면 각 서버에 `AVEN_PRIVATE_ADDRESS`를 설정해 서로 다른 노드의 서비스끼리 그 망으로 통신하게 하세요.

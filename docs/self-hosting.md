@@ -190,6 +190,12 @@ Other servers run `aven-agent`, which connects back to `aven-server` over HTTPS.
 curl -fsSL https://aven.example.com/install-agent.sh | sudo sh -s -- --server https://aven.example.com --token <TOKEN>
 ```
 
+The server installer can do the same: run `install-server.sh` on the new server and answer **Region server** to the first question ("What is this server?"). It asks for the main server URL, the join token and an optional private address, installs Docker if you want, and then runs the main server's `install-agent.sh`. Unattended:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>
+```
+
 The token is single-use and expires. The agent creates its own key and receives a certificate from Aven's internal CA. Re-running the same command later upgrades the agent and keeps its credentials.
 
 If your servers share a private network (WireGuard, Tailscale), set `AVEN_PRIVATE_ADDRESS` on each so services on different nodes can reach each other over it.
