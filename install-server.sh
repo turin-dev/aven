@@ -3,6 +3,11 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh
 #   ... | sudo sh -s -- --yes --public-url https://aven.example.com     (unattended)
+#   ... | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>   (region server)
+#
+# On a terminal the first question is the role of this machine: the main server (dashboard and API) or a
+# region server that joins an existing main server as an extra node. A region server gets aven-agent,
+# installed by the main server's /install-agent.sh; everything below about aven-server is the main role.
 #
 # First run: installs aven-server, the CLI, agent/CLI downloads and Railpack, writes /etc/aven/aven.env
 # with a generated admin password, installs the systemd unit and starts it.
@@ -21,6 +26,12 @@
 #   --no-railpack          do not install Railpack
 #   --install-docker       install Docker with get.docker.com if it is missing
 #   --no-start             install only; do not enable or start aven-server
+#   --role main|region     main: run aven-server here (the default without a terminal). region: join an
+#                          existing main server as a node. --server or --token imply region
+#   --server URL           region: https:// URL of the main server
+#   --token TOKEN          region: join token from Admin > Server nodes > Add node on the main server
+#                          (or env AVEN_JOIN_TOKEN, else KEEL_JOIN_TOKEN). Not needed once the node has joined
+#   --private-address IP   region: this node's Tailscale/WireGuard address for the private mesh (optional)
 #   -y, --yes              never prompt
 #
 # On a terminal the script asks for every first-install setting it was not given, shows a summary and
@@ -39,6 +50,8 @@ ENV_FILE=$CONF_DIR/aven.env
 BIN_DIR=/usr/local/bin
 LIB_DIR=/usr/local/lib/aven
 UNIT=/etc/systemd/system/aven-server.service
+AGENT_ENV=/etc/keel-agent/agent.env # paths written by install-agent.sh
+AGENT_CRED=/var/lib/keel-agent/credentials.json
 
 # ---- terminal UI ----
 
@@ -207,6 +220,11 @@ RAILPACK=1
 INSTALL_DOCKER=0
 START=1
 YES=0
+ROLE=""
+SERVER=""
+JOIN_TOKEN="${AVEN_JOIN_TOKEN:-${KEEL_JOIN_TOKEN:-}}"
+PRIVATE_ADDR=""
+REGION_FLAGS=0 # --server or --token was given
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -227,6 +245,14 @@ while [ $# -gt 0 ]; do
 		--no-railpack) RAILPACK=0; shift ;;
 		--install-docker) INSTALL_DOCKER=1; shift ;;
 		--no-start) START=0; shift ;;
+		--role) need_arg "$1" $#; ROLE=$2; shift 2 ;;
+		--role=*) ROLE=${1#*=}; shift ;;
+		--server) need_arg "$1" $#; SERVER=$2; REGION_FLAGS=1; shift 2 ;;
+		--server=*) SERVER=${1#*=}; REGION_FLAGS=1; shift ;;
+		--token) need_arg "$1" $#; JOIN_TOKEN=$2; REGION_FLAGS=1; shift 2 ;;
+		--token=*) JOIN_TOKEN=${1#*=}; REGION_FLAGS=1; shift ;;
+		--private-address) need_arg "$1" $#; PRIVATE_ADDR=$2; shift 2 ;;
+		--private-address=*) PRIVATE_ADDR=${1#*=}; shift ;;
 		-y|--yes) YES=1; shift ;;
 		-h|--help)
 			if [ -f "$0" ] && head -n1 "$0" | grep -q '^#!'; then sed -n '2,/^set -eu/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'
@@ -274,6 +300,18 @@ fi
 UPGRADE=0
 [ -f "$ENV_FILE" ] && UPGRADE=1
 
+case "$ROLE" in
+	""|main|region) ;;
+	*) die "--role must be main or region" ;;
+esac
+[ -n "$ROLE" ] || [ "$REGION_FLAGS" -eq 0 ] || ROLE=region
+AGENT=0 # aven-agent from install-agent.sh is already on this machine
+[ -f "$AGENT_ENV" ] && AGENT=1
+if [ "$UPGRADE" -eq 1 ]; then
+	[ "$ROLE" != region ] || die "this machine already runs aven-server ($ENV_FILE); a region server is a separate machine"
+	ROLE=main
+fi
+
 # ---- questions (on a terminal only) ----
 
 # /dev/tty exists even without a controlling terminal (cron, CI, ssh without -t); only opening it tells.
@@ -287,6 +325,11 @@ fi
 COLS=$( (stty size </dev/tty) 2>/dev/null | cut -d' ' -f2) || COLS=""
 [ -n "$COLS" ] || COLS=$(tput cols 2>/dev/null || echo 80)
 [ "$COLS" -gt 20 ] 2>/dev/null || COLS=80
+
+if [ -z "$ROLE" ] && ! tty_ok; then
+	# without a terminal an existing agent is upgraded; otherwise this is a main server, as before
+	if [ "$AGENT" -eq 1 ]; then ROLE=region; else ROLE=main; fi
+fi
 
 rows_of() { echo $(((${#1} + $2 - 1) / COLS + 1)); } # rows_of TEXT INDENT: terminal rows the line takes
 
@@ -456,6 +499,26 @@ password_problem() {
 	[ ${#1} -ge 8 ] || { echo "The admin password must have at least 8 characters."; return; }
 	case "$1" in *[\"\'\\\$\`\ ]*) echo "The admin password must not contain quotes, backslashes, \$, backticks or spaces." ;; esac
 }
+server_problem() { # what is wrong with main server URL $1 for a region server
+	case "$1" in
+		https://?*) case "${1#https://}" in *[!]A-Za-z0-9.:/_[-]*) echo "contains unexpected characters" ;; esac ;;
+		*) echo "must be an https:// URL" ;;
+	esac
+}
+token_problem() {
+	case "$1" in
+		"") echo "The join token is required. Create one in Admin > Server nodes > Add node on the main server." ;;
+		*[!A-Za-z0-9]*) echo "The join token has unexpected characters; paste only the token." ;;
+	esac
+}
+address_problem() {
+	case "$1" in *[!0-9A-Fa-f.:]*) echo "must be an IP address such as 100.64.0.2" ;; esac
+}
+agent_get() { sed -n "s/^$1=//p" "$AGENT_ENV" 2>/dev/null | tail -n1; }
+fetch_agent_script() { # the main server's agent installer, so the agent matches the server version
+	curl --proto =https --tlsv1.2 -fsSL --retry 2 -o "$TMP/install-agent.sh" "$1/install-agent.sh" 2>/dev/null &&
+		grep -q 'agent installer' "$TMP/install-agent.sh"
+}
 have_railpack() { command -v railpack >/dev/null 2>&1 || [ -x "$BIN_DIR/railpack" ]; }
 gh_curl() {
 	if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -466,7 +529,9 @@ gh_curl() {
 }
 
 if tty_ok || [ "$FANCY" -eq 1 ]; then
-	if [ "$UPGRADE" -eq 1 ]; then mode="upgrade ($ENV_FILE)"; else mode="first install"; fi
+	if [ "$UPGRADE" -eq 1 ]; then mode="upgrade ($ENV_FILE)"
+	elif [ "$AGENT" -eq 1 ]; then mode="aven-agent found ($AGENT_ENV)"
+	else mode="first install"; fi
 	echo
 	box <<EOF
 *Welcome to the Aven installer
@@ -481,6 +546,72 @@ EOF
 	fi
 fi
 
+if [ -z "$ROLE" ]; then
+	if [ "$AGENT" -eq 1 ]; then def=2; else def=1; fi
+	ui_select "What is this server?" "Install the main server first. Every other server joins it as a region server." "$def" \
+		"Main server: runs the dashboard and the API" \
+		"Region server: joins an existing main server as a node"
+	ROLE=$(nth "$SEL" main region)
+	ui_done "Server role" "$(nth "$SEL" "main server (aven-server)" "region server (aven-agent)")"
+fi
+
+ENROLLED=0
+if [ "$ROLE" = region ]; then
+	[ -s "$AGENT_CRED" ] && ENROLLED=1
+	saved=$(agent_get AVEN_SERVER_URL)
+	[ -n "$saved" ] || saved=$(agent_get KEEL_SERVER_URL)
+	if [ -z "$SERVER" ] && tty_ok; then
+		while :; do
+			ui_input SERVER "Main server URL" "The address of the Aven dashboard this server joins." "$saved" "e.g. aven.example.com"
+			case "$SERVER" in ""|*://*) ;; *) SERVER="https://$SERVER" ;; esac
+			SERVER=${SERVER%/}
+			p=$(server_problem "$SERVER")
+			if [ -n "$p" ]; then UI_ERR="The URL $p."; continue; fi
+			fetch_agent_script "$SERVER" && break
+			UI_ERR="No Aven server answered at $SERVER/install-agent.sh."
+		done
+		ui_done "Main server" "$SERVER"
+	fi
+	[ -n "$SERVER" ] || SERVER=$saved
+	[ -n "$SERVER" ] || die "--server is required for a region server (the main server's https:// URL)"
+	SERVER=${SERVER%/}
+	p=$(server_problem "$SERVER")
+	[ -z "$p" ] || die "--server $p"
+	if [ "$ENROLLED" -eq 1 ] && [ -n "$saved" ] && [ "$SERVER" != "$saved" ]; then
+		die "this node already joined $saved. To join $SERVER instead, run its install-agent.sh with --reenroll and a new token"
+	fi
+
+	if [ "$ENROLLED" -eq 1 ]; then
+		JOIN_TOKEN="" # the saved credentials are used; install-agent.sh ignores a token
+	elif [ -z "$JOIN_TOKEN" ] && tty_ok; then
+		while :; do
+			ui_input JOIN_TOKEN "Join token" "Admin > Server nodes > Add node on the main server. Single use." "" "Paste the token" secret
+			p=$(token_problem "$JOIN_TOKEN")
+			[ -z "$p" ] && break
+			UI_ERR="$p"
+		done
+		ui_done "Join token" "set (hidden)"
+	fi
+	if [ "$ENROLLED" -eq 0 ]; then
+		p=$(token_problem "$JOIN_TOKEN")
+		[ -z "$p" ] || die "${p%%.*}. Pass --token"
+	fi
+
+	if [ -z "$PRIVATE_ADDR" ] && [ -z "$(agent_get AVEN_PRIVATE_ADDRESS)$(agent_get KEEL_PRIVATE_ADDRESS)" ] && tty_ok; then
+		ts=$(tailscale ip -4 2>/dev/null | head -n1) || ts=""
+		if [ -n "$ts" ]; then f="Tailscale: $ts. Enter to skip"; else f="e.g. 100.64.0.2, or Enter to skip"; fi
+		while :; do
+			ui_input PRIVATE_ADDR "Private address of this server" "Tailscale or WireGuard IP, so services on other nodes can reach this one. Optional." "" "$f"
+			p=$(address_problem "$PRIVATE_ADDR")
+			[ -z "$p" ] && break
+			UI_ERR="The address $p."
+		done
+		ui_done "Private address" "${PRIVATE_ADDR:-none (add KEEL_PRIVATE_ADDRESS to $AGENT_ENV later)}"
+	fi
+	p=$(address_problem "$PRIVATE_ADDR")
+	[ -z "$p" ] || die "--private-address $p"
+fi
+
 NEED_DOCKER=0
 if ! command -v docker >/dev/null 2>&1; then
 	if [ "$INSTALL_DOCKER" -eq 0 ] && tty_ok; then
@@ -493,6 +624,61 @@ if ! command -v docker >/dev/null 2>&1; then
 	NEED_DOCKER=1
 else
 	docker info >/dev/null 2>&1 || die "Docker is installed but not running (systemctl start docker)"
+fi
+
+install_docker() {
+	spin "Installing Docker" "Installed Docker" sh -c 'curl -fsSL https://get.docker.com | sh' || die "Docker installation failed"
+	systemctl enable --now docker >/dev/null 2>&1 || systemctl enable --now docker
+	docker info >/dev/null 2>&1 || die "Docker was installed but is not running (systemctl start docker)"
+}
+
+# ---- region server: aven-agent from the main server ----
+
+if [ "$ROLE" = region ]; then
+	if tty_ok; then
+		if [ "$ENROLLED" -eq 1 ]; then a_line="upgrade, keep the saved credentials"; else a_line="install and join with the token"; fi
+		if [ "$NEED_DOCKER" -eq 1 ]; then d_line="install with get.docker.com"; else d_line="installed"; fi
+		pa_line=${PRIVATE_ADDR:-$(agent_get AVEN_PRIVATE_ADDRESS)}
+		pa_line=${pa_line:-$(agent_get KEEL_PRIVATE_ADDRESS)}
+		box >/dev/tty <<EOF
+*Ready to set up a region server
+
+Main server${TAB}$SERVER
+aven-agent${TAB}$a_line
+Private address${TAB}${pa_line:-none}
+Docker${TAB}$d_line
+Settings${TAB}$AGENT_ENV
+EOF
+		echo >/dev/tty
+		ui_select "Set up now?" "" 1 "Yes, set it up" "No, exit without changes"
+		if [ "$SEL" -ne 1 ]; then
+			say "Nothing was changed."
+			exit 0
+		fi
+	fi
+	[ "$NEED_DOCKER" -eq 0 ] || install_docker
+	[ -s "$TMP/install-agent.sh" ] ||
+		spin "Contacting $SERVER" "Reached $SERVER" fetch_agent_script "$SERVER" ||
+		die "could not download $SERVER/install-agent.sh (is this the main server's dashboard URL?)"
+	set -- --server "$SERVER"
+	[ -z "$PRIVATE_ADDR" ] || set -- "$@" --env "KEEL_PRIVATE_ADDRESS=$PRIVATE_ADDR"
+	# the token goes through the environment, never on a command line
+	if [ -n "$JOIN_TOKEN" ]; then export KEEL_JOIN_TOKEN="$JOIN_TOKEN"; else unset KEEL_JOIN_TOKEN AVEN_JOIN_TOKEN 2>/dev/null || true; fi
+	spin "Installing aven-agent" "aven-agent is running" sh "$TMP/install-agent.sh" "$@" ||
+		die "aven-agent setup failed; see: journalctl -u keel-agent"
+	JOIN_TOKEN="" KEEL_JOIN_TOKEN=""
+	if [ "$ENROLLED" -eq 1 ]; then h="*aven-agent is upgraded"; else h="*This server joined $SERVER"; fi
+	echo
+	box <<EOF
+$h
+
+Node${TAB}$(uname -n) ($ARCH)
+Service${TAB}keel-agent.service
+Settings${TAB}$AGENT_ENV
+
+The node shows up in Admin > Server nodes on the main server.
+EOF
+	exit 0
 fi
 
 LOCAL=0 # no domain: the dashboard is only on this server, at http://localhost:PORT
@@ -655,11 +841,7 @@ EOF
 	fi
 fi
 
-if [ "$NEED_DOCKER" -eq 1 ]; then
-	spin "Installing Docker" "Installed Docker" sh -c 'curl -fsSL https://get.docker.com | sh' || die "Docker installation failed"
-	systemctl enable --now docker >/dev/null 2>&1 || systemctl enable --now docker
-	docker info >/dev/null 2>&1 || die "Docker was installed but is not running (systemctl start docker)"
-fi
+[ "$NEED_DOCKER" -eq 0 ] || install_docker
 
 # ---- fetch ----
 
