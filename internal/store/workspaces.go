@@ -367,7 +367,11 @@ func (s *Store) ForceWorkspaceOwner(ctx context.Context, wsID, newOwnerID, prev 
 			}
 			prevOwners = append(prevOwners, id)
 		}
+		err = rows.Err()
 		rows.Close()
+		if err != nil {
+			return err
+		}
 		if w.Personal && w.OwnerID != nil && *w.OwnerID != newOwnerID {
 			if !slices.Contains(prevOwners, *w.OwnerID) {
 				prevOwners = append(prevOwners, *w.OwnerID)

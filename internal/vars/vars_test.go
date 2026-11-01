@@ -80,3 +80,47 @@ func TestRenameService(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// $${{ X }}는 글자 그대로의 ${{ X }}다: 해석하지 않고, 참조 목록·이름 바꾸기에서도 빠진다.
+func TestEscapedReference(t *testing.T) {
+	s := &Scope{Services: map[string]map[string]string{
+		"web": {
+			"PORT":     "3000",
+			"TEMPLATE": "on: $${{ github.event }} port=${{PORT}}",
+			"DOLLARS":  "$$${{PORT}}",
+			"COPY":     "${{TEMPLATE}}",
+			"MISSING":  "$${{ nope.X }}",
+		},
+	}}
+	res, err := Resolve(s, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"TEMPLATE": "on: ${{ github.event }} port=3000",
+		"DOLLARS":  "$${{PORT}}",
+		"COPY":     "on: ${{ github.event }} port=3000", // 참조한 값 안의 글자 ${{ }}는 다시 해석하지 않는다
+		"MISSING":  "${{ nope.X }}",
+	}
+	for k, v := range want {
+		if res.Vars[k] != v {
+			t.Errorf("%s = %q, want %q", k, res.Vars[k], v)
+		}
+	}
+	if len(res.Missing) != 0 {
+		t.Errorf("escaped refs reported missing: %v", res.Missing)
+	}
+	if refs := References("$${{ db.URL }} ${{ cache.URL }}"); len(refs) != 1 || refs[0] != "cache.URL" {
+		t.Errorf("references = %v", refs)
+	}
+	if got := RenameService("$${{db.URL}} ${{db.URL}}", "db", "pg"); got != "$${{db.URL}} ${{pg.URL}}" {
+		t.Errorf("rename = %q", got)
+	}
+	// Escape한 값을 다시 해석하면 원래 값이 나온다.
+	for _, v := range []string{"plain", "${{ X }}", "a $${{Y}} b", "$$${{Z}}"} {
+		r, err := Resolve(&Scope{Services: map[string]map[string]string{"s": {"V": Escape(v)}}}, "s")
+		if err != nil || r.Vars["V"] != v || len(r.Missing) != 0 {
+			t.Errorf("round trip %q: %q %v %v", v, r.Vars["V"], r.Missing, err)
+		}
+	}
+}

@@ -319,3 +319,95 @@ func TestMCPInitializeNegotiationAndSessionCookie(t *testing.T) {
 		t.Fatalf("list_projects via session: %s", text)
 	}
 }
+
+func TestMCPToolSchemaAndArgumentValidation(t *testing.T) {
+	st := testStore(t)
+	owner := testUser(t, st, "mcp-validate@example.com", store.RoleOwner)
+	s := &Server{Store: st, SessionKey: make([]byte, 32), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	h := s.Handler()
+	auth := withCookie(testSessionCookie(t, s, owner))
+
+	// 모든 도구는 제목, 설명, 닫힌 입력 스키마, 힌트를 갖는다. 상태를 바꾸는 도구는 readOnlyHint=false다.
+	destructive := map[string]bool{"set_variables": true, "deploy": true, "redeploy": true, "restart_service": true, "stop_service": true, "rollback": true, "cancel_deployment": true}
+	for _, tool := range mcpTools {
+		if tool.Title == "" || tool.Description == "" || tool.InputSchema["additionalProperties"] != false || tool.Annotations["title"] != tool.Title {
+			t.Errorf("%s: incomplete metadata %+v", tool.Name, tool)
+		}
+		if got := tool.Annotations["destructiveHint"] == true; got != destructive[tool.Name] {
+			t.Errorf("%s: destructiveHint=%v", tool.Name, got)
+		}
+		props := tool.InputSchema["properties"].(map[string]any)
+		req, _ := tool.InputSchema["required"].([]string)
+		for _, k := range req {
+			if _, ok := props[k]; !ok {
+				t.Errorf("%s: required %q is not a property", tool.Name, k)
+			}
+		}
+	}
+
+	// 없는 도구는 JSON-RPC 오류다.
+	body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"drop_database","arguments":{}}}`
+	w := req(h, http.MethodPost, "/mcp", body, auth)
+	var rpc struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rpc); err != nil || rpc.Error == nil || rpc.Error.Code != -32602 || !strings.Contains(rpc.Error.Message, "drop_database") {
+		t.Fatalf("unknown tool: %d %s", w.Code, w.Body)
+	}
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"inspect_project", map[string]any{"projectId": "prj_1"}, `unknown argument "projectId" for inspect_project; allowed: project_id`},
+		{"whoami", map[string]any{"x": 1}, "whoami takes no arguments"},
+		{"inspect_project", map[string]any{}, "project_id is required"},
+		{"inspect_project", map[string]any{"project_id": nil}, "project_id is required"},
+		{"inspect_project", map[string]any{"project_id": 5}, "project_id must be a string"},
+		{"get_logs", map[string]any{"deployment_id": "dep_1", "type": "http"}, "type must be one of: runtime, build"},
+		{"get_logs", map[string]any{"deployment_id": "dep_1", "tail": 5000}, "tail must be between 1 and 1000"},
+		{"get_logs", map[string]any{"deployment_id": "dep_1", "tail": 1.5}, "tail must be an integer"},
+		{"set_variables", map[string]any{"service_id": "s", "environment_id": "e", "variables": []string{"A"}}, "variables must be an object"},
+		{"set_variables", map[string]any{"service_id": "s", "environment_id": "e", "variables": map[string]any{"A": "1"}, "deploy": "yes"}, "deploy must be true or false"},
+		{"add_domain", map[string]any{"service_id": "s", "environment_id": "e", "target_port": 70000}, "target_port must be between 1 and 65535"},
+	} {
+		isErr, text := mcpCall(t, h, auth, tc.tool, tc.args)
+		if !isErr || !strings.Contains(text, tc.want) {
+			t.Errorf("%s %v: %v %q, want %q", tc.tool, tc.args, isErr, text, tc.want)
+		}
+	}
+
+	// 오류에는 다음에 할 일을 알려 주는 힌트가 붙는다.
+	isErr, text := mcpCall(t, h, auth, "inspect_project", map[string]any{"project_id": "prj_missing"})
+	if !isErr || !strings.Contains(text, "404") || !strings.Contains(text, "list_projects") {
+		t.Errorf("not found hint: %q", text)
+	}
+	// 선택 인자의 null은 생략과 같다.
+	if isErr, text := mcpCall(t, h, auth, "list_deployments", map[string]any{"service_id": "svc_x", "environment_id": "env_x", "limit": nil}); !isErr || !strings.Contains(text, "404") {
+		t.Errorf("null limit: %q", text)
+	}
+}
+
+// get_logs는 tail을 자르기 전에 필터를 적용한다(예전에는 마지막 tail줄에서만 찾아 앞쪽 오류를 놓쳤다).
+func TestMCPGetLogsFiltersBeforeTail(t *testing.T) {
+	ctx := context.Background()
+	f := newGQLFixture(t)
+	in, _ := f.st.GetInstanceFor(ctx, f.svc.ID, f.env.ID)
+	d := &store.Deployment{ServiceID: f.svc.ID, EnvironmentID: f.env.ID, InstanceID: in.ID, Trigger: "manual"}
+	if err := f.st.CreateDeployment(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	writeCronLogs(t, f, d, "panic: boom", "ok 1", "ok 2", "ok 3")
+	isErr, text := mcpCall(t, f.h, f.owner, "get_logs", map[string]any{"deployment_id": d.ID, "tail": 2, "filter": "panic"})
+	if isErr || !strings.Contains(text, "panic: boom") || strings.Contains(text, "ok 3") {
+		t.Fatalf("filtered logs: %v %s", isErr, text)
+	}
+	isErr, text = mcpCall(t, f.h, f.owner, "get_logs", map[string]any{"deployment_id": d.ID, "tail": 2})
+	if isErr || strings.Contains(text, "panic") || !strings.Contains(text, "ok 3") {
+		t.Fatalf("tail: %v %s", isErr, text)
+	}
+}

@@ -42,7 +42,10 @@ func ProbeState(ctx context.Context, st *ContainerState, network, kind string, p
 			return true, "tcp " + addr
 		}
 		url := "http://" + addr + path
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil { // 잘못된 healthcheck 경로(예: "/%zz")는 실패로 본다. nil 요청으로 Do를 부르면 panic한다.
+			return false, "invalid healthcheck path: " + err.Error()
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			last = err.Error()

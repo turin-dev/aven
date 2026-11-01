@@ -1,10 +1,17 @@
-import { getLocale, t } from "./i18n";
+import { dateLocale, t } from "./i18n";
+
+/** Milliseconds since the epoch, or NaN for a missing or unparsable value. */
+function toMs(d: Date | string | number | null | undefined): number {
+  if (d === null || d === undefined || d === "") return NaN;
+  if (d instanceof Date) return d.getTime();
+  return typeof d === "number" ? d : new Date(d).getTime();
+}
 
 export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  return d.toLocaleString(getLocale() === "en" ? "en-US" : "ko-KR", {
+  return d.toLocaleString(dateLocale(), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -17,10 +24,11 @@ export function fmtTime(iso: string | null | undefined): string {
 
 export function fmtRelative(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const ms = new Date(iso).getTime();
+  const ms = toMs(iso);
   if (isNaN(ms)) return iso;
   const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 5) return t("방금 전");
+  // A timestamp slightly ahead of the browser clock (server clock skew) still reads as "just now".
+  if (s < 5) return s < -60 ? fmtTime(iso) : t("방금 전");
   if (s < 60) return t("{n}초 전", { n: s });
   const m = Math.floor(s / 60);
   if (m < 60) return t("{n}분 전", { n: m });
@@ -43,7 +51,9 @@ export function fmtDuration(
   if (s < 60) return t("{n}초", { n: s });
   const m = Math.floor(s / 60);
   if (m < 60) return t("{m}분 {s}초", { m, s: s % 60 });
-  return t("{h}시간 {m}분", { h: Math.floor(m / 60), m: m % 60 });
+  const h = Math.floor(m / 60);
+  if (h < 24) return t("{h}시간 {m}분", { h, m: m % 60 });
+  return t("{d}일 {h}시간", { d: Math.floor(h / 24), h: h % 24 });
 }
 
 export function shortSha(sha: string | null | undefined): string {
@@ -61,13 +71,11 @@ export function parseDotenv(text: string): [string, string][] {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     let val = line.slice(eq + 1).trim();
-    if (
-      val.length >= 2 &&
-      ((val.startsWith('"') && val.endsWith('"')) ||
-        (val.startsWith("'") && val.endsWith("'")))
-    ) {
-      const q = val[0];
-      val = val.slice(1, -1);
+    const q = val[0];
+    // Closing quote, optionally followed by an inline comment: KEY="a b" # note
+    const close = q === '"' || q === "'" ? closingQuote(val, q) : -1;
+    if (close > 0 && /^\s*(#.*)?$/.test(val.slice(close + 1))) {
+      val = val.slice(1, close);
       if (q === '"') val = val.replace(/\\n/g, "\n").replace(/\\"/g, '"');
     } else {
       const hash = val.search(/\s#/);
@@ -78,22 +86,39 @@ export function parseDotenv(text: string): [string, string][] {
   return out;
 }
 
+/** Index of the quote that closes val[0], skipping backslash escapes inside double quotes. */
+function closingQuote(val: string, q: string): number {
+  for (let i = 1; i < val.length; i++) {
+    if (q === '"' && val[i] === "\\") i++;
+    else if (val[i] === q) return i;
+  }
+  return -1;
+}
+
+/** Decimal (SI) units: 1 KB = 1000 B, matching the server's metrics and usage figures. */
 export function fmtBytes(n: number | null | undefined, digits = 1): string {
-  if (n === null || n === undefined || isNaN(n)) return "—";
-  const u = ["B", "KB", "MB", "GB", "TB"];
+  if (n === null || n === undefined || !Number.isFinite(n)) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
   let i = 0;
   let v = Math.abs(n);
   while (v >= 1000 && i < u.length - 1) {
     v /= 1000;
     i++;
   }
-  return `${n < 0 ? "-" : ""}${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(digits)} ${u[i]}`;
+  // Rounding can cross a display boundary (99.96 -> "100.0", 999.6 KB -> "1000 KB"); re-check after rounding.
+  let text = i === 0 ? String(Math.round(v)) : v.toFixed(digits);
+  if (Number(text) >= 100) text = String(Math.round(v));
+  if (Number(text) >= 1000 && i < u.length - 1) {
+    i++;
+    text = (v / 1000).toFixed(digits);
+  }
+  return `${n < 0 ? "-" : ""}${text} ${u[i]}`;
 }
 
 /** Relative time in the future: "3시간 후". */
 export function fmtUntil(d: Date | string | null | undefined): string {
-  if (!d) return "—";
-  const ms = typeof d === "string" ? new Date(d).getTime() : d.getTime();
+  const ms = toMs(d);
+  if (isNaN(ms)) return "—";
   const s = Math.round((ms - Date.now()) / 1000);
   if (s < 60) return t("곧");
   const m = Math.floor(s / 60);

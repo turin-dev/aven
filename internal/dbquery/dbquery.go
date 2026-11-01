@@ -50,6 +50,9 @@ type Target struct {
 	Tag string
 	// RESP3이면 redis-cli를 -3으로 실행한다(map/set/double 등 RESP3 응답).
 	RESP3 bool
+	// ReadOnly면 SQL 세션을 읽기 전용 트랜잭션으로 연다(postgres default_transaction_read_only, mysql
+	// SET SESSION TRANSACTION READ ONLY). 표 목록, 행 읽기처럼 Aven이 만든 탐색 쿼리에 쓴다(쓰기를 막는 이중 안전장치).
+	ReadOnly bool
 }
 
 // tagEnv는 Tag가 있으면 클라이언트 프로세스를 찾는 환경변수를 붙인다.
@@ -133,8 +136,12 @@ func (t Target) SQL(query string) (Command, error) {
 		if db == "" {
 			db = user
 		}
+		opts := fmt.Sprintf("-c statement_timeout=%ds", TimeoutS)
+		if t.ReadOnly {
+			opts += " -c default_transaction_read_only=on"
+		}
 		env := []string{kv("PGHOST", "127.0.0.1"), kv("PGPORT", fmt.Sprint(t.port())), kv("PGUSER", user), kv("PGDATABASE", db),
-			kv("PGCONNECT_TIMEOUT", "10"), kv("PGAPPNAME", t.appName()), kv("PGOPTIONS", fmt.Sprintf("-c statement_timeout=%ds", TimeoutS)),
+			kv("PGCONNECT_TIMEOUT", "10"), kv("PGAPPNAME", t.appName()), kv("PGOPTIONS", opts),
 			kv("PSQLRC", "/dev/null")}
 		if pw := first(t.Vars, "PGPASSWORD", "POSTGRES_PASSWORD"); pw != "" {
 			env = append(env, kv("PGPASSWORD", pw))
@@ -151,13 +158,23 @@ func (t Target) SQL(query string) (Command, error) {
 		if pw := first(t.Vars, "MYSQLPASSWORD", "MYSQL_ROOT_PASSWORD", "MARIADB_ROOT_PASSWORD"); pw != "" {
 			env = append(env, kv("MYSQL_PWD", pw))
 		}
+		if t.ReadOnly {
+			env = append(env, kv("DBINIT", "SET SESSION TRANSACTION READ ONLY"))
+		}
 		// --comments: 요청 표시 주석을 서버에 보낸다(기본은 클라이언트가 주석을 지운다).
 		return t.tagEnv(Command{Env: env, Stdin: []byte(t.mysqlTagged(query)), Cmd: shell(`M=$(command -v mariadb || command -v mysql) || { echo "mysql client not found in image" >&2; exit 127; }
 set -- --protocol=TCP -h 127.0.0.1 -P "$DBPORT" -u "$DBUSER" --batch --comments --default-character-set=utf8mb4 --connect-timeout=10
 [ -n "$DBNAME" ] && set -- "$@" -D "$DBNAME"
+[ -n "$DBINIT" ] && set -- "$@" "--init-command=$DBINIT"
 exec $T "$M" "$@"`)}), nil
 	}
 	return Command{}, fmt.Errorf("SQL is not supported for %q", t.Kind)
+}
+
+// ReadOnlySQL은 SQL과 같지만 읽기 전용 세션으로 실행한다(Aven이 만든 탐색 쿼리용).
+func (t Target) ReadOnlySQL(query string) (Command, error) {
+	t.ReadOnly = true
+	return t.SQL(query)
 }
 
 func (c Command) withEnv(k, v string) Command {

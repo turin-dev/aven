@@ -151,3 +151,56 @@ func TestOwnerRepo(t *testing.T) {
 		}
 	}
 }
+
+func TestStateTable(t *testing.T) {
+	msg := "CI failed"
+	empty := ""
+	for _, tc := range []struct {
+		status store.DeployStatus
+		err    *string
+		state  string
+		ok     bool
+	}{
+		{store.DepWaiting, nil, "pending", true},
+		{store.DepQueued, nil, "pending", true},
+		{store.DepBuilding, nil, "pending", true},
+		{store.DepHealthchecking, nil, "pending", true},
+		{store.DepLive, nil, "success", true},
+		{store.DepFailed, nil, "failure", true},
+		{store.DepCrashed, nil, "failure", true},
+		{store.DepCancelled, nil, "error", true},
+		{store.DepRemoved, nil, "error", true},
+		{store.DepSkipped, &msg, "error", true},
+		{store.DepSkipped, &empty, "", false},
+		{store.DepSkipped, nil, "", false},
+		{"unknown", nil, "", false},
+	} {
+		state, _, ok := State(&store.Deployment{Status: tc.status, Error: tc.err})
+		if state != tc.state || ok != tc.ok {
+			t.Errorf("State(%s, %v) = %q %v", tc.status, tc.err, state, ok)
+		}
+	}
+	if got := truncate("가나다라", 2); got != "가나" {
+		t.Errorf("truncate = %q", got)
+	}
+}
+
+func TestPostSkipsUnsupportedTargets(t *testing.T) {
+	ts, reqs := fakeGitHub(t)
+	p := &Poster{Token: "t", APIBase: ts.URL}
+	sha, bad := "0123456789abcdef0123456789abcdef01234567", "not-a-sha"
+	gh, gl := "https://github.com/o/r", "https://gitlab.com/o/r"
+	for _, d := range []*store.Deployment{
+		{Status: store.DepLive, CommitSHA: &bad, Spec: store.Spec{RepoURL: &gh}},
+		{Status: store.DepLive, CommitSHA: &sha, Spec: store.Spec{RepoURL: &gl}},
+		{Status: store.DepLive, CommitSHA: &sha},
+		{Status: store.DepLive, Spec: store.Spec{RepoURL: &gh}},
+	} {
+		if err := p.Post(context.Background(), d); err != nil {
+			t.Errorf("Post: %v", err)
+		}
+	}
+	if n := len(reqs()); n != 0 {
+		t.Errorf("%d requests sent for unsupported targets", n)
+	}
+}

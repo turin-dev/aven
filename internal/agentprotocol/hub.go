@@ -18,8 +18,14 @@ var DefaultCallTimeout = 2 * time.Minute
 
 const (
 	// MaxPending은 연결 하나에 동시에 걸 수 있는 요청 수다.
-	MaxPending   = 256
+	MaxPending = 256
+	// MaxUpRequests는 연결 하나에서 동시에 처리하는 agent 요청(Message.Up) 수다. 넘치면 그 노드의 읽기 루프에서 바로
+	// "busy" 오류로 답한다(그 노드에만 backpressure). 그래서 노드 하나가 요청을 쏟아내도 서버 goroutine이 끝없이 늘지 않는다.
+	MaxUpRequests = 32
+	// MaxIDBytes는 메시지 id의 최대 길이다(서버가 만드는 id는 24자).
+	MaxIDBytes   = 128
 	writeTimeout = 10 * time.Second
+	busyTimeout  = 2 * time.Second
 )
 
 type pending struct {
@@ -29,6 +35,7 @@ type pending struct {
 
 type connection struct {
 	peer    *Peer
+	up      chan struct{} // 처리 중인 agent 요청 슬롯(MaxUpRequests)
 	pending map[string]*pending
 	done    chan struct{}
 	once    sync.Once
@@ -82,7 +89,7 @@ func (h *Hub) Register(nodeID string, conn *websocket.Conn) (*Session, error) {
 		h.nodes = map[string]*connection{}
 	}
 	old := h.nodes[nodeID]
-	c := &connection{peer: &Peer{Conn: conn}, pending: map[string]*pending{}, done: make(chan struct{})}
+	c := &connection{peer: &Peer{Conn: conn}, up: make(chan struct{}, MaxUpRequests), pending: map[string]*pending{}, done: make(chan struct{})}
 	h.nodes[nodeID] = c
 	h.mu.Unlock()
 	if old != nil {
@@ -150,10 +157,25 @@ func (h *Hub) Deliver(nodeID string, msg Message) {
 	if c == nil {
 		return
 	}
+	if msg.ID == "" || len(msg.ID) > MaxIDBytes {
+		return
+	}
 	if msg.Up {
-		if h.OnRequest != nil && msg.ID != "" {
-			go h.OnRequest(nodeID, msg)
+		if h.OnRequest == nil {
+			return
 		}
+		select {
+		case c.up <- struct{}{}:
+		default:
+			ctx, cancel := context.WithTimeout(context.Background(), busyTimeout)
+			c.peer.Write(ctx, Message{ID: msg.ID, Operation: msg.Operation, Error: "server is busy", Reply: true})
+			cancel()
+			return
+		}
+		go func() {
+			defer func() { <-c.up }()
+			h.OnRequest(nodeID, msg)
+		}()
 		return
 	}
 	c.mu.Lock()

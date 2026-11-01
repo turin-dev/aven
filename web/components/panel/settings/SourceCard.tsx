@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUpCircle, Box, ChevronDown, GitBranch, PenLine } from "lucide-react";
 import { api, type CanvasService, type Environment, type ImageUpdate } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { qk, useCaps, useImageUpdates } from "@/lib/queries";
 import { BrandIcon } from "../../ServiceIcon";
-import { Button, ErrorBox, Input, Menu, MenuItem, cx } from "../../ui";
+import { Button, ErrorBox, Input, Menu, MenuItem, cx, useEscape } from "../../ui";
 import { CARD } from "./primitives";
 
 /* Source image / source repo card, modeled on Railway's dashboard (`min-h-[66px]` raised surface: icon, name link, sub-link, pencil, Disconnect)
@@ -106,11 +106,24 @@ export function DisconnectButton({ onClick, disabledReason, children = t("연결
   );
 }
 
+/* Client-side copies of the server's checks (internal/api: validRepoURL, branchRe, imageRe), so a typo shows here
+   instead of as a failed deploy. */
+export function repoUrlError(v: string): string | null {
+  return v.startsWith("-") || !/^(https?:\/\/|ssh:\/\/|git@)/.test(v) ? t("https://, ssh:// 또는 git@ 주소를 입력하세요.") : null;
+}
+export function branchError(v: string): string | null {
+  return v.startsWith("-") || !/^[A-Za-z0-9._/-]{1,200}$/.test(v) ? t("브랜치 이름에는 영문, 숫자와 . _ / - 만 쓸 수 있고 -로 시작할 수 없습니다.") : null;
+}
+export function imageError(v: string): string | null {
+  return !/^[a-zA-Z0-9][a-zA-Z0-9._/:@+-]{0,254}$/.test(v) ? t("이미지 이름이 올바르지 않습니다 (예: nginx:alpine, ghcr.io/org/app:1.2).") : null;
+}
+
 export function SourceEdit({
   value,
   placeholder,
   label,
   hint,
+  validate,
   onCancel,
   onSave,
 }: {
@@ -118,25 +131,51 @@ export function SourceEdit({
   placeholder: string;
   label: string;
   hint?: ReactNode;
+  /** Returns a message when the trimmed value can't be saved. */
+  validate?: (v: string) => string | null;
   onCancel: () => void;
   onSave: (v: string) => void;
 }) {
   const [v, setV] = useState(value);
+  const errId = useId();
+  const trimmed = v.trim();
+  const err = trimmed ? (validate?.(trimmed) ?? null) : null;
+  useEscape(onCancel);
   return (
     <form
       className={cx(CARD, "space-y-4 py-4")}
       onSubmit={(e) => {
         e.preventDefault();
-        if (v.trim()) onSave(v.trim());
+        if (trimmed && !err) onSave(trimmed);
       }}
     >
-      <Input autoFocus mono value={v} onChange={(e) => setV(e.target.value)} placeholder={placeholder} aria-label={label} className="!text-base" />
+      <div>
+        <Input
+          autoFocus
+          mono
+          value={v}
+          onChange={(e) => setV(e.target.value)}
+          placeholder={placeholder}
+          aria-label={label}
+          invalid={!!err}
+          aria-invalid={!!err || undefined}
+          aria-describedby={err ? errId : undefined}
+          spellCheck={false}
+          autoComplete="off"
+          className="!text-base"
+        />
+        {err && (
+          <p id={errId} className="mt-2 text-xs leading-[18px] text-red-600">
+            {err}
+          </p>
+        )}
+      </div>
       {hint}
       <div className="flex items-center justify-end space-x-2">
         <Button variant="outline" onClick={onCancel}>
           {t("취소")}
         </Button>
-        <Button type="submit" variant="primary" disabled={!v.trim() || v.trim() === value}>
+        <Button type="submit" variant="primary" disabled={!trimmed || trimmed === value || !!err}>
           {t("업데이트")}
         </Button>
       </div>
@@ -195,6 +234,7 @@ export function ImageSourceCard({
         value={image}
         placeholder="nginx:alpine"
         label={t("소스 이미지")}
+        validate={imageError}
         hint={hint}
         onCancel={() => setEditing(false)}
         onSave={(v) => {
@@ -299,6 +339,7 @@ export function RepoSourceCard({ url, onUrl }: { url: string; onUrl: (v: string)
         value={url}
         placeholder="https://github.com/user/repo"
         label={t("소스 저장소")}
+        validate={repoUrlError}
         onCancel={() => setEditing(false)}
         onSave={(v) => {
           onUrl(v);
@@ -341,6 +382,7 @@ export function BranchCard({
         value={branch}
         placeholder="main"
         label={t("브랜치")}
+        validate={branchError}
         onCancel={() => setEditing(false)}
         onSave={(v) => {
           onBranch(v);

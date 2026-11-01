@@ -76,24 +76,30 @@ func (c *Client) Discover(ctx context.Context, image, policy, previousDigest str
 	if err != nil {
 		return Discovery{}, err
 	}
-	var bestMajor, bestMinor, bestPatch int
-	found := false
+	// 후보는 현재 태그와 같은 표기("v" 접두사 유무)인 것만 본다. 1.2.3과 v1.2.4가 섞여 있으면
+	// 다른 이미지 계열일 수 있고, 찾은 태그 이름을 그대로 써야 레지스트리에 있는 태그를 가리킨다.
+	vPrefix := strings.HasPrefix(r.Tag, "v")
+	var bestMinor, bestPatch int
+	var bestTag string
 	for _, tag := range tags {
-		ma, mi, pa, ok := (Reference{Tag: tag}).IsSemver()
+		if strings.HasPrefix(tag, "v") != vPrefix {
+			continue
+		}
+		ma, mi, pa, ok := Reference{Tag: tag}.IsSemver()
 		if !ok || ma != major || mi < minor || (mi == minor && pa <= patch) {
 			continue
 		}
 		if policy == "patch" && mi != minor {
 			continue
 		}
-		if !found || ma > bestMajor || (ma == bestMajor && (mi > bestMinor || (mi == bestMinor && pa > bestPatch))) {
-			bestMajor, bestMinor, bestPatch, found = ma, mi, pa, true
+		if bestTag == "" || mi > bestMinor || (mi == bestMinor && pa > bestPatch) {
+			bestMinor, bestPatch, bestTag = mi, pa, tag
 		}
 	}
-	if !found {
+	if bestTag == "" {
 		return out, nil
 	}
-	tag := r.VersionTag(bestMajor, bestMinor, bestPatch)
+	tag := bestTag
 	digest, err := c.ManifestDigest(ctx, r, tag)
 	if err != nil {
 		return Discovery{}, err

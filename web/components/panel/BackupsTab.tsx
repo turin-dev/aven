@@ -7,11 +7,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Clock, MoreVertical, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { api, type Backup, type CanvasService, type Volume } from "@/lib/api";
 import { qk, useBackupSchedule, useBackups, useCaps } from "@/lib/queries";
-import { cronError, describeCron } from "@/lib/cron";
+import { cronError, describeCron, nextRuns } from "@/lib/cron";
 import { fmtBytes, fmtRelative, fmtTime } from "@/lib/format";
 import { lock, NO_PERM } from "../Perm";
 import { ToneBadge, type Tone } from "../StatusBadge";
 import { Button, ErrorBox, Field, Input, Menu, MenuItem, Spinner, cx, useConfirm } from "../ui";
+import { useTypedConfirm } from "./dataKit";
 import { t, tr } from "@/lib/i18n";
 
 /**
@@ -60,6 +61,7 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
   const backups = useBackups(vol.id);
   const schedule = useBackupSchedule(vol.id);
   const { confirm, node } = useConfirm();
+  const typed = useTypedConfirm();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [cron, setCron] = useState("");
@@ -93,6 +95,16 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
   const running = list.some((b) => b.status === "running");
   const savedCron = schedule.data?.cron ?? "";
   const formId = `bk-sched-${vol.id}`;
+  // Backup cron runs in UTC on the server (internal/deploy/cron.go); show the next run in the browser's time.
+  const nextRun = savedCron ? nextRuns(savedCron, 1)[0] : undefined;
+  const draftRuns = cron.trim() && !cronErr ? nextRuns(cron.trim(), 3) : [];
+  const lastDone = list.find((b) => b.status === "done");
+  const lastFailed = list[0]?.status === "failed" ? list[0] : undefined;
+  const cancelEdit = () => {
+    setCron(schedule.data?.cron ?? "");
+    setKeep(String(schedule.data?.keep ?? 7));
+    setEditing(false);
+  };
 
   return (
     <section className="flex flex-col gap-y-3" aria-label={t("{name} 백업", { name: vol.name })}>
@@ -112,16 +124,32 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
           <Button variant="outline" onClick={() => run("now", () => api.createBackup(vol.id))} loading={busy === "now"} disabled={running} {...lock(canEdit)}>
             {busy !== "now" && <Plus />} {t("백업")}
           </Button>
-          <Button variant="outline" onClick={() => setEditing((o) => !o)} aria-expanded={editing} aria-controls={formId}>
+          <Button variant="outline" onClick={() => (editing ? cancelEdit() : setEditing(true))} aria-expanded={editing} aria-controls={formId}>
             <Clock /> {t("일정 편집")}
           </Button>
         </div>
-        <p className="text-sm text-gray-500">
-          {savedCron
-            ? t("{cron} · {count}개 보관", { cron: describeCron(savedCron), count: schedule.data?.keep ?? keepN })
-            : t("자동 백업 꺼짐")}
-        </p>
+        <div className="text-right text-sm text-gray-500">
+          <p>
+            {savedCron
+              ? t("{cron} · {count}개 보관", { cron: describeCron(savedCron), count: schedule.data?.keep ?? keepN })
+              : t("자동 백업 꺼짐")}
+          </p>
+          <p className="text-xs">
+            {nextRun && (
+              <>
+                {t("다음 자동 백업 {time}", { time: fmtTime(nextRun.toISOString()) })}
+                {" · "}
+              </>
+            )}
+            {lastDone ? t("마지막 성공 {time}", { time: fmtRelative(lastDone.created_at) }) : list.length ? t("성공한 백업 없음") : null}
+          </p>
+        </div>
       </div>
+      {lastFailed && (
+        <p role="alert" className="rounded-md bg-danger-surface px-3 py-2 text-sm text-danger">
+          {t("가장 최근 백업({time})이 실패했습니다: {error}", { time: fmtRelative(lastFailed.created_at), error: lastFailed.error ?? t("알 수 없는 오류") })}
+        </p>
+      )}
 
       {editing && (
         <form
@@ -134,7 +162,7 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
           }}
         >
           <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px]">
-            <Field label={t("일정 (크론, 비우면 끔)")}>
+            <Field label={t("일정 (크론, UTC, 비우면 끔)")}>
               <Input mono value={cron} invalid={!!cronErr} onChange={(e) => setCron(e.target.value)} placeholder="0 4 * * *" />
             </Field>
             <Field label={t("보관 개수")}>
@@ -147,9 +175,14 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
                 (cron.trim()
                   ? t("{cron} · 보관 개수를 넘는 오래된 자동 백업은 지웁니다. 직접 만든 백업은 지우지 않습니다.", { cron: describeCron(cron) })
                   : t("자동 백업이 꺼집니다."))}
+              {draftRuns.length > 0 && (
+                <span className="mt-1 block text-xs tabular-nums">
+                  {t("다음 실행: {times}", { times: draftRuns.map((d) => fmtTime(d.toISOString())).join(", ") })}
+                </span>
+              )}
             </p>
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setEditing(false)}>
+              <Button variant="ghost" onClick={cancelEdit}>
                 {t("취소")}
               </Button>
               <Button type="submit" variant="primary" loading={busy === "sched"} disabled={!!cronErr || !dirty} {...lock(canEdit)}>
@@ -175,8 +208,9 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
           {list.map((b) => (
             <li key={b.id} className="relative select-none rounded-md border border-gray-200">
               <div className="m-1 flex items-center gap-x-4 rounded-md bg-gray-100 px-3 py-4">
-                <div className="flex sm:min-w-20">
+                <div className="flex items-center gap-2 sm:min-w-20">
                   <ToneBadge tone={STATUS_BADGE[b.status].tone}>{STATUS_BADGE[b.status].label}</ToneBadge>
+                  {(busy === `restore-${b.id}` || busy === `del-${b.id}`) && <Spinner className="size-3.5" />}
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col gap-y-1">
                   <p className="truncate text-sm text-foreground">{fmtTime(b.created_at)}</p>
@@ -210,14 +244,36 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
                         reason={canEdit ? undefined : NO_PERM}
                         onSelect={() => {
                           close();
-                          confirm({
+                          typed.confirm({
                             title: t("백업에서 복원"),
-                            message: t("{time} 백업으로 볼륨을 덮어씁니다. 서비스를 멈추고 복원한 뒤 다시 배포합니다. 그 이후의 데이터는 사라집니다.", {
-                              time: fmtTime(b.created_at),
-                            }),
+                            message: (
+                              <>
+                                <p>
+                                  {tr("{time} 백업으로 볼륨 {volume}을(를) 덮어씁니다.", {
+                                    time: <b className="text-foreground">{fmtTime(b.created_at)}</b>,
+                                    volume: <span className="font-mono text-foreground">{vol.name}</span>,
+                                  })}
+                                </p>
+                                <ul className="list-disc space-y-1 pl-5">
+                                  <li>{t("서비스를 멈추고 복원한 뒤 다시 배포합니다. 그동안 서비스를 쓸 수 없습니다.")}</li>
+                                  <li>
+                                    <b>{t("백업 이후에 쓴 데이터는 사라집니다.")}</b> {t("필요하면 먼저 지금 상태를 백업하세요.")}
+                                  </li>
+                                </ul>
+                              </>
+                            ),
                             confirmLabel: t("복원"),
-                            danger: true,
-                            run: () => run(`restore-${b.id}`, () => api.restoreBackup(b.id)),
+                            expected: svc.name,
+                            // Errors stay in the confirmation dialog.
+                            run: async () => {
+                              setBusy(`restore-${b.id}`);
+                              try {
+                                await api.restoreBackup(b.id);
+                                await qc.invalidateQueries({ queryKey: qk.backups(vol.id) });
+                              } finally {
+                                setBusy(null);
+                              }
+                            },
                           });
                         }}
                       >
@@ -250,6 +306,7 @@ function VolumeBackups({ svc, vol, many }: { svc: CanvasService; vol: Volume; ma
         </ul>
       )}
       {node}
+      {typed.node}
     </section>
   );
 }

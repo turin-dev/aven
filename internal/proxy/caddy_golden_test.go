@@ -106,6 +106,7 @@ func withCheckTokens(rs []Route) []Route {
 }
 
 func TestCaddyGolden(t *testing.T) {
+	t.Setenv(TrustedProxiesEnv, "") // 개발 환경 값이 스냅샷에 섞이지 않게
 	cases := []struct {
 		name   string
 		cfg    Config

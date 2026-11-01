@@ -100,7 +100,7 @@ func relPath(p string) string {
 }
 
 func cmdConfigImport(c *config, args []string) {
-	fl := flag.NewFlagSet("config import", flag.ExitOnError)
+	fl := newFlagSet("config import")
 	file := fl.String("file", "", "file to write (default: the existing .aven/aven.* or .aven/aven.ts; .keel still works)")
 	format := fl.String("format", "", "ts | json | yaml (default: from --file, else ts)")
 	include := fl.Bool("include-variables", false, "inline non-sealed variable values (secrets!) instead of preserve()")

@@ -362,7 +362,10 @@ func (m *Manager) autoscaleInstance(ctx context.Context, in *store.Instance, now
 		return
 	}
 	current := len(d.AllContainers())
-	mt, metrics := m.autoscaleMetrics(ctx, in, d, current, &cfg, now)
+	m.autoscale.mu.Lock()
+	lastScale := e.hpa.LastScale
+	m.autoscale.mu.Unlock()
+	mt, metrics := m.autoscaleMetrics(ctx, in, d, current, &cfg, now, lastScale)
 	raw, ratio, which := HPADesired(current, metrics, AutoscaleTolerance)
 	var dec HPADecision
 	m.autoscale.mu.Lock()
@@ -421,14 +424,43 @@ func scaleReason(from, to int, which string, ratio float64, metrics []HPAMetric)
 	return s
 }
 
-// autoscaleMetrics는 최근 AutoscaleWindow 동안의 replica당 지표 평균이다. 설정된 target 중 데이터가 있는 것만 HPAMetric으로 돌려준다.
-func (m *Manager) autoscaleMetrics(ctx context.Context, in *store.Instance, d *store.Deployment, current int, cfg *store.Autoscale, now time.Time) (AutoscaleMetrics, []HPAMetric) {
+// AutoscaleSettle은 replica 수를 바꾼 뒤 지표를 다시 쓰기 전까지 기다리는 최소 시간이다.
+const AutoscaleSettle = 10 * time.Second
+
+// metricsWindow는 지표 평균 구간의 시작이다. 마지막으로 replica 수를 바꾼 뒤의 점만 쓴다: 바꾸기 전 부하(다른 replica 수로
+// 나뉜 값)가 구간에 남아 있으면 cooldown이 끝나자마자 같은 방향으로 한 번 더 바꾼다(overshoot). 바꾼 지 AutoscaleSettle이
+// 안 됐으면 ok=false(아직 판단할 지표가 없다).
+func metricsWindow(now, lastScale time.Time) (from time.Time, ok bool) {
+	from = now.Add(-AutoscaleWindow)
+	if lastScale.After(from) {
+		from = lastScale
+	}
+	return from, now.Sub(from) >= AutoscaleSettle
+}
+
+// autoscaleMetrics는 최근 AutoscaleWindow(마지막 변경 이후) 동안의 replica당 지표 평균이다.
+// 설정된 target 중 데이터가 있는 것만 HPAMetric으로 돌려준다.
+func (m *Manager) autoscaleMetrics(ctx context.Context, in *store.Instance, d *store.Deployment, current int, cfg *store.Autoscale, now, lastScale time.Time) (AutoscaleMetrics, []HPAMetric) {
 	var out AutoscaleMetrics
-	rows, _ := m.Store.QueryMetrics(ctx, in.ID, now.Add(-AutoscaleWindow).Unix())
+	from, ok := metricsWindow(now, lastScale)
+	if !ok {
+		return out, nil
+	}
+	rows, _ := m.Store.QueryMetrics(ctx, in.ID, from.Unix())
+	if !lastScale.IsZero() {
+		// 바꾼 그 초에 찍힌 점도 바꾸기 전 replica 수로 잰 것이다.
+		kept := rows[:0]
+		for _, r := range rows {
+			if r.T > lastScale.Unix() {
+				kept = append(kept, r)
+			}
+		}
+		rows = kept
+	}
 	cpu, mem := AverageReplicaUsage(rows, d.Spec.CPULimit)
 	out.CPU, out.Memory = cpu, mem
 	if m.HTTPLogs != nil && current > 0 {
-		r := m.HTTPLogs.RequestRate(in.ID, AutoscaleWindow) / float64(current)
+		r := m.HTTPLogs.RequestRate(in.ID, now.Sub(from)) / float64(current)
 		out.RPS = &r
 	}
 	var ms []HPAMetric

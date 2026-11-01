@@ -20,6 +20,30 @@ test("stable bucket matches the Go server vectors", () => {
   assert.equal(stableBucket("checkout-v2", "user-42"), 0.84299246949562123);
   assert.equal(stableBucket("checkout-v2", "user_8f3a"), 0.92247836883631251);
   assert.equal(stableBucket("checkout-v2", "한글"), 0.88976060845657412);
+  assert.equal(stableBucket("checkout-v2", "1234567"), 0.99082793061704921);
+});
+
+test("numeric bucket attributes hash like the server (String(value))", () => {
+  // Go TestBucketNumericKeyMatchesStringKey: the server hashes 1234567 as "1234567" too.
+  const rule = (when: string) => flag({ rules: [{ id: "r", when, value: true }] });
+  assert.equal(evaluateFlag(rule("bucket(id) < 0.9908"), { id: 1234567 }).value, false);
+  assert.equal(evaluateFlag(rule("bucket(id) < 0.9909"), { id: 1234567 }).value, true);
+});
+
+test("server and SDK agree on edge cases", () => {
+  const ctx = { plan: "pro", age: 30, tags: ["a", "b"], one: ["a b"], pattern: "([" };
+  const cases: [string, boolean][] = [
+    ['tags == ["a", "b"]', true],
+    ['one == ["a", "b"]', false],
+    ['age == "30"', false],
+    ['age contains "3" || plan == "pro"', true],
+    ["plan matches pattern || age > 1", true],
+    ['missing == 1 || plan == "pro"', true],
+    ["!missing", false],
+  ];
+  for (const [when, want] of cases) {
+    assert.equal(evaluateFlag(flag({ rules: [{ id: "r", when, value: true }] }), ctx).value, want, when);
+  }
 });
 
 test("targeting expressions", () => {
@@ -104,4 +128,24 @@ test("client caches the snapshot, polls with ETag, and types reads", async () =>
   const account = createFlagClient({ baseUrl: "http://k", token: "keel_acct", scope: { projectId: "prj_1" }, pollIntervalMs: 0, fetch: fakeFetch });
   await account.init();
   assert.equal(calls[2].url, "http://k/api/projects/prj_1/flags");
+});
+
+test("re-init ignores a refresh that was still in flight for the old scope", async () => {
+  const snap = (project: string): FlagSnapshot => ({ project_id: project, environment_id: "env", flags: [] });
+  let releaseOld: (() => void) | undefined;
+  const fakeFetch = (async (url: string) => {
+    if (url.includes("old")) {
+      await new Promise<void>((resolve) => { releaseOld = resolve; });
+      return new Response(JSON.stringify(snap("prj_old")), { status: 200 });
+    }
+    return new Response(JSON.stringify(snap("prj_new")), { status: 200 });
+  }) as unknown as typeof fetch;
+  const client = createFlagClient({ token: "t", pollIntervalMs: 0, fetch: fakeFetch });
+  const first = client.init({ baseUrl: "http://old" });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await client.init({ baseUrl: "http://new" });
+  releaseOld?.();
+  await first;
+  assert.equal(client.projectId, "prj_new");
+  client.close();
 });

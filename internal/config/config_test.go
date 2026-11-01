@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/turin-dev/aven/internal/store"
@@ -272,6 +273,104 @@ startCommand = "exact"
 		// 원본은 바뀌지 않는다
 		if *f.Deploy.StartCommand != "node main.js" || f.Environments == nil {
 			t.Errorf("%s: ForEnvironment mutated the file", tc.name)
+		}
+	}
+}
+
+// TestFindRejectsSymlinkOutsideRepo: a repository must not make the build server read its own files
+// (master.key, /etc/...) as config and echo parts of them in parse errors.
+func TestFindRejectsSymlinkOutsideRepo(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret.toml")
+	os.WriteFile(outside, []byte("root:x:0:0"), 0o600)
+	dir := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(dir, "aven.toml")); err != nil {
+		t.Skip("symlinks not supported:", err)
+	}
+	_, f, err := Find(dir)
+	if err == nil || f != nil || !strings.Contains(err.Error(), "outside the repository") || strings.Contains(err.Error(), "root:x") {
+		t.Errorf("err %v", err)
+	}
+
+	// a link inside the repository is fine
+	dir = t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config", "railway.json"), []byte(`{"deploy":{"numReplicas":2}}`), 0o644)
+	os.Symlink(filepath.Join("config", "railway.json"), filepath.Join(dir, "railway.json"))
+	if name, f, err := Find(dir); err != nil || name != "railway.json" || *f.Deploy.NumReplicas != 2 {
+		t.Errorf("inside link: %s %v", name, err)
+	}
+
+	// a dangling link counts as missing
+	dir = t.TempDir()
+	os.Symlink(filepath.Join(dir, "nope.json"), filepath.Join(dir, "aven.json"))
+	if name, f, err := Find(dir); err != nil || name != "" || f != nil {
+		t.Errorf("dangling: %q %v", name, err)
+	}
+}
+
+func TestFindLimitsAndShadowing(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "aven.json"), []byte(`{"build":{"builder":"`+strings.Repeat("x", MaxFileSize)+`"}}`), 0o644)
+	if _, _, err := Find(dir); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("huge file: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "aven.json"), []byte(`{}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "railway.toml"), []byte(``), 0o644)
+	_, f, err := Find(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := strings.Join(f.Warnings(), "\n")
+	if !strings.Contains(ws, "railway.toml") {
+		t.Errorf("shadowed file not reported: %q", ws)
+	}
+	// the warning survives ForEnvironment (it is what the deploy logs print)
+	if merged, _ := f.ForEnvironment("production", false); !strings.Contains(strings.Join(merged.Warnings(), ""), "railway.toml") {
+		t.Error("lost after ForEnvironment")
+	}
+	os.Remove(filepath.Join(dir, "aven.json"))
+	os.Mkdir(filepath.Join(dir, "aven.json"), 0o755)
+	if _, _, err := Find(dir); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Errorf("directory: %v", err)
+	}
+}
+
+func TestApplyFixes(t *testing.T) {
+	for _, tc := range []struct {
+		src   string
+		check func(sp store.Spec) bool
+	}{
+		// an empty preDeployCommand list clears the command instead of setting ""
+		{`{"deploy":{"preDeployCommand":[]}}`, func(sp store.Spec) bool { return sp.PreDeployCommand == nil }},
+		{`{"deploy":{"preDeployCommand":["", " npm run migrate ", ""]}}`, func(sp store.Spec) bool {
+			return sp.PreDeployCommand != nil && *sp.PreDeployCommand == "npm run migrate"
+		}},
+		{`{"deploy":{"healthcheckPath":"health"}}`, func(sp store.Spec) bool { return sp.HealthcheckPath == "/health" }},
+		{`{"deploy":{"healthcheckPath":""}}`, func(sp store.Spec) bool { return sp.HealthcheckPath == "/" }},
+		{`{"deploy":{"restartPolicyMaxRetries":0}}`, func(sp store.Spec) bool { return sp.RestartMaxRetries == 0 }},
+	} {
+		f, err := Parse("aven.json", []byte(tc.src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sp := store.Spec{}
+		pre := "old"
+		sp.PreDeployCommand = &pre
+		if _, err := f.Apply(&sp); err != nil || !tc.check(sp) {
+			t.Errorf("%s: %v %+v", tc.src, err, sp)
+		}
+	}
+	for _, src := range []string{
+		`{"deploy":{"restartPolicyMaxRetries":-1}}`,
+		`{"deploy":{"healthcheckPath":"/a b"}}`,
+		`{"deploy":{"healthcheckPath":"/a\nb"}}`,
+	} {
+		f, err := Parse("aven.json", []byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Apply(&store.Spec{}); err == nil {
+			t.Errorf("%s: want error", src)
 		}
 	}
 }

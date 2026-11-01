@@ -7,8 +7,10 @@ import { Ban, Pause, Play, RefreshCw } from "lucide-react";
 import { api, type CanvasService, type Environment, type OwnerHold, type OwnerHoldScope, type ServiceAdminContainer } from "@/lib/api";
 import { qk, useMe } from "@/lib/queries";
 import { dateLocale, t } from "@/lib/i18n";
+import { fmtRelative } from "@/lib/format";
 import { Button, CopyButton, Dialog, ErrorBox, Input, Spinner, cx } from "../ui";
 import { HoldControl, HoldDialog } from "../AdminOverview";
+import { NODE_STATUS } from "../nodes/NodesView";
 import { CARD, Hint, SettingItem } from "./settings/primitives";
 
 /**
@@ -93,8 +95,12 @@ export function AdminTab({ svc, env }: { svc: CanvasService; env: Environment })
           <div className={cx(CARD, "flex flex-wrap items-center gap-x-6 gap-y-1 py-3 text-sm")}>
             <span className="font-semibold">{d.node.name}</span>
             <span className="font-mono text-gray-600">{d.node.id}</span>
-            <span className={d.node.status === "online" ? "text-success" : "text-danger"}>{d.node.status}</span>
+            <span className={cx("flex items-center gap-1.5", NODE_STATUS[d.node.status]?.text ?? "text-gray-500")}>
+              <span aria-hidden className={cx("size-1.5 rounded-full", NODE_STATUS[d.node.status]?.dot ?? "bg-gray-400")} />
+              {NODE_STATUS[d.node.status]?.label ?? d.node.status}
+            </span>
             {d.node.version && <span className="text-gray-600">aven {d.node.version}</span>}
+            {d.node.status === "offline" && <span className="text-xs text-gray-500">{t("마지막 응답 {time}", { time: fmtRelative(d.node.last_seen_at) })}</span>}
             <Link href="/admin/?section=nodes" className="ml-auto text-pink-500 hover:underline">{t("노드 관리")}</Link>
           </div>
         )}

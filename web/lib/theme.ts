@@ -46,8 +46,16 @@ export function applyTheme(pref: ThemePreference = getThemePreference()): Resolv
   const resolved = resolveTheme(pref);
   if (typeof document === "undefined") return resolved;
   const root = document.documentElement;
+  // Suspend CSS transitions for the swap so every hover/colour transition does not animate at once.
+  const switching = !root.classList.contains(resolved);
+  if (switching) root.classList.add("theme-switching");
   root.classList.remove(resolved === "dark" ? "light" : "dark");
   root.classList.add(resolved);
+  if (switching) {
+    // Force a style flush with transitions off, then re-enable them on the next frame.
+    void window.getComputedStyle(root).color;
+    window.requestAnimationFrame(() => root.classList.remove("theme-switching"));
+  }
   root.style.colorScheme = resolved;
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", THEME_COLORS[resolved]);
   return resolved;

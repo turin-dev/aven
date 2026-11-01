@@ -72,7 +72,7 @@ func (s *Server) dataColumns(ctx context.Context, dc *dataCtx, schema, name stri
 	if err != nil {
 		return nil, &dataErr{400, err.Error()}
 	}
-	cmd, err := dc.t.SQL(q)
+	cmd, err := dc.t.ReadOnlySQL(q)
 	if err != nil {
 		return nil, &dataErr{400, err.Error()}
 	}

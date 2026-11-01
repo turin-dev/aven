@@ -157,3 +157,56 @@ func FuzzRoundTrip(f *testing.F) {
 		}
 	})
 }
+
+func TestParseEdgeCases(t *testing.T) {
+	for _, tc := range []struct {
+		src, key, want string
+	}{
+		{"export\tA=1", "A", "1"},
+		{"A = 'x' # c", "A", "x"},
+		{"A=\"a\\\nb\"", "A", "a\\\nb"},
+		{"A=\"x\"#c", "A", "x"},
+		{"A=\t#c", "A", ""},
+		{"A=x\t# c", "A", "x"},
+		{"A=x\r\n", "A", "x"},
+		{"A=\"crlf\r\ninside\"", "A", "crlf\ninside"},
+		{"   # indented comment\nA=1", "A", "1"},
+		{"A=1\n#", "A", "1"},
+	} {
+		got, err := Parse(tc.src)
+		if err != nil {
+			t.Errorf("%q: %v", tc.src, err)
+			continue
+		}
+		if got[tc.key] != tc.want {
+			t.Errorf("%q: %s = %q, want %q", tc.src, tc.key, got[tc.key], tc.want)
+		}
+	}
+	for _, src := range []string{"A=\"x\\", "A=`open", "export A", "A"} {
+		if _, err := Parse(src); err == nil {
+			t.Errorf("%q: want error", src)
+		}
+	}
+}
+
+func TestValidKey(t *testing.T) {
+	for k, ok := range map[string]bool{"A": true, "_a.b-c": true, "1A": false, "": false, "A B": false, "A=": false, "ключ": false} {
+		if ValidKey(k) != ok {
+			t.Errorf("ValidKey(%q) != %v", k, ok)
+		}
+	}
+}
+
+// FuzzParse는 아무 입력에도 패닉하지 않고, 오류에는 1 이상의 줄 번호가 있는지 본다.
+func FuzzParse(f *testing.F) {
+	for _, s := range []string{"A=1", "A=\"x\\", "export A=`b`", "#\n\nB='", "=", "A=\"\n\n"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		_, err := Parse(s)
+		var pe *Error
+		if err != nil && (!errors.As(err, &pe) || pe.Line < 1) {
+			t.Fatalf("%q: bad error %v", s, err)
+		}
+	})
+}

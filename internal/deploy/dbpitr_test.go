@@ -242,3 +242,83 @@ func TestHeadSniffer(t *testing.T) {
 		t.Fatalf("%q %d %v", f, pos, ok)
 	}
 }
+
+// pitrHistory는 여러 기준 백업과 epoch에 걸친 보관 기록을 만든다(postgres WAL 또는 mysql binlog, 3분마다).
+func pitrHistory(kind string) []*store.DBPITRObject {
+	var objs []*store.DBPITRObject
+	seq := 1
+	logName := func() string {
+		defer func() { seq++ }()
+		if kind == "mysql" {
+			return fmt.Sprintf("binlog.%06d", seq)
+		}
+		return fmt.Sprintf("0000000100000000%08X", seq)
+	}
+	typ := "wal"
+	if kind == "mysql" {
+		typ = "binlog"
+	}
+	type epoch struct {
+		from, to int
+		bases    []int
+	}
+	for e, ep := range []epoch{{-5, 90, []int{0, 30, 60}}, {95, 140, []int{97, 120}}} {
+		bi := 0
+		for m := ep.from; m <= ep.to; m += 3 {
+			for bi < len(ep.bases) && ep.bases[bi] <= m {
+				b := ep.bases[bi]
+				o := &store.DBPITRObject{ID: fmt.Sprintf("b%d", b), ObjectType: "base", Epoch: e, FileName: fmt.Sprintf("b%d", b),
+					StartedAt: min_(b - 1), SourceTime: min_(b)}
+				if kind == "mysql" {
+					o.BaseFile = fmt.Sprintf("binlog.%06d", seq) // 기준 백업은 지금 쓰는 binlog 위치를 기록한다
+				}
+				objs = append(objs, o)
+				bi++
+			}
+			objs = append(objs, &store.DBPITRObject{ID: fmt.Sprintf("l%d", m), ObjectType: typ, Epoch: e, FileName: logName(), SourceTime: min_(m)})
+		}
+	}
+	return objs
+}
+
+// 보관 기간 정리는 cutoff 이후의 어떤 시점으로도 복원할 수 있게 남긴다: 정리 전에 계획할 수 있던 시점은
+// 정리 뒤에도 같은 기준 백업과 로그로 계획된다.
+func TestPITRPruneKeepsEveryRestorableTimeAfterCutoff(t *testing.T) {
+	for _, kind := range []string{"postgres", "mysql"} {
+		objs := pitrHistory(kind)
+		planned := 0
+		for c := -10; c <= 145; c += 4 {
+			cutoff := min_(c)
+			drop := map[string]bool{}
+			for _, o := range planPITRPrune(kind, objs, cutoff) {
+				drop[o.ID] = true
+			}
+			var kept []*store.DBPITRObject
+			for _, o := range objs {
+				if !drop[o.ID] {
+					kept = append(kept, o)
+				}
+			}
+			for at := c; at <= 145; at++ {
+				before, err := planPITR(kind, objs, min_(at).Add(30*time.Second))
+				if err != nil {
+					continue
+				}
+				planned++
+				after, err := planPITR(kind, kept, min_(at).Add(30*time.Second))
+				if err != nil {
+					t.Fatalf("%s cutoff %d: restore to %d broke after pruning %v: %v", kind, c, at, drop, err)
+				}
+				if after.Base.ID != before.Base.ID || ids(after.Logs) != ids(before.Logs) {
+					t.Fatalf("%s cutoff %d at %d: plan changed %s/%s -> %s/%s", kind, c, at, before.Base.ID, ids(before.Logs), after.Base.ID, ids(after.Logs))
+				}
+			}
+		}
+		if planned < 500 {
+			t.Errorf("%s: only %d restorable points; the fixture is wrong", kind, planned)
+		}
+		if len(planPITRPrune(kind, objs, min_(130))) == 0 {
+			t.Errorf("%s: nothing pruned at a late cutoff", kind)
+		}
+	}
+}

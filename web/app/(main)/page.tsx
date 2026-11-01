@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { OctagonPause, Plus, RefreshCcw, TriangleAlert } from "lucide-react";
+import { ChevronRight, Database, Layers, LayoutTemplate, OctagonPause, Plus, RefreshCcw, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { qk, useCanvas, useCaps } from "@/lib/queries";
 import { lock } from "@/components/Perm";
-import { useCanvasState } from "@/lib/nav";
+import { useCanvasState, withCtx, type NewView } from "@/lib/nav";
 import { useWorkspace } from "@/lib/workspace";
 import { Canvas } from "@/components/canvas/Canvas";
 import { ServiceContextMenu } from "@/components/canvas/CanvasMenus";
@@ -16,11 +17,12 @@ import { ServicePanel } from "@/components/panel/ServicePanel";
 import { StagedBar } from "@/components/panel/StagedBar";
 import { CreatePalette } from "@/components/CreatePalette";
 import { SyncEnvironmentDialog } from "@/components/SyncEnvironmentDialog";
-import { Button, ErrorBox, Spinner, cx, errorMessage } from "@/components/ui";
+import { Button, ErrorBox, Kbd, Spinner, cx, errorMessage } from "@/components/ui";
+import { BrandIcon } from "@/components/ServiceIcon";
 import { toast } from "@/lib/uiState";
 import { t, tr } from "@/lib/i18n";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
-import { RestrictedEnvironmentNotice } from "@/components/AccessControlsSettings";
+import { RestrictedEnvironmentNotice, useGuardrails } from "@/components/AccessControlsSettings";
 
 function useIsDesktop() {
   const [desk, setDesk] = useState(true);
@@ -45,6 +47,54 @@ function panelWidth(w: number) {
 
 function Center({ children }: { children: React.ReactNode }) {
   return <div className="dot-grid flex h-full items-center justify-center px-4">{children}</div>;
+}
+
+/** First-run canvas: the common ways to start, one click each (the palette opens on the matching step). */
+function EmptyCanvas({ canEdit, onPick, onFunction }: { canEdit: boolean; onPick: (v: NewView) => void; onFunction: () => void }) {
+  // 배포 출처 guardrail: GitHub 조직으로 확인할 수 없는 출처는 팔레트처럼 숨긴다(서버도 403).
+  const restricted = useGuardrails().deploymentSources;
+  const all: { id: string; label: string; desc: string; icon: React.ReactNode; run: () => void }[] = [
+    { id: "repo", label: t("GitHub 저장소"), desc: t("저장소를 빌드해서 배포합니다"), icon: <BrandIcon name="github" className="size-5" />, run: () => onPick("repo") },
+    { id: "database", label: t("데이터베이스"), desc: "Postgres, MySQL, Redis, MongoDB", icon: <Database className="size-5 text-gray-600" />, run: () => onPick("database") },
+    { id: "template", label: t("템플릿|item"), desc: t("미리 구성된 서비스 묶음"), icon: <LayoutTemplate className="size-5 text-gray-600" />, run: () => onPick("template") },
+    { id: "image", label: t("Docker 이미지"), desc: t("레지스트리의 이미지를 그대로 실행합니다"), icon: <BrandIcon name="docker" className="size-5" />, run: () => onPick("image") },
+    { id: "function", label: "Function", desc: t("TypeScript 파일 하나로 시작합니다"), icon: <BrandIcon name="function" className="size-5" />, run: onFunction },
+    { id: "compose", label: "Docker Compose", desc: t("compose 파일의 서비스를 한 번에 가져옵니다"), icon: <Layers className="size-5 text-gray-600" />, run: () => onPick("compose") },
+  ];
+  const tiles = restricted ? all.filter((x) => x.id === "repo" || x.id === "database") : all;
+  return (
+    <div className="dot-grid flex h-full flex-col items-center justify-center overflow-y-auto px-6 py-16 text-center">
+      <div className="flex size-12 items-center justify-center rounded-xl border border-dashed border-gray-300 bg-secondaryBg">
+        <Plus className="size-5 text-gray-600" aria-hidden />
+      </div>
+      <h1 className="mt-4 text-lg font-semibold">{t("첫 서비스를 만들어 보세요")}</h1>
+      <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-gray-600">
+        {t("GitHub 저장소, Docker 이미지, 데이터베이스, 템플릿 중에서 고를 수 있습니다.")}
+      </p>
+      <ul className="mt-6 grid w-full max-w-[640px] grid-cols-1 gap-2 sm:grid-cols-2" aria-label={t("서비스 추가")}>
+        {tiles.map((tile) => (
+          <li key={tile.id}>
+            <button
+              type="button"
+              {...lock(canEdit)}
+              onClick={() => canEdit && tile.run()}
+              className="group flex w-full cursor-pointer items-center gap-3 rounded-lg border border-gray-200 bg-secondaryBg px-4 py-3 text-left transition-[border-color,box-shadow] duration-150 hover:border-pink-300 hover:shadow-[0px_0px_0px_4px_rgba(166,_103,_228,_0.08)] focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 aria-disabled:cursor-not-allowed aria-disabled:opacity-60 aria-disabled:hover:border-gray-200 aria-disabled:hover:shadow-none"
+            >
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-gray-200 bg-background">{tile.icon}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{tile.label}</span>
+                <span className="block truncate text-xs text-gray-500">{tile.desc}</span>
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-gray-400 transition-transform group-hover:translate-x-0.5" aria-hidden />
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-5 text-xs text-gray-500">
+        {tr("{keys}로 언제든 만들기 팔레트를 열 수 있습니다", { keys: <Kbd>⌘ / Ctrl + K</Kbd> })}
+      </p>
+    </div>
+  );
 }
 
 function CanvasPageInner() {
@@ -119,13 +169,6 @@ function CanvasPageInner() {
   };
   useKeyboardShortcuts([
     {
-      keys: "mod+k",
-      label: t("서비스 만들기 팔레트 열기"),
-      group: t("전역"),
-      enabled: canEdit && !isNew,
-      onTrigger: () => go({ isNew: "1" }, "replace"),
-    },
-    {
       keys: ".",
       label: t("캔버스에 Function 만들기"),
       group: t("프로젝트 캔버스"),
@@ -154,22 +197,21 @@ function CanvasPageInner() {
         <Center>
           <div className="text-center">
             <h1 className="text-lg font-semibold">{t("프로젝트가 없습니다")}</h1>
-            <p className="mt-1.5 text-sm text-gray-600">{t("왼쪽 위 프로젝트 메뉴에서 새 프로젝트를 만드세요.")}</p>
+            <p className="mt-1.5 max-w-xs text-sm text-gray-600">{t("이 작업 공간에는 아직 프로젝트가 없습니다. 프로젝트를 만들면 이 캔버스에 서비스가 나타납니다.")}</p>
+            <div className="mt-5 flex justify-center gap-2">
+              {caps.canCreateProjects && (
+                <Link href={withCtx("/projects/", { ws: ws.wsid }, { new: "project" })} className="inline-flex h-[34px] items-center gap-2 rounded-md border border-pink-500 bg-pink-500 px-3 text-sm text-white hover:bg-pink-600">
+                  <Plus className="size-4" aria-hidden /> {t("새 프로젝트")}
+                </Link>
+              )}
+              <Link href={withCtx("/projects/", { ws: ws.wsid })} className="inline-flex h-[34px] items-center rounded-md border border-gray-200 px-3 text-sm text-foreground hover:bg-gray-100">
+                {t("모든 프로젝트")}
+              </Link>
+            </div>
           </div>
         </Center>
       ) : list.length === 0 ? (
-        <div className="dot-grid flex h-full flex-col items-center justify-center px-6 text-center">
-          <div className="flex size-12 items-center justify-center rounded-lg border border-dashed border-gray-300 bg-secondaryBg">
-            <Plus className="size-5 text-gray-600" />
-          </div>
-          <h1 className="mt-4 text-lg font-semibold">{t("첫 서비스를 만들어 보세요")}</h1>
-          <p className="mt-1.5 max-w-xs text-sm leading-relaxed text-gray-600">
-            {t("GitHub 저장소, Docker 이미지, 데이터베이스, 템플릿 중에서 고를 수 있습니다.")}
-          </p>
-          <Button variant="primary" className="mt-5" {...lock(canEdit)} onClick={() => go({ isNew: "1" })}>
-            <Plus className="size-4" /> {t("추가")}
-          </Button>
-        </div>
+        <EmptyCanvas canEdit={canEdit} onPick={(v) => go({ isNew: v })} onFunction={createFunction} />
       ) : desktop ? (
         <Canvas
           key={envId}
@@ -216,7 +258,7 @@ function CanvasPageInner() {
               <RefreshCcw className="text-gray-500" /> {t("동기화")}
             </Button>
           )}
-          <Button className="pointer-events-auto" {...lock(canEdit)} onClick={() => go({ isNew: "1" })} aria-keyshortcuts="Control+K">
+          <Button className="pointer-events-auto" {...lock(canEdit)} onClick={() => go({ isNew: "1" })}>
             <Plus className="text-gray-500" /> {t("추가")}
           </Button>
         </div>

@@ -269,7 +269,8 @@ func TestProxyRoutesValidated(t *testing.T) {
 
 func TestSourceAndImageRestrictions(t *testing.T) {
 	h := &Handler{Docker: &fakeDocker{}, Proxy: &fakeProxy{}, WorkDir: t.TempDir()}
-	for _, repo := range []string{"file:///etc", "/etc", "--upload-pack=sh", "ext::sh -c id"} {
+	for _, repo := range []string{"file:///etc", "/etc", "--upload-pack=sh", "ext::sh -c id",
+		"ssh://-oProxyCommand=touch%20x/r", "ssh://git@-oProxyCommand=x/r", "git@-oProxyCommand=x:r", "ssh://[-oProxyCommand=x]/r", "https://", "ssh:///r"} {
 		if _, err := handle(t, h, agentprotocol.OpSourceFetch, agentprotocol.FetchRequest{Repo: repo, Branch: "main"}); err == nil {
 			t.Fatalf("repo %q accepted", repo)
 		}
@@ -319,4 +320,12 @@ func mkfile(path, content string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func TestCheckRepoAcceptsNormalURLs(t *testing.T) {
+	for _, repo := range []string{"https://github.com/a/b.git", "http://git.internal:3000/a/b", "ssh://git@github.com/a/b.git", "ssh://github.com:2222/a/b", "git@github.com:a/b.git"} {
+		if err := checkRepo(repo); err != nil {
+			t.Errorf("checkRepo(%q): %v", repo, err)
+		}
+	}
 }

@@ -5,6 +5,7 @@ import { CheckCircle2, Unplug } from "lucide-react";
 import { agentApi, type AgentSettings as AgentSettingsType } from "@/lib/agentApi";
 import { Button, Card, ErrorBox, Field, Input, Notice, cx, useConfirm } from "@/components/ui";
 import { t } from "@/lib/i18n";
+import { useUnsavedGuard } from "./SettingsGuard";
 
 /** OpenAI-compatible providers; clicking one fills the endpoint (and a typical model). */
 const PRESETS = [
@@ -101,7 +102,11 @@ export function AgentSettings() {
     }
   };
 
-  if (loading) return <p className="text-sm text-gray-500">{t("설정을 불러오는 중…")}</p>;
+  useUnsavedGuard(!!settings && (endpoint.trim() !== settings.endpoint || model.trim() !== settings.model || apiKey.trim() !== ""));
+
+  if (loading) return <p className="text-sm text-gray-500" role="status">{t("설정을 불러오는 중…")}</p>;
+  if (!settings) return <ErrorBox error={error ?? t("설정을 불러오지 못했습니다.")} className="max-w-3xl" />;
+  const endpointBad = endpoint.trim() !== "" && !/^https?:\/\/[^\s/]+/i.test(endpoint.trim());
   const dirty = endpoint.trim() !== (settings?.endpoint ?? "") || model.trim() !== (settings?.model ?? "") || apiKey.trim() !== "";
   return (
     <>
@@ -140,7 +145,8 @@ export function AgentSettings() {
       >
         <div className="space-y-5">
           <Field label="API endpoint" hint={t("OpenAI 호환 Chat Completions API의 기본 주소입니다. /chat/completions는 자동으로 붙습니다.")}>
-            <Input mono value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://api.openai.com/v1" autoComplete="url" />
+            <Input mono value={endpoint} invalid={endpointBad} onChange={(e) => setEndpoint(e.target.value)} placeholder="https://api.openai.com/v1" autoComplete="url" />
+            {endpointBad && <span className="mt-1 block text-xs text-danger">{t("http:// 또는 https://로 시작하는 URL을 입력하세요.")}</span>}
           </Field>
           <Field label={t("모델 ID")} hint={t("제공자가 쓰는 정확한 모델 이름입니다. 도구 호출(function calling)을 지원하는 모델이어야 합니다.")}>
             <Input mono value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4.1-mini" />
@@ -170,10 +176,16 @@ export function AgentSettings() {
               <ErrorBox error={t("연결 실패: {error}", { error: test.error ?? t("알 수 없는 오류") })} />
             ))}
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="primary" onClick={save} loading={saving} disabled={!endpoint.trim() || !model.trim() || !dirty}>
+            <Button variant="primary" onClick={save} loading={saving} disabled={!endpoint.trim() || endpointBad || !model.trim() || !dirty}>
               {t("설정 저장")}
             </Button>
-            <Button variant="outline" onClick={runTest} loading={testing} disabled={!settings?.configured || dirty}>
+            <Button
+              variant="outline"
+              onClick={runTest}
+              loading={testing}
+              disabled={!settings?.configured || dirty}
+              title={dirty ? t("먼저 변경 사항을 저장하세요") : !settings?.configured ? t("먼저 모델 제공자를 연결하세요") : undefined}
+            >
               {t("연결 테스트")}
             </Button>
             {settings?.key_set && (

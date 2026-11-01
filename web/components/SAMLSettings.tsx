@@ -3,10 +3,18 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, type SAMLSettings as SAMLSettingsData, type WorkspaceRole } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
-import { Button, Card, CopyField, ErrorBox, Field, Input, Select, Spinner, Toggle } from "@/components/ui";
+import { Button, Card, CopyField, ErrorBox, Field, Input, Select, Spinner, Toggle, useConfirm } from "@/components/ui";
+import { toast } from "@/lib/uiState";
+import { useUnsavedGuard } from "./SettingsGuard";
 import { t } from "@/lib/i18n";
 
 const CERT_WARN_DAYS = 30;
+const MAX_METADATA_BYTES = 1 << 20;
+const DOMAIN_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+export function normalizeDomain(raw: string) {
+  return raw.trim().toLowerCase().replace(/^.*@/, "").replace(/\.$/, "");
+}
 
 export function SAMLSettings() {
   const [data, setData] = useState<SAMLSettingsData | null>(null);
@@ -21,7 +29,10 @@ export function SAMLSettings() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [verifying, setVerifying] = useState<string | null>(null);
+  const [domainError, setDomainError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const { confirm, node: confirmNode } = useConfirm();
 
   const applyConfig = (next: SAMLSettingsData) => {
     setData(next);
@@ -35,11 +46,53 @@ export function SAMLSettings() {
   };
 
   useEffect(() => {
-    api.samlSettings().then(applyConfig).catch(setError).finally(() => setLoading(false));
+    let live = true;
+    api
+      .samlSettings()
+      .then((v) => live && applyConfig(v))
+      .catch((e) => live && setError(e))
+      .finally(() => live && setLoading(false));
+    return () => {
+      live = false;
+    };
   }, []);
+
+  const urlTrim = metadataURL.trim();
+  const urlBad = urlTrim !== "" && !/^https?:\/\/[^\s/]+/i.test(urlTrim);
+  const dirty =
+    !!data &&
+    (clearMetadata ||
+      !!metadataXML ||
+      urlTrim !== (data.config.metadata_url || "") ||
+      defaultRole !== (data.config.default_role || "member") ||
+      enforceSSO !== data.config.enforce_sso ||
+      domains.join() !== data.config.domains.map((d) => d.domain).join());
+  useUnsavedGuard(dirty);
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
+    if (urlBad) return setError(t("메타데이터 URL은 http:// 또는 https://로 시작해야 합니다."));
+    const doSave = () => persist();
+    if (enforceSSO && !data?.config.enforce_sso)
+      return confirm({
+        title: t("SAML SSO 적용"),
+        message: t("검증된 도메인의 사용자는 이제 SAML로만 로그인할 수 있고, SAML로 로그인하지 않은 기존 세션은 바로 다시 인증해야 합니다. IdP 설정이 잘못되어 있으면 admin@local 비상 계정으로만 들어올 수 있습니다."),
+        confirmLabel: t("적용"),
+        danger: true,
+        run: doSave,
+      });
+    if (clearMetadata)
+      return confirm({
+        title: t("IdP 연결 해제"),
+        message: t("저장하면 IdP 연결이 해제되고 SSO 로그인이 중지됩니다."),
+        confirmLabel: t("연결 해제"),
+        danger: true,
+        run: doSave,
+      });
+    await doSave();
+  };
+
+  const persist = async () => {
     setBusy(true);
     setError(null);
     setSaved(false);
@@ -61,22 +114,27 @@ export function SAMLSettings() {
   };
 
   const addDomain = () => {
-    const domain = domainDraft.trim().toLowerCase().replace(/^@/, "").replace(/\.$/, "");
-    if (!domain || domains.includes(domain)) return;
+    const domain = normalizeDomain(domainDraft);
+    if (!domain) return;
+    if (!DOMAIN_RE.test(domain)) return setDomainError(t("올바른 도메인을 입력하세요 (예: example.com)."));
+    if (domains.includes(domain)) return setDomainError(t("이미 추가한 도메인입니다."));
+    setDomainError(null);
     setDomains([...domains, domain]);
     setDomainDraft("");
   };
 
   const verifyDomain = async (domain: string) => {
-    setBusy(true);
+    setVerifying(domain);
     setError(null);
     try {
       const result = await api.verifySAMLDomain(domain);
       setData((cur) => (cur ? { ...cur, config: { ...cur.config, domains: cur.config.domains.map((item) => (item.domain === domain ? result.domain : item)) } } : cur));
+      if (result.domain.verified) toast(t("{domain} 도메인을 검증했습니다.", { domain }));
+      else toast(t("TXT 레코드를 아직 찾지 못했습니다. DNS 전파에는 몇 분 걸릴 수 있습니다."), "warning");
     } catch (err) {
       setError(err);
     } finally {
-      setBusy(false);
+      setVerifying(null);
     }
   };
 
@@ -90,6 +148,7 @@ export function SAMLSettings() {
 
   return (
     <form onSubmit={save}>
+      {confirmNode}
       <Card title="SAML Single Sign-On" description={t("조직의 Identity Provider(Okta, Entra ID, Google Workspace, Keycloak 등)로 인스턴스에 로그인합니다. IdP에 아래 서비스 제공자(SP) 정보를 등록하세요.")}>
         <div className="space-y-4">
           <Field label={t("SP 메타데이터 URL (Entity ID)")}>
@@ -106,6 +165,8 @@ export function SAMLSettings() {
         <div className="space-y-4">
           <Field label={t("메타데이터 URL")}>
             <Input
+              type="url"
+              invalid={urlBad}
               value={metadataURL}
               onChange={(event) => {
                 setMetadataURL(event.target.value);
@@ -124,7 +185,25 @@ export function SAMLSettings() {
               onChange={async (event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
-                setMetadataXML(await file.text());
+                if (file.size > MAX_METADATA_BYTES) {
+                  setError(t("메타데이터 파일이 너무 큽니다 (최대 1 MiB)."));
+                  event.target.value = "";
+                  return;
+                }
+                let text: string;
+                try {
+                  text = await file.text();
+                } catch (err) {
+                  setError(err);
+                  return;
+                }
+                if (!/<(?:\w+:)?EntityDescriptor[\s>]/.test(text) && !/<(?:\w+:)?EntitiesDescriptor[\s>]/.test(text)) {
+                  setError(t("SAML 메타데이터 XML(EntityDescriptor)이 아닙니다."));
+                  event.target.value = "";
+                  return;
+                }
+                setError(null);
+                setMetadataXML(text);
                 setMetadataURL("");
                 setClearMetadata(false);
               }}
@@ -165,7 +244,8 @@ export function SAMLSettings() {
           <div className="flex gap-2">
             <Input
               value={domainDraft}
-              onChange={(event) => setDomainDraft(event.target.value)}
+              invalid={!!domainError}
+              onChange={(event) => (setDomainDraft(event.target.value), setDomainError(null))}
               placeholder="example.com"
               aria-label={t("이메일 도메인")}
               onKeyDown={(event) => {
@@ -179,6 +259,7 @@ export function SAMLSettings() {
               {t("도메인 추가")}
             </Button>
           </div>
+          {domainError && <p className="text-xs text-danger" role="alert">{domainError}</p>}
           {domains.length === 0 && <p className="text-sm text-gray-500">{t("등록된 도메인이 없습니다.")}</p>}
           {domains.map((domain) => {
             const item = config.domains.find((candidate) => candidate.domain === domain);
@@ -188,7 +269,7 @@ export function SAMLSettings() {
                   <span className="min-w-0 flex-1 truncate text-sm font-medium">{domain}</span>
                   <span className={item?.verified ? "text-xs text-success" : "text-xs text-gray-500"}>{item ? (item.verified ? t("검증됨") : t("검증 필요")) : t("저장 필요")}</span>
                   {item && !item.verified && (
-                    <Button size="sm" disabled={busy} onClick={() => verifyDomain(domain)}>
+                    <Button size="sm" loading={verifying === domain} disabled={verifying !== null} onClick={() => verifyDomain(domain)}>
                       {t("DNS 확인")}
                     </Button>
                   )}
@@ -238,10 +319,10 @@ export function SAMLSettings() {
       </Card>
 
       <div className="mt-8 flex max-w-3xl flex-wrap items-center gap-3">
-        <Button type="submit" variant="primary" loading={busy}>
+        <Button type="submit" variant="primary" loading={busy} disabled={!dirty || urlBad}>
           {t("저장")}
         </Button>
-        {saved && !error && <span className="text-sm text-gray-500">{t("저장했습니다.")}</span>}
+        {dirty ? <span className="text-sm text-gray-500">{t("저장되지 않은 편집")}</span> : saved && !error && <span className="text-sm text-gray-500">{t("저장했습니다.")}</span>}
       </div>
       {error ? <ErrorBox error={error} className="mt-4 max-w-3xl" /> : null}
     </form>

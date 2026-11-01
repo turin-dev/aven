@@ -29,6 +29,12 @@ func TestGitHubOwner(t *testing.T) {
 		{"https://github.com//app", "", false},
 		{"file:///github.com/acme/app", "", false},
 		{"acme/app", "", false},
+		{"https://github.com/acme/../evil/app", "", false},
+		{"https://github.com/acme/%2e%2e/evil/app", "", false},
+		{"https://github.com/acme/./app", "", false},
+		{"git@github.com:acme/../evil/app.git", "", false},
+		{"https://github.com/acme\\..\\evil/app", "", false},
+		{"https://github.com@evil.com/acme/app", "", false},
 		{"", "", false},
 	} {
 		owner, ok := GitHubOwner(tc.in)

@@ -13,18 +13,24 @@ export function ServiceNetworkLogs({ sid, eid, kind, filter }: { sid: ID; eid: I
     const timer = setTimeout(() => setQuery(filter), 400);
     return () => clearTimeout(timer);
   }, [filter]);
-  const [capture, setCapture] = useState<NetworkCaptureStatus | null>(null);
+  // Capture status belongs to one stream: drop it when the kind or filter changes so the table never shows the
+  // previous stream's "capture inactive" notice while the new stream connects.
+  const streamKey = `${sid}|${eid}|${kind}|${query}`;
+  const [captureState, setCapture] = useState<{ key: string; status: NetworkCaptureStatus | null }>({ key: streamKey, status: null });
+  const capture = captureState.key === streamKey ? captureState.status : null;
   const on = useMemo(
     () => ({
       capture: (data: string) => {
+        let status: NetworkCaptureStatus | null = null;
         try {
-          setCapture(JSON.parse(data) as NetworkCaptureStatus);
+          status = JSON.parse(data) as NetworkCaptureStatus;
         } catch {
-          setCapture(null);
+          status = null;
         }
+        setCapture({ key: streamKey, status });
       },
     }),
-    [],
+    [streamKey],
   );
   const stream = useLogStream(sse.serviceNetworkLogs(sid, eid, kind, query), { replay: true, maxLines: 5000, on });
   const records = useParsedLines<NetworkLogRecord>(stream.lines);

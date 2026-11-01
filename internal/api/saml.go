@@ -128,6 +128,7 @@ func (s *Server) putSAMLSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	actor := principalFrom(r)
 	wasConfigured, wasEnforced := cfg.MetadataXML != "", cfg.EnforceSSO
+	prevMetadata, prevDomains := cfg.MetadataXML, append([]store.VerifiedDomain(nil), cfg.Domains...)
 	if body.ClearMetadata {
 		cfg.MetadataXML, cfg.MetadataURL = "", ""
 	} else if body.MetadataURL != nil && strings.TrimSpace(*body.MetadataURL) != "" {
@@ -163,10 +164,28 @@ func (s *Server) putSAMLSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.Domains = domains
 	}
+	// IdP는 검증된 도메인의 기존 계정으로 로그인시킨다. 서버 owner 계정이 그 도메인에 있으면 IdP를 바꾸거나 도메인을 더하는 것은
+	// owner 계정으로 로그인할 수단을 만드는 일이므로 서버 owner만 할 수 있다(서버 관리자의 owner 권한 상승 방지).
+	// IdP를 바꾸면 모든 도메인이, 도메인만 더하면 새 도메인이 대상이다.
+	affected := addedSAMLDomains(prevDomains, cfg.Domains)
+	if cfg.MetadataXML != "" && cfg.MetadataXML != prevMetadata {
+		affected = cfg.Domains
+	}
+	if s.instanceLevel(actor) < lvOwner && len(affected) > 0 {
+		hit, err := s.ownerInSAMLDomains(r.Context(), affected)
+		if err != nil {
+			s.storeErr(w, err)
+			return
+		}
+		if hit {
+			writeErr(w, 403, "서버 owner 계정이 이 SSO 도메인에 있어 IdP와 도메인은 서버 owner만 바꿀 수 있습니다")
+			return
+		}
+	}
 	if body.DefaultRole != nil {
 		role := strings.TrimSpace(*body.DefaultRole)
 		// owner는 자동 등록 기본값으로 줄 수 없다(IdP 쪽 설정 실수 하나로 소유권이 넘어가지 않게).
-		if !store.ValidWorkspaceRole(role) || role == store.RoleOwner || roleLevel(role) > roleLevel(actor.User.Role) {
+		if !store.ValidWorkspaceRole(role) || role == store.RoleOwner || roleLevel(role) > s.instanceLevel(actor) {
 			writeErr(w, 400, "기본 역할은 admin, member, viewer 중 하나이며 현재 관리자 역할보다 높을 수 없습니다")
 			return
 		}
@@ -212,6 +231,48 @@ func (s *Server) putSAMLSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "saml.settings_updated", "workspace", "SAML SSO 설정을 업데이트했습니다")
 	writeJSON(w, 200, map[string]any{"config": cfg})
+}
+
+// addedSAMLDomains는 next에서 prev에 없던 도메인이다.
+func addedSAMLDomains(prev, next []store.VerifiedDomain) []store.VerifiedDomain {
+	old := make(map[string]bool, len(prev))
+	for _, d := range prev {
+		old[d.Domain] = true
+	}
+	var out []store.VerifiedDomain
+	for _, d := range next {
+		if !old[d.Domain] {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// ownerInSAMLDomains는 활성 서버 owner 계정(기본 계정 제외) 중 이메일 도메인이 domains에 있는 것이 있는지다.
+func (s *Server) ownerInSAMLDomains(ctx context.Context, domains []store.VerifiedDomain) (bool, error) {
+	if len(domains) == 0 {
+		return false, nil
+	}
+	in := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		in[d.Domain] = true
+	}
+	users, err := s.Store.ListUsers(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, u := range users {
+		if !u.Builtin && s.instanceOwner(u) && in[emailDomain(u.Email)] {
+			return true, nil
+		}
+	}
+	// 아직 가입하지 않은 KEEL_SUPERADMINS 이메일도 IdP가 자동 등록하면 owner가 된다.
+	for email := range s.SuperAdmins {
+		if in[emailDomain(email)] {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *Server) verifySAMLDomain(w http.ResponseWriter, r *http.Request) {
@@ -345,11 +406,24 @@ func (s *Server) samlAuthAllowed(ctx context.Context, w http.ResponseWriter, p *
 		s.storeErr(w, err)
 		return false
 	}
-	if cfg.EnforceSSO && verifiedSAMLDomain(cfg, emailDomain(p.User.Email)) && !p.SAML {
+	if samlRequired(cfg, p) {
 		writeErr(w, 401, "sso_required")
 		return false
 	}
 	return true
+}
+
+// samlSessionOK는 samlAuthAllowed와 같은 검사를 응답 없이 한다(설정을 읽지 못하면 거부한다).
+func (s *Server) samlSessionOK(ctx context.Context, p *principal) bool {
+	if p.User.Builtin || p.Via != viaSession || s.Store == nil {
+		return true
+	}
+	cfg, err := s.Store.GetSAMLConfig(ctx)
+	return err == nil && !samlRequired(cfg, p)
+}
+
+func samlRequired(cfg *store.SAMLConfig, p *principal) bool {
+	return cfg.EnforceSSO && verifiedSAMLDomain(cfg, emailDomain(p.User.Email)) && !p.SAML
 }
 
 func (s *Server) samlLogin(w http.ResponseWriter, r *http.Request) {
@@ -399,8 +473,21 @@ func (s *Server) samlLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, destination.String(), http.StatusFound)
 }
 
-func safeSAMLRedirect(value string) string {
-	if value == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\\\r\n") {
+// safeSAMLRedirect는 로그인 뒤 돌아갈 같은 origin 경로다(아니면 "/").
+func safeSAMLRedirect(value string) string { return safeLocalRedirect(value) }
+
+// safeLocalRedirect는 value가 이 서버의 경로("/..."로 시작하고 "//", "/\"가 아님)일 때만 그대로 돌려주고, 아니면 "/"다.
+// 브라우저는 URL에서 탭·줄바꿈을 지우고 "\"를 "/"로 읽으므로("/\t/evil.com" → "//evil.com") 제어 문자와 "\"가 있으면 거부한다.
+func safeLocalRedirect(value string) string {
+	if len(value) < 1 || len(value) > 2048 || value[0] != '/' {
+		return "/"
+	}
+	for i := 0; i < len(value); i++ {
+		if c := value[i]; c < 0x20 || c == 0x7f || c == '\\' {
+			return "/"
+		}
+	}
+	if len(value) > 1 && value[1] == '/' {
 		return "/"
 	}
 	return value

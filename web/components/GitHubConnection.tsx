@@ -27,12 +27,14 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
     const result = params.get("github");
     if (!result) return;
     if (result === "connected") toast(t("GitHub를 연결했습니다"), "success");
-    else toast(t("GitHub 연결 실패: {message}", { message: params.get("message") ?? t("알 수 없는 오류") }), "error");
+    // The message comes from the URL, so anyone can craft it: keep it short and on one line.
+    else toast(t("GitHub 연결 실패: {message}", { message: (params.get("message") ?? "").replace(/\s+/g, " ").trim().slice(0, 160) || t("알 수 없는 오류") }), "error");
     qc.invalidateQueries({ queryKey: qk.github });
     const next = new URLSearchParams(params.toString());
     next.delete("github");
     next.delete("message");
-    router.replace(`?${next.toString()}`, { scroll: false });
+    const q = next.toString();
+    router.replace(q ? `${window.location.pathname}?${q}` : window.location.pathname, { scroll: false });
   }, [params, qc, router]);
 
   const c = conn.data;
@@ -110,10 +112,9 @@ export function GitHubConnectionCard(_props: { canAdmin?: boolean } = {}) {
                   t("연결된 계정이 없어 비공개 저장소를 클론할 수 없습니다.")
                 )}
               </p>
-              <a href={startHref}>
-                <Button variant="primary">
-                  <BrandIcon name="github" className="size-4" /> {t("GitHub 연결")}
-                </Button>
+              {/* OAuth 승인은 GitHub 화면으로 이동해야 하므로 API 경로로 바로 간다(세션 쿠키로 인증). */}
+              <a href={`/api/github/oauth/start${typeof window !== "undefined" && window.location.pathname.startsWith("/account") ? "?from=account" : ""}`} className="inline-flex h-[34px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-pink-500 bg-pink-500 px-3 text-sm leading-5 text-white hover:border-pink-600 hover:bg-pink-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-600">
+                <BrandIcon name="github" className="size-4" /> {t("GitHub 연결")}
               </a>
             </div>
           ) : (

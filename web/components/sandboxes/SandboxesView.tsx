@@ -145,10 +145,26 @@ function SandboxDialog({
       setError(new Error(t("KEY=VALUE 형식이 아닌 줄: {line}", { line: parsed.bad[0] })));
       return;
     }
+    // An empty or garbled idle limit must not silently become 0 (= never deleted).
+    const idleMin = Number(idle);
+    if (idle.trim() === "" || !Number.isInteger(idleMin) || idleMin < 0 || idleMin > 10080) {
+      setError(new Error(t("유휴 제한은 0에서 10080 사이의 정수(분)입니다")));
+      return;
+    }
+    const mem = memory.trim() === "" ? undefined : Number(memory);
+    const cores = cpu.trim() === "" ? undefined : Number(cpu);
+    if (mem !== undefined && !(Number.isInteger(mem) && mem >= 128 && mem <= 16384)) {
+      setError(new Error(t("메모리는 128에서 16384 MiB 사이입니다")));
+      return;
+    }
+    if (cores !== undefined && !(Number.isFinite(cores) && cores >= 0.1 && cores <= 16)) {
+      setError(new Error(t("CPU는 0.1에서 16코어 사이입니다")));
+      return;
+    }
     const opts: SandboxOptions = {
-      idle_timeout_minutes: Math.max(0, Number(idle) || 0),
-      memory_mb: Number(memory) || undefined,
-      cpu_cores: Number(cpu) || undefined,
+      idle_timeout_minutes: idleMin,
+      memory_mb: mem,
+      cpu_cores: cores,
       network: priv ? "private" : "isolated",
       variables: Object.keys(parsed.vars).length ? parsed.vars : undefined,
     };
@@ -423,7 +439,8 @@ function FileBrowser({ s, canEdit }: { s: Sandbox; canEdit: boolean }) {
       a.href = url;
       a.download = open.path.split("/").pop() || "file";
       a.click();
-      URL.revokeObjectURL(url);
+      // Revoking right after click() can cancel the download in some browsers.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
     }, setError);
   };
 
@@ -655,7 +672,7 @@ function SandboxDetail({
       </dl>
       {s.network_mode === "private" && (
         <p className="text-xs text-gray-500">
-          {tr("같은 환경의 서비스는 {name} 이름으로 이 샌드박스에 닿을 수 있습니다.", { name: <code>{s.id.replace("_", "-")}</code> })}
+          {tr("같은 환경의 서비스는 {name} 이름으로 이 샌드박스에 닿을 수 있습니다.", { name: <code>{s.id.replaceAll("_", "-")}</code> })}
         </p>
       )}
       <ErrorBox error={error} />

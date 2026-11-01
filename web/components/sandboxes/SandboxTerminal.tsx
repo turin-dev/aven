@@ -91,7 +91,13 @@ export function SandboxTerminal({ id, disabled }: { id: string; disabled?: boole
     };
   }, [disconnect, id, measure, redraw]);
 
-  useEffect(() => () => disconnect(), [disconnect]);
+  useEffect(
+    () => () => {
+      disconnect();
+      if (raf.current) cancelAnimationFrame(raf.current);
+    },
+    [disconnect],
+  );
   // 다른 샌드박스로 바뀌면 연결과 화면을 새로 시작한다.
   useEffect(() => {
     disconnect();

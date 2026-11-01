@@ -147,7 +147,7 @@ func builtinView(t catalog.Template, count int) templateView {
 func (s *Server) userView(r *http.Request, t *store.UserTemplate, d *catalog.Definition) templateView {
 	owner := t.OwnerUserID
 	created, updated := t.CreatedAt, t.UpdatedAt
-	v := templateView{Key: t.Key, Name: t.Name, Description: t.Description, Icon: t.Icon, Category: t.Category, Tags: t.Tags,
+	v := templateView{Key: t.Key, Name: t.Name, Description: t.Description, Icon: t.Icon, Category: t.Category, Tags: nonNil(t.Tags),
 		WorkspaceID: t.WorkspaceID, Services: []templateService{}, Inputs: []catalog.Input{}, Visibility: t.Visibility, OwnerUserID: &owner, DeployCount: t.DeployCount,
 		CreatedAt: &created, UpdatedAt: &updated, CanEdit: s.canEditTemplate(r, t)}
 	if d != nil {

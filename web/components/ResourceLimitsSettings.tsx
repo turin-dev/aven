@@ -8,6 +8,7 @@ import { qk, useMe } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { t, dateLocale } from "@/lib/i18n";
 import { Button, Card, ErrorBox, Field, Input, Select, Spinner } from "./ui";
+import { UsageMeter } from "./UsageLimit";
 
 const fmt = (n: number) => n.toLocaleString(dateLocale(), { maximumFractionDigits: 2 });
 
@@ -23,6 +24,11 @@ function Allocated({ data }: { data: WorkspaceResources }) {
         <div key={String(label)} className="rounded-md border border-gray-200 p-3">
           <dt className="text-xs text-gray-500">{label}</dt>
           <dd className="mt-1 text-sm tabular-nums">{fmt(Number(used))} {unit} / {limit === null ? t("한도 없음") : `${fmt(Number(limit))} ${unit}`}</dd>
+          {limit !== null && (
+            <dd>
+              <UsageMeter used={Number(used)} limit={Number(limit)} label={t("{label} 할당률", { label: String(label) })} />
+            </dd>
+          )}
           {Number(unlimited) > 0 && <dd className="mt-1 text-xs text-warn">{t("개별 제한 없음 {count}개", { count: Number(unlimited) })}</dd>}
         </div>
       ))}

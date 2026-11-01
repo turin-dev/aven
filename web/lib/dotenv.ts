@@ -16,6 +16,23 @@ const KEY_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
 
 /** Parse .env text into [key, value] pairs in file order. Throws DotenvError. */
 export function parseEnvPairs(input: string): [string, string][] {
+  return scan(input, null);
+}
+
+/** Result of {@link parseEnvLoose}: the entries that parsed and the errors of the ones that didn't. */
+export type LooseResult = { pairs: [string, string][]; errors: DotenvError[] };
+
+/**
+ * Lenient parse for pasted text: an entry that fails is reported in `errors` and skipped (from its first line), and
+ * parsing continues on the next line. Same rules as {@link parseEnvPairs} otherwise.
+ */
+export function parseEnvLoose(input: string): LooseResult {
+  const errors: DotenvError[] = [];
+  const pairs = scan(input, errors);
+  return { pairs, errors };
+}
+
+function scan(input: string, errors: DotenvError[] | null): [string, string][] {
   const s = input.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
   let pos = 0;
   let line = 1;
@@ -48,6 +65,20 @@ export function parseEnvPairs(input: string): [string, string][] {
     }
     const at = line;
     const start = pos;
+    try {
+      out.push(entry(at, start));
+    } catch (e) {
+      if (!errors || !(e instanceof DotenvError)) throw e;
+      errors.push(e);
+      // Skip the failed entry's first line and carry on.
+      pos = start;
+      line = at;
+      restOfLine();
+    }
+  }
+
+  /** Reads one KEY=VALUE entry starting at `start`. */
+  function entry(at: number, start: number): [string, string] {
     while (!eof() && s[pos] !== "=" && s[pos] !== "\n") pos++;
     let head = s.slice(start, pos).trim();
     if (eof() || s[pos] !== "=") throw new DotenvError(at, `expected KEY=VALUE, got "${trunc(head)}"`);
@@ -59,8 +90,7 @@ export function parseEnvPairs(input: string): [string, string][] {
     skipSpaces();
     if (eof() || s[pos] === "\n" || (pos > before && s[pos] === "#")) {
       restOfLine();
-      out.push([head, ""]);
-      continue;
+      return [head, ""];
     }
     const q = s[pos];
     if (q === "'" || q === '"' || q === "`") {
@@ -89,8 +119,7 @@ export function parseEnvPairs(input: string): [string, string][] {
       skipSpaces();
       if (!eof() && s[pos] !== "\n" && s[pos] !== "#") throw new DotenvError(line, `unexpected characters after closing quote of ${head}`);
       restOfLine();
-      out.push([head, v]);
-      continue;
+      return [head, v];
     }
     let raw = restOfLine();
     for (let i = 1; i < raw.length; i++)
@@ -98,7 +127,7 @@ export function parseEnvPairs(input: string): [string, string][] {
         raw = raw.slice(0, i);
         break;
       }
-    out.push([head, raw.trim()]);
+    return [head, raw.trim()];
   }
 }
 
@@ -123,8 +152,11 @@ export function marshalEnv(m: Record<string, string>): string {
     .join("");
 }
 
-/** Raw-editor text (env or json) with sealed variables listed as comments (env) and left out of the values. */
-export function renderRaw(format: "env" | "json", vars: Record<string, string>, sealed: string[]): string {
+/**
+ * Raw-editor text (env or json) with sealed variables left out of the values. In env format they are listed as
+ * `# KEY=<sealed>` comments under `note` (one comment line per line of the note), so the user still sees them.
+ */
+export function renderRaw(format: "env" | "json", vars: Record<string, string>, sealed: string[], note = ""): string {
   const hidden = new Set(sealed);
   const visible = Object.fromEntries(Object.entries(vars).filter(([k]) => !hidden.has(k)));
   if (format === "json") {
@@ -134,7 +166,7 @@ export function renderRaw(format: "env" | "json", vars: Record<string, string>, 
   const keys = [...hidden].filter((k) => k in vars).sort();
   let head = "";
   if (keys.length) {
-    head = "# 봉인된 변수는 값을 볼 수 없고 이 편집기로 바뀌지 않습니다(지우려면 변수 목록에서 삭제하세요).\n";
+    if (note) head = note.split("\n").map((l) => `# ${l}\n`).join("");
     head += keys.map((k) => `# ${k}=<sealed>\n`).join("");
     if (Object.keys(visible).length) head += "\n";
   }
@@ -154,4 +186,22 @@ export function parseRaw(format: "env" | "json", text: string): Record<string, s
   if (!v || typeof v !== "object" || Array.isArray(v) || Object.values(v).some((x) => typeof x !== "string"))
     throw new Error("content must be a JSON object of strings");
   return v as Record<string, string>;
+}
+
+export type VarDiff = { added: string[]; changed: string[]; removed: string[] };
+
+/**
+ * Key-level difference between the current variables and an edited set, keys sorted. Keys in `keep` (sealed variables
+ * the editor doesn't show) are never counted as removed, and writing `<sealed>` back to them is not a change.
+ */
+export function diffVars(prev: Record<string, string>, next: Record<string, string>, keep: Set<string> = new Set()): VarDiff {
+  const added: string[] = [];
+  const changed: string[] = [];
+  const removed: string[] = [];
+  for (const [k, v] of Object.entries(next)) {
+    if (!(k in prev)) added.push(k);
+    else if (prev[k] !== v && !(keep.has(k) && v === "<sealed>")) changed.push(k);
+  }
+  for (const k of Object.keys(prev)) if (!(k in next) && !keep.has(k)) removed.push(k);
+  return { added: added.sort(), changed: changed.sort(), removed: removed.sort() };
 }

@@ -2,20 +2,23 @@
 
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { Bell, ChevronDown, LayoutGrid, List, Plus, Search, X } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { useQueries } from "@tanstack/react-query";
+import { ChevronDown, FolderPlus, LayoutTemplate, LayoutGrid, List, Plus, Search, X } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
-import { qk, useCaps, useMe } from "@/lib/queries";
+import { qk, useCaps } from "@/lib/queries";
 import { useWorkspace } from "@/lib/workspace";
 import { withCtx } from "@/lib/nav";
-import { Avatar, Button, AvenMark, cx } from "@/components/ui";
+import { Avatar, Button, AvenMark, cx, errorMessage } from "@/components/ui";
 import { Toaster } from "@/components/Toaster";
+import { BootSplash } from "@/components/Providers";
+import { CommandPalette } from "@/components/CommandPalette";
+import { InboxMenu } from "@/components/InboxMenu";
 import { NewProjectDialog } from "@/components/Shell";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { ProjectCard, ProjectRow, ProjectSkeleton, LIST_FRAME } from "@/components/projects/ProjectCard";
 import { DashboardSidebar, MobileNav } from "@/components/projects/DashboardSidebar";
-import { t, tr } from "@/lib/i18n";
+import { t } from "@/lib/i18n";
 import { readStorage, writeStorage } from "@/lib/legacyStorage";
 
 const FAV_KEY = "aven.favorites.v1";
@@ -103,20 +106,52 @@ function ViewToggle({ view, onChange }: { view: "grid" | "list"; onChange: (v: "
   );
 }
 
+/** First run of a workspace: what a project is and the two ways to start. */
+function EmptyProjects({ canCreate, workspace, onCreate, templatesHref }: { canCreate: boolean; workspace?: string; onCreate: () => void; templatesHref: string }) {
+  return (
+    <div className="dot-grid flex flex-col items-center rounded-lg border border-dashed border-gray-200 px-6 py-16 text-center">
+      <div className="flex size-12 items-center justify-center rounded-xl border border-gray-200 bg-secondaryBg">
+        <FolderPlus className="size-5 text-pink-500" aria-hidden />
+      </div>
+      <h2 className="mt-4 text-base font-semibold text-foreground">{t("프로젝트가 아직 없습니다")}</h2>
+      <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-gray-500">
+        {canCreate
+          ? t("프로젝트에 서비스, 데이터베이스, 환경을 모아 둡니다. 빈 프로젝트로 시작하거나 템플릿을 배포해 보세요.")
+          : workspace
+            ? t("{workspace}에 볼 수 있는 프로젝트가 없습니다. 작업 공간 admin에게 초대를 요청하세요.", { workspace })
+            : t("볼 수 있는 프로젝트가 없습니다. 작업 공간 admin에게 초대를 요청하세요.")}
+      </p>
+      {canCreate && (
+        <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+          <Button variant="primary" onClick={onCreate}>
+            <Plus /> {t("새 프로젝트")}
+          </Button>
+          <Link href={templatesHref} className="inline-flex h-[34px] items-center gap-2 rounded-md border border-gray-200 px-3 text-sm text-foreground hover:bg-gray-100">
+            <LayoutTemplate className="size-4" aria-hidden /> {t("템플릿 둘러보기")}
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProjectsInner() {
   const ws = useWorkspace();
-  const me = useMe().data;
   const router = useRouter();
   const caps = useCaps(null, ws.wsid);
-  const notifications = useQuery({ queryKey: qk.notifications, queryFn: () => api.notifications(), staleTime: 30_000 });
-  const unread = notifications.data?.unread ?? 0;
   const [creating, setCreating] = useState(false);
   const [q, setQ] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const [mac, setMac] = useState(false);
-  useEffect(() => setMac(/Mac|iPhone|iPad/.test(navigator.platform)), []);
+  // ?new=project (from the command palette) opens the create dialog once, then drops the param.
+  const params = useSearchParams();
+  const wantNew = params.get("new") === "project";
+  useEffect(() => {
+    if (!wantNew || !caps.canCreateProjects) return;
+    setCreating(true);
+    router.replace(withCtx("/projects/", { ws: params.get("ws") }));
+  }, [wantNew, caps.canCreateProjects, router, params]);
   useKeyboardShortcuts([
-    { keys: "mod+k", label: t("프로젝트 검색에 포커스"), group: t("대시보드"), onTrigger: () => searchRef.current?.focus() },
+    { keys: "/", label: t("프로젝트 검색에 포커스"), group: t("대시보드"), onTrigger: () => searchRef.current?.focus() },
     { keys: "mod+/", label: t("새 프로젝트 만들기"), group: t("대시보드"), enabled: caps.canCreateProjects, onTrigger: () => setCreating(true) },
   ]);
   const [sort, setSort] = useStoredPref<Sort>(SORT_KEY, ["recent", "created", "name"], "recent", LEGACY_SORT_KEY);
@@ -154,6 +189,7 @@ function ProjectsInner() {
   return (
     <div className="relative min-h-dvh bg-background sm:h-dvh">
       <Toaster />
+      <CommandPalette ws={ws} />
       <NewProjectDialog
         open={creating}
         onClose={() => setCreating(false)}
@@ -179,16 +215,7 @@ function ProjectsInner() {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                <Link href="/account/?section=notifications" aria-label={t("알림")} className="group grid justify-center focus:outline-none focus-visible:outline-none">
-                  <div className="flex min-h-[28px] items-center rounded-md border border-transparent p-1.5 text-neutral-secondary hover:bg-gray-100 group-focus-visible:ring-2 group-focus-visible:ring-pink-500">
-                    <div className="relative">
-                      <div title={t("알림")} aria-hidden="true" className="icon-container icon-sm text-current text-lg">
-                        <Bell />
-                      </div>
-                      {unread > 0 && <span className="absolute -right-1 -top-1 size-2 rounded-full bg-red-600" aria-hidden="true" />}
-                    </div>
-                  </div>
-                </Link>
+                <InboxMenu />
               </div>
             </header>
             <div className="flex flex-1 gap-2 sm:min-h-0">
@@ -221,9 +248,8 @@ function ProjectsInner() {
                             <X className="size-3.5" />
                           </button>
                         ) : (
-                          <span className="hidden shrink-0 items-center gap-0.5 sm:flex">
-                            <kbd className="rounded border border-gray-200 bg-gray-100 px-1 font-sans text-xs text-gray-500">{mac ? "⌘" : "Ctrl"}</kbd>
-                            <kbd className="rounded border border-gray-200 bg-gray-100 px-1 font-sans text-xs text-gray-500">K</kbd>
+                          <span className="hidden shrink-0 items-center gap-0.5 sm:flex" aria-hidden>
+                            <kbd className="rounded border border-gray-200 bg-gray-100 px-1 font-sans text-xs text-gray-500">/</kbd>
                           </span>
                         )}
                       </label>
@@ -288,23 +314,23 @@ function ProjectsInner() {
                             {t("다시 시도")}
                           </button>
                         </div>
-                      ) : list.length === 0 ? (
-                        <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-gray-200 px-6 py-14 text-center">
-                          <p className="text-sm font-medium text-foreground">
-                            {q.trim() ? t("“{query}”와 일치하는 프로젝트가 없습니다", { query: q.trim() }) : t("프로젝트가 아직 없습니다")}
-                          </p>
-                          {!q.trim() && caps.canCreateProjects && (
-                            <p className="text-sm text-gray-500">
-                              {tr("{link}를 만들어 시작하세요.", {
-                                link: (
-                                  <button type="button" onClick={() => setCreating(true)} className="cursor-pointer text-pink-600 hover:underline">
-                                    {t("새 프로젝트")}
-                                  </button>
-                                ),
-                              })}
-                            </p>
-                          )}
+                      ) : ws.error && !ws.wsid ? (
+                        <div role="alert" className="rounded-lg border border-gray-200 p-4 text-sm">
+                          {errorMessage(ws.error)}{" "}
+                          <Link href="/projects/" className="text-pink-600 hover:underline">
+                            {t("내 작업 공간으로 돌아가기")}
+                          </Link>
                         </div>
+                      ) : list.length === 0 && q.trim() ? (
+                        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-gray-200 px-6 py-14 text-center">
+                          <Search className="size-5 text-gray-400" aria-hidden />
+                          <p className="text-sm font-medium text-foreground">{t("“{query}”와 일치하는 프로젝트가 없습니다", { query: q.trim() })}</p>
+                          <button type="button" onClick={() => setQ("")} className="cursor-pointer text-sm text-pink-600 hover:underline">
+                            {t("검색 지우기")}
+                          </button>
+                        </div>
+                      ) : list.length === 0 ? (
+                        <EmptyProjects canCreate={caps.canCreateProjects} workspace={ws.curWorkspace?.name} onCreate={() => setCreating(true)} templatesHref={withCtx("/templates/", { ws: ws.wsid })} />
                       ) : view === "grid" ? (
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                           {list.map((p) => (
@@ -333,7 +359,7 @@ function ProjectsInner() {
 
 export default function ProjectsPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<BootSplash />}>
       <ProjectsInner />
     </Suspense>
   );

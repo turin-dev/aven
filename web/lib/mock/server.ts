@@ -3418,6 +3418,7 @@ route("PATCH", "/nodes/{nid}", ([nid], r) => {
     b.ipv6_pool = pool;
   }
   Object.assign(n, b);
+  if (b.schedulable && n.status === "draining") n.status = "online";
   return n;
 });
 route("DELETE", "/nodes/{nid}", ([nid], r) => {
@@ -3430,6 +3431,23 @@ route("DELETE", "/nodes/{nid}", ([nid], r) => {
   NODES.splice(NODES.indexOf(n), 1);
   return 204;
 });
+route("POST", "/nodes/{nid}/drain", ([nid], r) => {
+  const n = NODES.find((x) => x.id === nid);
+  if (!n) throw new HttpError(404, "node not found");
+  if (n.is_local) throw new HttpError(400, "local node cannot be drained");
+  const target = ((r.body ?? {}) as { target_node_id?: string }).target_node_id;
+  const pool = NODES.filter((o) => o.id !== nid && o.status === "online" && o.schedulable && (!target || o.id === target));
+  if (target && !pool.length) throw new HttpError(409, `target node ${target} is not available (it must exist, be schedulable, connected and not draining)`);
+  if (!pool.length) throw new HttpError(409, "no other schedulable online node to move the instances to");
+  n.schedulable = false;
+  if (n.status === "online") n.status = "draining";
+  const moved = S.instances.filter((i) => i.node_id === nid).map((i, k) => {
+    const to = pool[k % pool.length].id;
+    i.node_id = to;
+    return { instance_id: i.id, service_id: i.service_id, to, deployment_id: rid("dep") };
+  });
+  return [202, { node: n, moved, skipped: [] }];
+});
 route("GET", "/nodes/{nid}/metrics", ([nid], r) => {
   const n = NODES.find((x) => x.id === nid);
   if (!n) throw new HttpError(404, "node not found");
@@ -3440,7 +3458,7 @@ route("GET", "/nodes/{nid}/metrics", ([nid], r) => {
   for (let t = end - span; t <= end; t += step) {
     if (n.status === "offline" && t > end - 3 * 3600) continue;
     const w = Math.sin(t / 900 + sd) * 0.5 + Math.sin(t / 211 + sd * 7) * 0.25;
-    points.push({ t: iso(t * 1000), cpu_percent: Math.max(2, (n.cpu_cores * 100) * (0.08 + 0.05 * w)), memory_bytes: n.memory_bytes * (0.42 + 0.04 * w), disk_free_bytes: n.disk_free_bytes });
+    points.push({ t: iso(t * 1000), cpu_percent: Math.max(2, 100 * (0.08 + 0.05 * w)), memory_bytes: n.memory_bytes * (0.42 + 0.04 * w), disk_free_bytes: n.disk_free_bytes });
   }
   return { points };
 });
@@ -4683,4 +4701,48 @@ route("DELETE", "/services/{sid}/instances/{eid}/edge/waf/under-attack", ([sid, 
   e.waf.under_attack = null;
   edgeEmit(sid, eid, "공격 방어 모드 끄기");
   return edgeView(sid, eid);
+});
+
+// ui-pages: CLI downloads for the /cli page (GET /api/cli/downloads).
+route("GET", "/cli/downloads", () => ({
+  version: "v0.0.0-mock",
+  install_script: "/install.sh",
+  files: (["linux", "darwin", "windows"] as const).flatMap((os) =>
+    (["amd64", "arm64"] as const).map((arch, i) => {
+      const name = `aven-${os}-${arch}${os === "windows" ? ".exe" : ""}`;
+      return { name, os, arch, url: `/downloads/${name}`, size: 14_200_000 + i * 310_000, sha256: `${os}${arch}`.padEnd(64, "0"), updated_at: ago(60 * 24) };
+    }),
+  ),
+}));
+
+// ui-pages: a canned compose preview so the import dialog's preview step can be checked without a server.
+route("POST", "/projects/{pid}/environments/{eid}/compose/preview", (_, r) => {
+  const yaml = String((r.body as { yaml?: string } | null)?.yaml ?? "");
+  const names = [...yaml.matchAll(/^ {2}([a-z0-9][\w-]*):\s*$/gm)].map((m) => m[1]).filter((n, i, a) => a.indexOf(n) === i);
+  if (!names.length) throw new HttpError(400, "compose: no services");
+  const services = names.map((n, i) => ({
+    name: n,
+    compose_name: n,
+    source_type: "image" as const,
+    icon: "docker",
+    image: i === 0 ? "nginx:alpine" : "postgres:16",
+    port: i === 0 ? 80 : 5432,
+    healthcheck_type: i === 0 ? "http" : "none",
+    restart_policy: "on_failure",
+    replicas: 1,
+    env_keys: i === 0 ? [] : ["POSTGRES_PASSWORD"],
+    volumes: i === 0 ? [] : [{ name: "pg", mount_path: "/var/lib/postgresql/data" }],
+    aliases: [n],
+    depends_on: i === 0 ? names.slice(1).map((s) => ({ service: s, condition: "service_started" })) : [],
+    domain_candidates: i === 0 ? [{ port: 80, source: "ports" }] : [],
+    tcp_candidates: [],
+    issues: [],
+  }));
+  return {
+    plan: { stack: "stack", services, levels: [names.slice(1), names.slice(0, 1)].filter((l) => l.length), warnings: [{ severity: "warning", service: names[0], code: "ports", message: "published port 8080 is ignored; use a domain or TCP proxy" }], errors: [], missing_variables: [] },
+    exists: false,
+    diff: names.map((n) => ({ name: n, compose_name: n, action: "create", changes: [] })),
+    node_id: "node_local",
+    ok: true,
+  };
 });

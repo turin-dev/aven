@@ -157,9 +157,11 @@ var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 // PrivateAddr는 mesh에 쓸 수 있는 사설 주소인지다: RFC1918, ULA(fc00::/7), CGNAT(100.64/10, Tailscale).
 // 공인 주소나 루프백·링크 로컬은 받지 않는다(서버가 agent를 임의 주소로 보내지 못하게).
+// IPv6 zone(fd00::1%eth0)도 받지 않는다: zone은 그 주소를 알린 노드의 인터페이스 이름이라 다른 노드에서는 뜻이 없고,
+// 서버가 그대로 peer 주소로 내려보내면 엉뚱한 인터페이스로 나간다.
 func PrivateAddr(a netip.Addr) bool {
 	a = a.Unmap()
-	return a.IsValid() && !a.IsLoopback() && !a.IsUnspecified() && !a.IsLinkLocalUnicast() && (a.IsPrivate() || cgnat.Contains(a))
+	return a.IsValid() && a.Zone() == "" && !a.IsLoopback() && !a.IsUnspecified() && !a.IsLinkLocalUnicast() && (a.IsPrivate() || cgnat.Contains(a))
 }
 
 // ParsePrivateIP는 노드의 사설 주소 문자열을 mesh listen 주소로 읽는다(IP만, 사설 대역만).

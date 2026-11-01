@@ -3,11 +3,13 @@
 import Link from "next/link";
 import { Star } from "lucide-react";
 import type { CanvasService, Project } from "@/lib/api";
-import { useCanvas, useProject } from "@/lib/queries";
+import { isTerminal } from "@/lib/api";
+import { useCanvas } from "@/lib/queries";
+import { relTime } from "@/components/InboxMenu";
 import { withCtx } from "@/lib/nav";
 import { cx } from "@/components/ui";
 import { ServiceIcon } from "@/components/ServiceIcon";
-import { t } from "@/lib/i18n";
+import { dateLocale, t } from "@/lib/i18n";
 
 export function BucketIcon({ className }: { className?: string }) {
   return (
@@ -21,25 +23,55 @@ export function BucketIcon({ className }: { className?: string }) {
 
 const isBucket = (s: CanvasService) => s.database_kind === "bucket";
 
-function useProjectStatus(p: Project) {
+// Sleeping (app sleeping) and scheduled (cron between runs) services are fine, not "down".
+const HEALTHY = new Set(["online", "sleeping", "scheduled"]);
+
+/** Live status of a project's default environment, read from the (polled) canvas query. */
+export function useProjectStatus(p: Project) {
   const canvas = useCanvas(p.default_environment_id);
-  const detail = useProject(p.id);
   const all = canvas.data?.services ?? [];
   const services = all.filter((s) => !isBucket(s));
   const buckets = all.length - services.length;
-  const online = services.filter((s) => s.instance.status === "online").length;
+  const healthy = services.filter((s) => HEALTHY.has(s.instance.status)).length;
   const crashed = services.filter((s) => s.instance.status === "crashed" || s.instance.status === "failed").length;
-  const deployed = services.some((s) => s.instance.status !== "idle");
-  const envName = canvas.data?.environment.name ?? detail.data?.environments.find((e) => e.id === p.default_environment_id)?.name ?? "production";
-  return { pending: canvas.isPending && !!p.default_environment_id, all, services, buckets, online, crashed, deployed, envName };
+  const deploying = services.filter((s) => s.instance.status === "deploying" || (s.latest_deployment && !isTerminal(s.latest_deployment.status))).length;
+  const deployed = services.some((s) => s.instance.status !== "idle" || s.latest_deployment);
+  let lastDeploy: string | null = null;
+  for (const s of all) {
+    const at = s.latest_deployment?.created_at;
+    if (at && (!lastDeploy || at > lastDeploy)) lastDeploy = at;
+  }
+  return {
+    pending: canvas.isPending && !!p.default_environment_id,
+    error: canvas.isError,
+    all,
+    services,
+    buckets,
+    healthy,
+    crashed,
+    deploying,
+    deployed,
+    lastDeploy,
+    envName: canvas.data?.environment.name ?? "production",
+  };
 }
 
 type Status = ReturnType<typeof useProjectStatus>;
 
+function statusTone(s: Status): { dot: string; label: string; text?: string } {
+  const n = s.services.length;
+  if (s.crashed > 0) return { dot: "bg-red-500", label: t("서비스 {crashed}/{n} 크래시", { crashed: s.crashed, n }), text: "text-red-600" };
+  if (s.deploying > 0) return { dot: "bg-yellow-500 motion-safe:animate-pulse", label: t("{count}개 배포 중", { count: s.deploying }), text: "text-warn" };
+  if (!s.deployed) return { dot: "bg-gray-400", label: t("배포 안 됨") };
+  if (s.healthy === n) return { dot: "bg-green-500", label: t("서비스 {online}/{n} 온라인", { online: s.healthy, n }) };
+  return { dot: "bg-gray-400", label: t("서비스 {online}/{n} 온라인", { online: s.healthy, n }) };
+}
+
 function StatusLine({ status }: { status: Status }) {
-  const { pending, services, buckets, online, crashed, deployed, envName } = status;
+  const { pending, error, services, buckets, envName, lastDeploy } = status;
   const n = services.length;
-  if (pending) return <span>…</span>;
+  if (pending) return <span className="h-3 w-40 animate-pulse rounded bg-gray-100" aria-label={t("불러오는 중")} />;
+  if (error) return <span>{t("상태를 불러오지 못했습니다")}</span>;
   if (n === 0) {
     if (buckets > 0)
       return (
@@ -52,24 +84,23 @@ function StatusLine({ status }: { status: Status }) {
       );
     return <span>{t("서비스 없음")}</span>;
   }
-  const dot = !deployed ? "bg-gray-400" : crashed > 0 ? "bg-red-500" : online === n ? "bg-green-500" : "bg-gray-400";
+  const tone = statusTone(status);
   return (
-    <div className="flex min-w-0 items-center gap-2 whitespace-nowrap tabular-nums">
-      <div className={cx("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
+    <div className="flex min-w-0 flex-1 items-center gap-2 whitespace-nowrap tabular-nums">
+      <div className={cx("h-1.5 w-1.5 shrink-0 rounded-full", tone.dot)} aria-hidden />
       <span className="shrink-0">{envName}</span>
-      <span>·</span>
-      {!deployed ? (
-        <span>{t("배포 안 됨")}</span>
-      ) : crashed > 0 ? (
-        <span className="text-red-600">{t("서비스 {crashed}/{n} 크래시", { crashed, n })}</span>
-      ) : (
-        <span>{t("서비스 {online}/{n} 온라인", { online, n })}</span>
-      )}
+      <span aria-hidden>·</span>
+      <span className={cx("min-w-0 truncate", tone.text)}>{tone.label}</span>
       {buckets > 0 && (
         <>
-          <span>·</span>
-          <span>{t("버킷 {count}개", { count: buckets })}</span>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">{t("버킷 {count}개", { count: buckets })}</span>
         </>
+      )}
+      {lastDeploy && (
+        <time dateTime={lastDeploy} title={t("마지막 배포: {time}", { time: new Date(lastDeploy).toLocaleString(dateLocale()) })} className="ml-auto shrink-0 pl-2 text-gray-400">
+          {relTime(lastDeploy)}
+        </time>
       )}
     </div>
   );
@@ -214,7 +245,7 @@ export function ProjectRow({ p, favorite, onFavorite }: { p: Project; favorite: 
           ))}
           {more > 0 && <span className="text-xs text-neutral-secondary">+{more}</span>}
         </div>
-        <div className="hidden w-[260px] shrink-0 items-center text-xs text-neutral-secondary sm:flex">
+        <div className="hidden w-[300px] shrink-0 items-center text-xs text-neutral-secondary sm:flex">
           <StatusLine status={status} />
         </div>
         <FavoriteButton p={p} favorite={favorite} onFavorite={onFavorite} />

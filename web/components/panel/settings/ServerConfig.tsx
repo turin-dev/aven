@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronRight, KeyRound, Lock, MoreVertical, Pencil, Plus, Trash2, Undo2, Variable, X } from "lucide-react";
 import { api, type CanvasService, type ServerConfigEntry } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { t, tr } from "@/lib/i18n";
-import { Button, ErrorBox, IconButton, Input, Menu, MenuItem, cx, useEscape } from "@/components/ui";
+import { Button, ErrorBox, IconButton, Input, Menu, MenuItem, cx, useConfirm, useEscape } from "@/components/ui";
 // 변수 탭(ROW_GRID)과 같은 모양이지만 AVEN_GITHUB_WEBHOOK_SECRET 같은 긴 이름이 잘리지 않게 키 열을 넓힌다.
 const ROW_GRID = "grid grid-cols-[minmax(15.5rem,auto)_minmax(0,1fr)_2.5rem] gap-3";
 
@@ -65,6 +65,22 @@ const DESC: Record<string, string> = {
 };
 
 const MASK = "*******";
+
+/** Checks for settings whose bad values keep the new aven-server from starting (it then rolls back). Empty is always allowed. */
+const port = (v: string) => (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 65535 ? null : t("1부터 65535 사이의 포트 번호를 입력하세요."));
+const RULES: Record<string, (v: string) => string | null> = {
+  AVEN_PUBLIC_URL: (v) => (/^https?:\/\/[^\s/]+/.test(v) ? null : t("http:// 또는 https://로 시작하는 주소를 입력하세요.")),
+  AVEN_ADMIN_PASSWORD: (v) => (v.length >= 8 ? null : t("8자 이상이어야 합니다.")),
+  AVEN_SMTP_PORT: port,
+  AVEN_INGRESS_MODE: (v) => (["direct", "cloudflare_tunnel"].includes(v) ? null : t("direct 또는 cloudflare_tunnel을 입력하세요.")),
+  AVEN_LISTEN: (v) => (/^[^\s]*:\d{1,5}$/.test(v) ? null : t("host:port 형식으로 입력하세요 (예: 127.0.0.1:7070).")),
+  AVEN_SELF_UPDATE_INTERVAL: (v) => (v.toLowerCase() === "off" || /^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/.test(v) ? null : t("30m, 6h 같은 기간이나 off를 입력하세요.")),
+};
+function ruleError(name: string, v: string): string | null {
+  if (v === "") return null;
+  if (/[\r\n]/.test(v)) return t("값에 줄바꿈을 넣을 수 없습니다.");
+  return RULES[name]?.(v.trim()) ?? null;
+}
 const KEY_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 
 /** 저장하지 않은 변경: 문자열은 새 값, null은 파일에서 지우기. */
@@ -81,6 +97,26 @@ export function ServerConfigSettings({ svc, env, canEdit }: { svc: CanvasService
   const cfg = query.data;
   const changes = Object.keys(draft).length;
   const readOnly = !canEdit || !cfg?.writable;
+  const { confirm, node: confirmNode } = useConfirm();
+  // Unsaved edits live only in this component: warn before the page goes away.
+  useEffect(() => {
+    if (!changes) return;
+    const h = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [changes]);
+  const askDeploy = () =>
+    confirm({
+      title: changes ? t("저장하고 aven-server 다시 배포") : t("aven-server 다시 배포"),
+      confirmLabel: changes ? t("저장하고 배포") : t("지금 배포해 적용"),
+      message: (
+        <div className="space-y-2">
+          <p>{t("aven-server를 새 설정으로 다시 시작합니다. 그동안 대시보드와 API가 잠시 끊깁니다. 새 서버가 정상으로 뜨지 않으면 이전 버전으로 되돌아갑니다.")}</p>
+          {changes > 0 && <p className="break-all font-mono text-xs text-foreground">{Object.keys(draft).sort().join(", ")}</p>}
+        </div>
+      ),
+      run: () => save(true),
+    });
 
   const rows = useMemo(() => {
     const m = new Map<Group, ServerConfigEntry[]>();
@@ -228,11 +264,12 @@ export function ServerConfigSettings({ svc, env, canEdit }: { svc: CanvasService
               <Button size="sm" variant="outline" loading={busy === "save"} disabled={!!busy || readOnly} onClick={() => void save(false)}>{t("저장")}</Button>
             </>
           )}
-          <Button size="sm" variant="primary" loading={busy === "deploy"} disabled={!!busy || !canEdit || (changes > 0 && readOnly)} onClick={() => void save(true)}>
+          <Button size="sm" variant="primary" loading={busy === "deploy"} disabled={!!busy || !canEdit || (changes > 0 && readOnly)} onClick={askDeploy}>
             {changes ? t("저장하고 배포") : t("지금 배포해 적용")}
           </Button>
         </div>
       )}
+      {confirmNode}
     </div>
   );
 }
@@ -339,13 +376,14 @@ function EditRow({ e, initial, onCommit, onCancel }: { e: ServerConfigEntry; ini
   const [val, setVal] = useState(initial);
   useEscape(onCancel);
   const desc = DESC[e.name];
+  const err = ruleError(e.name, val);
   return (
     <li className="mb-1 rounded bg-secondaryBg px-4 py-2 dark:bg-gray-100">
       <form
         className={cx(ROW_GRID, "items-center")}
         onSubmit={(ev) => {
           ev.preventDefault();
-          onCommit(val);
+          if (!err) onCommit(val);
         }}
       >
         <span className="truncate font-mono text-sm">{e.name}</span>
@@ -358,10 +396,12 @@ function EditRow({ e, initial, onCommit, onCancel }: { e: ServerConfigEntry; ini
           onChange={(ev) => setVal(ev.target.value)}
           placeholder={e.secret && e.set ? t("새 값") : ""}
           aria-label={t("{key} 값", { key: e.name })}
+          aria-invalid={!!err || undefined}
+          invalid={!!err}
           className="h-[34px] !px-1.5"
         />
         <div className="flex items-center justify-end gap-1">
-          <IconButton type="submit" label={t("저장 (Enter)")} disabled={e.secret && val === ""}>
+          <IconButton type="submit" label={t("저장 (Enter)")} disabled={(e.secret && val === "") || !!err}>
             <Check />
           </IconButton>
           <IconButton label={t("취소 (Esc)")} onClick={onCancel}>
@@ -369,7 +409,7 @@ function EditRow({ e, initial, onCommit, onCancel }: { e: ServerConfigEntry; ini
           </IconButton>
         </div>
       </form>
-      {desc && <p className="mt-2 font-sans text-xs text-gray-500">{desc}</p>}
+      {(err || desc) && <p className={cx("mt-2 font-sans text-xs", err ? "text-red-600" : "text-gray-500")}>{err ?? desc}</p>}
     </li>
   );
 }
@@ -378,7 +418,7 @@ function NewSetting({ options, taken, onAdd, onCancel }: { options: string[]; ta
   const [key, setKey] = useState("");
   const [val, setVal] = useState("");
   useEscape(onCancel);
-  const err = !key ? null : !KEY_RE.test(key) ? t("대문자, 숫자, _만 쓸 수 있습니다.") : taken.has(key) ? t("{name}은 이미 있습니다. 목록에서 편집하세요.", { name: key }) : null;
+  const err = !key ? null : !KEY_RE.test(key) ? t("대문자, 숫자, _만 쓸 수 있습니다.") : taken.has(key) ? t("{name}은 이미 있습니다. 목록에서 편집하세요.", { name: key }) : ruleError(key, val);
   const desc = DESC[key];
   return (
     <div className="mb-5 rounded-lg border border-gray-200 bg-secondaryBg p-4 dark:bg-gray-100">

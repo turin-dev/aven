@@ -6,6 +6,15 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { api, isTerminal, type CanvasData, type Deployment, type ID, type MetricRange, type ProjectRole, type TemplateListQuery, type UsageGroupBy } from "./api";
 
 const POLL = 3000;
+
+/**
+ * placeholderData that keeps the previous result while only the trailing parts of `key` (range, filters) change.
+ * Switching to another entity (the first `same` key parts) shows a loader instead of the old entity's data.
+ */
+function keepPrevious<T>(key: readonly unknown[], same: number) {
+  return (prev: T | undefined, prevQuery?: { queryKey: readonly unknown[] }) =>
+    prevQuery && key.slice(0, same).every((v, i) => v === prevQuery.queryKey[i]) ? prev : undefined;
+}
 const IDLE_POLL = 20000;
 
 export const qk = {
@@ -87,16 +96,17 @@ export function useAlertRules(pid: ID | null | undefined) {
 }
 
 export function useProjectUsage(pid: ID | null | undefined, from: string, to: string, group: UsageGroupBy) {
+  const queryKey = qk.usage(pid ?? "", from, to, group);
   return useQuery({
-    queryKey: qk.usage(pid ?? "", from, to, group),
+    queryKey,
     queryFn: () => api.projectUsage(pid!, { from, to, group }),
     enabled: !!pid,
-    placeholderData: (prev) => prev,
+    placeholderData: keepPrevious(queryKey, 2),
   });
 }
 
 export function useWorkspaceUsage(from: string, to: string, enabled: boolean) {
-  return useQuery({ queryKey: qk.workspaceUsage(from, to), queryFn: () => api.workspaceUsage({ from, to }), enabled });
+  return useQuery({ queryKey: qk.workspaceUsage(from, to), queryFn: () => api.workspaceUsage({ from, to }), enabled, placeholderData: keepPrevious(qk.workspaceUsage(from, to), 2) });
 }
 
 export function useMe() {
@@ -213,22 +223,24 @@ export function useCronRuns(did: ID | null | undefined) {
 }
 
 export function useMetrics(sid: ID, eid: ID, range: MetricRange) {
+  const queryKey = qk.metrics(sid, eid, range);
   return useQuery({
-    queryKey: qk.metrics(sid, eid, range),
+    queryKey,
     queryFn: () => api.metrics(sid, eid, range),
     enabled: !!sid && !!eid,
     refetchInterval: 15_000,
-    placeholderData: (prev) => prev,
+    placeholderData: keepPrevious(queryKey, 3),
   });
 }
 
 export function useEnvMetrics(eid: ID | null | undefined, range: MetricRange) {
+  const queryKey = qk.envMetrics(eid ?? "", range);
   return useQuery({
-    queryKey: qk.envMetrics(eid ?? "", range),
+    queryKey,
     queryFn: () => api.envMetrics(eid!, range),
     enabled: !!eid,
     refetchInterval: 15_000,
-    placeholderData: (prev) => prev,
+    placeholderData: keepPrevious(queryKey, 2),
   });
 }
 
@@ -275,12 +287,20 @@ export function useTemplateDetail(key: string | null | undefined) {
   return useQuery({ queryKey: [...qk.templates, "detail", key ?? ""] as const, queryFn: () => api.template(key!), enabled: !!key });
 }
 
+/** Size of the cached event list. Callers with a smaller `limit` share the cache and see a slice of it. */
+const EVENTS_FETCH = 50;
+
+/**
+ * Project (or environment) events. The cache key has no limit so the live stream (useProjectEvents) can prepend
+ * to it; every caller therefore fetches the same EVENTS_FETCH rows and slices its own `limit`.
+ */
 export function useEvents(pid: ID | null | undefined, eid?: ID | null, limit = 50) {
   return useQuery({
     queryKey: qk.events(pid ?? "", eid ?? undefined),
-    queryFn: () => api.events(pid!, eid ?? undefined, limit),
+    queryFn: () => api.events(pid!, eid ?? undefined, Math.max(EVENTS_FETCH, limit)),
     enabled: !!pid,
     refetchInterval: 60_000,
+    select: (rows) => (rows.length > limit ? rows.slice(0, limit) : rows),
   });
 }
 
@@ -314,7 +334,13 @@ export function useNodes(fast = false) {
 }
 
 export function useNodeMetrics(nid: ID, range: MetricRange = "1h", enabled = true) {
-  return useQuery({ queryKey: qk.nodeMetrics(nid, range), queryFn: () => api.nodeMetrics(nid, range), refetchInterval: 30_000, enabled: !!nid && enabled });
+  return useQuery({
+    queryKey: qk.nodeMetrics(nid, range),
+    queryFn: () => api.nodeMetrics(nid, range),
+    refetchInterval: 30_000,
+    enabled: !!nid && enabled,
+    placeholderData: keepPrevious(qk.nodeMetrics(nid, range), 2),
+  });
 }
 
 export function useRegistries(pid: ID | null | undefined) {

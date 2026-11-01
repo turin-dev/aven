@@ -71,9 +71,13 @@ func (r Reference) IsSemver() (major, minor, patch int, ok bool) {
 	if m == nil {
 		return 0, 0, 0, false
 	}
-	major, _ = strconv.Atoi(m[1])
-	minor, _ = strconv.Atoi(m[2])
-	patch, _ = strconv.Atoi(m[3])
+	var err1, err2, err3 error
+	major, err1 = strconv.Atoi(m[1])
+	minor, err2 = strconv.Atoi(m[2])
+	patch, err3 = strconv.Atoi(m[3])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0, 0, 0, false // int 범위를 넘는 숫자는 버전으로 보지 않는다
+	}
 	return major, minor, patch, true
 }
 

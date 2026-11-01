@@ -2,6 +2,7 @@ package compose
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -176,5 +177,85 @@ func TestHealthParse(t *testing.T) {
 	k, port, path := parseHealthTest([]string{"CMD", "curl", "-f", "http://localhost:8080/health"})
 	if k != "http" || port != 8080 || path != "/health" {
 		t.Fatal(k, port, path)
+	}
+}
+
+// env_file이 저장소 밖을 가리키는 심볼릭 링크면 읽지 않는다(서버 파일이 서비스 변수로 들어가지 않게).
+func TestEnvFileSymlinkOutsideRepo(t *testing.T) {
+	outside := t.TempDir()
+	secret := outside + "/aven.env"
+	os.WriteFile(secret, []byte("KEEL_ADMIN_PASSWORD=hunter2\n"), 0o600)
+	repo := t.TempDir()
+	os.WriteFile(repo+"/app.env", []byte("GOOD=1\n"), 0o644)
+	if err := os.Symlink(secret, repo+"/leak.env"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("app.env", repo+"/alias.env"); err != nil {
+		t.Fatal(err)
+	}
+	big := strings.Repeat("A=1\n", maxEnvFileSize/4+1)
+	os.WriteFile(repo+"/big.env", []byte(big), 0o644)
+	yml := `services:
+  web:
+    image: nginx:1
+    env_file: [app.env, alias.env, leak.env, big.env]
+`
+	p, err := Parse(context.Background(), Input{YAML: yml, Stack: "t", RepoURL: "https://example.com/r.git", RepoDir: repo, ComposeDir: repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.AssignNames(nil, nil)
+	vars := p.Service("web").Variables
+	if vars["GOOD"] != "1" {
+		t.Fatalf("regular env_file not read: %v", vars)
+	}
+	if _, ok := vars["KEEL_ADMIN_PASSWORD"]; ok {
+		t.Fatal("env_file symlink escaped the repository")
+	}
+	if _, ok := vars["A"]; ok {
+		t.Fatal("oversized env_file was read")
+	}
+	missing := 0
+	for _, w := range p.Warnings {
+		if w.Code == "env_file_missing" {
+			missing++
+		}
+	}
+	if missing != 2 {
+		t.Fatalf("want 2 env_file_missing warnings (leak, big), got %d: %v", missing, p.Warnings)
+	}
+}
+
+func TestExposePorts(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []int
+		udp  bool
+	}{
+		{"8080", []int{8080}, false},
+		{"8080/tcp", []int{8080}, false},
+		{"8080/TCP", []int{8080}, false},
+		{"53/udp", nil, true},
+		{"9000-9002", []int{9000, 9001, 9002}, false},
+		{"9000-9002/tcp", []int{9000, 9001, 9002}, false},
+		{"1-100", []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, false},
+		{"9002-9000", nil, false},
+		{"abc", nil, false},
+		{"70000", nil, false},
+		{"80/sctp", nil, false},
+	}
+	for _, c := range cases {
+		got, udp := exposePorts(c.in)
+		if fmt.Sprint(got) != fmt.Sprint(c.want) || udp != c.udp {
+			t.Errorf("exposePorts(%q) = %v %v, want %v %v", c.in, got, udp, c.want, c.udp)
+		}
+	}
+	// expose의 프로토콜 표기도 서비스 포트가 된다.
+	p, err := Parse(context.Background(), Input{YAML: "services:\n  web:\n    image: nginx:1\n    expose: [\"8080/tcp\"]\n", Stack: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := p.Service("web"); s.Port == nil || *s.Port != 8080 || len(s.DomainCandidates) != 1 {
+		t.Fatalf("port %v candidates %+v", s.Port, s.DomainCandidates)
 	}
 }

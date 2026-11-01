@@ -30,6 +30,7 @@ import {
   KeyRound,
   Link2,
   SquareDashed,
+  MousePointerSquareDashed,
 } from "lucide-react";
 import { api, type CanvasService, type DatabaseKind, type Volume } from "@/lib/api";
 import { qk, useCaps, useDeployments, useNodes } from "@/lib/queries";
@@ -434,6 +435,7 @@ export function CanvasContextMenu({
   onPlaceNext,
   onAutoLayout,
   onFit,
+  onSelectAll,
   onToggleEdges,
   onNewGroup,
   onDeleted,
@@ -452,6 +454,8 @@ export function CanvasContextMenu({
   onPlaceNext: (at: { x: number; y: number } | null) => void;
   onAutoLayout: () => void;
   onFit: () => void;
+  /** Selects every card; hidden when absent. */
+  onSelectAll?: () => void;
   onToggleEdges: () => void;
   /** Opens the group dialog for `selection`. The entry is hidden without it. */
   onNewGroup?: () => void;
@@ -547,7 +551,8 @@ export function CanvasContextMenu({
     ]),
     { kind: "sep" },
     { label: t("자동 정렬"), icon: <AlignHorizontalDistributeCenter className="size-[16px]" />, disabled: !canEdit, reason: NO_PERM, onSelect: onAutoLayout },
-    { label: t("화면에 맞추기"), icon: <Maximize className="size-[16px]" />, onSelect: onFit },
+    { label: t("화면에 맞추기"), icon: <Maximize className="size-[16px]" />, shortcut: "⇧1", onSelect: onFit },
+    ...(onSelectAll ? [{ label: t("모두 선택"), icon: <MousePointerSquareDashed className="size-[16px]" />, shortcut: "⌘A", onSelect: onSelectAll } as MenuEntry] : []),
     { label: t("연결선 표시"), icon: <Link2 className="size-[16px]" />, checked: showEdges, onSelect: onToggleEdges },
   ];
   return (

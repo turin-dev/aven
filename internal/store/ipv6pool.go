@@ -88,7 +88,11 @@ func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.P
 			}
 			all = append(all, r)
 		}
+		err = rows.Err()
 		rows.Close()
+		if err != nil {
+			return err
+		}
 		used := map[netip.Addr]bool{}
 		var need []row
 		for _, r := range all {

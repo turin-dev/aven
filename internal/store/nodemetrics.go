@@ -70,25 +70,14 @@ func (s *Store) ReplaceNodeMetrics(ctx context.Context, nodeID string, from, to 
 	})
 }
 
+// NodeMetricNodes는 지표 점이 있는 노드 ID다(정렬됨).
 func (s *Store) NodeMetricNodes(ctx context.Context) ([]string, error) {
-	rows, err := s.q.QueryContext(ctx, `SELECT DISTINCT node_id FROM node_metrics`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return s.distinctKeys(ctx, "node_metrics", "node_id")
 }
 
-// PruneNodeMetrics는 before보다 오래된 점과 삭제된 노드의 점을 지운다.
+// PruneNodeMetrics는 before보다 오래된 점과 삭제된 노드의 점을 지운다(노드마다 인덱스로 지운다).
 func (s *Store) PruneNodeMetrics(ctx context.Context, before int64) error {
-	_, err := s.q.ExecContext(ctx, `DELETE FROM node_metrics WHERE t < ? OR node_id NOT IN (SELECT id FROM nodes)`, before)
-	return err
+	return s.pruneSeries(ctx, "node_metrics", "node_id", "t", "nodes", before)
 }
 
 func (s *Store) DeleteNodeMetrics(ctx context.Context, nodeID string) error {

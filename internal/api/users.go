@@ -500,9 +500,14 @@ func (s *Server) getUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, mfaUserView{u, n})
 }
 
-// canManageUser: owner 계정(과 owner 역할 부여)은 owner만 바꿀 수 있다.
+// canManageUser: 서버 owner 계정(users.role=owner, 기본 계정, KEEL_SUPERADMINS)은 owner만 바꿀 수 있다.
+// KEEL_SUPERADMINS 계정은 DB 역할이 member여도 owner이므로 역할이 아니라 instanceOwner로 판단한다
+// (그렇지 않으면 서버 관리자가 비밀번호나 2단계 인증을 초기화해 owner 계정을 가져갈 수 있다).
 func (s *Server) canManageUser(actor *principal, target *store.User) bool {
-	return target.Role != store.RoleOwner || s.instanceLevel(actor) >= lvOwner
+	if s.instanceLevel(actor) >= lvOwner {
+		return true
+	}
+	return target.Role != store.RoleOwner && !target.Builtin && !s.SuperAdmins[store.NormalizeEmail(target.Email)]
 }
 
 func (s *Server) patchUser(w http.ResponseWriter, r *http.Request) {
@@ -683,6 +688,12 @@ func (s *Server) createInvite(w http.ResponseWriter, r *http.Request) {
 	email := store.NormalizeEmail(body.Email)
 	if !validEmail(email) || email == store.BuiltinUserEmail {
 		writeErr(w, 400, "올바른 이메일이 필요합니다")
+		return
+	}
+	// KEEL_SUPERADMINS의 이메일로 가입한 계정은 서버 owner가 된다. 초대 링크는 만든 사람에게 보이므로
+	// owner가 아닌 사람이 그 이메일로 초대를 만들면 스스로 가입해 서버 owner가 될 수 있다.
+	if s.SuperAdmins[email] && s.instanceLevel(actor) < lvOwner {
+		writeErr(w, 403, "이 이메일은 서버 owner 계정입니다. 서버 owner만 초대할 수 있습니다")
 		return
 	}
 	if body.Role == "" {
@@ -1082,9 +1093,21 @@ func (s *Server) deleteToken(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
-	if t.UserID != p.User.ID && s.instanceLevel(p) < lvAdmin {
-		writeErr(w, 404, "not found")
-		return
+	if t.UserID != p.User.ID {
+		if s.instanceLevel(p) < lvAdmin {
+			writeErr(w, 404, "not found")
+			return
+		}
+		// 서버 관리자는 남의 토큰을 폐기할 수 있지만 서버 owner의 토큰은 owner만 폐기한다(canManageUser와 같은 경계).
+		owner, err := s.Store.GetUser(r.Context(), t.UserID)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			s.storeErr(w, err)
+			return
+		}
+		if owner != nil && !s.canManageUser(p, owner) {
+			writeErr(w, 403, "서버 owner의 토큰은 owner만 폐기할 수 있습니다")
+			return
+		}
 	}
 	if err := s.Store.DeleteAPIToken(r.Context(), t.ID); err != nil {
 		s.storeErr(w, err)

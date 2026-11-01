@@ -46,7 +46,7 @@ export function PublicNetworking({ svc, env, inst, view }: { svc: CanvasService;
             <div className="divide-y divide-gray-200 overflow-hidden rounded-lg border border-gray-200">
               {view.domains.map((d) => (
                 <DomainRow
-                  key={d.host}
+                  key={`${d.kind}:${d.host}`}
                   svc={svc}
                   env={env}
                   inst={inst}
@@ -87,7 +87,7 @@ export function PublicNetworking({ svc, env, inst, view }: { svc: CanvasService;
               )}
             </div>
           )}
-          {form && <DomainForm key={form} kind={form} svc={svc} env={env} detected={detected} servicePort={servicePort} baseDomain={baseDomain} onDone={() => setForm(null)} />}
+          {form && <DomainForm key={form} kind={form} svc={svc} env={env} detected={detected} servicePort={servicePort} baseDomain={baseDomain} existing={view.domains.map((d) => d.host)} onDone={() => setForm(null)} />}
           <NetworkingGuardrailNotice domains={guard.generatedDomains} tcp={guard.tcpProxy && !tcp.enabled} />
           {form === null && (
             <div className="flex flex-wrap gap-2">

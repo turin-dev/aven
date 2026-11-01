@@ -146,7 +146,7 @@ function PostgresPoolingSection({ svc, env }: { svc: CanvasService; env: Environ
           </Button>
         </div>
       ) : (
-        <PoolingOverview svc={svc} env={env} p={p} canEdit={canEdit} busy={busy} run={run} refresh={refresh} onRemove={remove} />
+        <PoolingOverview svc={svc} env={env} p={p} canEdit={canEdit} busy={busy} run={run} refresh={refresh} onRemove={remove} confirm={confirm} />
       )}
       {error ? <ErrorBox error={error} className="mt-3" /> : null}
     </Section>
@@ -162,7 +162,9 @@ function PoolingOverview({
   run,
   refresh,
   onRemove,
+  confirm,
 }: {
+  confirm: ReturnType<typeof useConfirm>["confirm"];
   svc: CanvasService;
   env: Environment;
   p: PostgresPooling;
@@ -184,14 +186,25 @@ function PoolingOverview({
   const dirty = curMode !== p.pool_mode || sizeText !== String(p.default_pool_size) || clientsText !== String(p.max_client_conn) ||
     preparedText !== (p.max_prepared_statements === null ? "" : String(p.max_prepared_statements));
   const digits = (v: string) => v.replace(/[^0-9]/g, "");
+  // 0 used to fall back silently to the old value; pool size and client limit must be at least 1.
+  const sizeOk = Number(sizeText) >= 1;
+  const clientsOk = Number(clientsText) >= 1;
 
   const save = () =>
+    confirm({
+      title: t("PgBouncer 설정 적용"),
+      message: t("PgBouncer를 새 설정으로 다시 배포합니다. 지금 PgBouncer에 연결된 클라이언트는 연결이 끊기고 다시 연결해야 합니다. 데이터베이스는 재시작하지 않습니다."),
+      confirmLabel: t("적용"),
+      run: () => doSave(),
+    });
+
+  const doSave = () =>
     run("save", async () => {
       const d = await postgresApi.setPooling(svc.id, env.id, {
         enabled: true,
         pool_mode: curMode,
-        default_pool_size: Number(sizeText) || p.default_pool_size,
-        max_client_conn: Number(clientsText) || p.max_client_conn,
+        default_pool_size: Number(sizeText),
+        max_client_conn: Number(clientsText),
         ...(preparedText === "" ? { reset_max_prepared_statements: true } : { max_prepared_statements: Number(preparedText) }),
       });
       setMode(null);
@@ -239,10 +252,10 @@ function PoolingOverview({
             </Select>
           </Field>
           <Field label={t("DEFAULT_POOL_SIZE · 서버 연결 수")}>
-            <Input mono inputMode="numeric" value={sizeText} onChange={(e) => setSize(digits(e.target.value))} disabled={!canEdit} />
+            <Input mono inputMode="numeric" value={sizeText} onChange={(e) => setSize(digits(e.target.value))} disabled={!canEdit} invalid={!sizeOk} />
           </Field>
           <Field label={t("MAX_CLIENT_CONN · 최대 클라이언트 연결")}>
-            <Input mono inputMode="numeric" value={clientsText} onChange={(e) => setClients(digits(e.target.value))} disabled={!canEdit} />
+            <Input mono inputMode="numeric" value={clientsText} onChange={(e) => setClients(digits(e.target.value))} disabled={!canEdit} invalid={!clientsOk} />
           </Field>
           <Field label={t("MAX_PREPARED_STATEMENTS · 0이면 끔")}>
             <Input mono inputMode="numeric" placeholder={t("기본값 (200)")} value={preparedText} onChange={(e) => setPrepared(digits(e.target.value))} disabled={!canEdit} />
@@ -252,7 +265,7 @@ function PoolingOverview({
           <p className="text-xs text-gray-500">
             {tr("서버 연결 수가 PostgreSQL {var}(기본 100)보다 넉넉히 작아야 마이그레이션·관리용 직접 연결을 쓸 수 있습니다. 바꾸면 PgBouncer만 다시 배포하고 데이터베이스는 재시작하지 않습니다.", { var: <span className="font-mono">max_connections</span> })}
           </p>
-          <Button size="sm" variant="primary" className="ml-auto" loading={busy === "save"} disabled={!dirty || deploying || !sizeText || !clientsText} onClick={save} {...lock(canEdit)}>
+          <Button size="sm" variant="primary" className="ml-auto" loading={busy === "save"} disabled={!dirty || deploying || !sizeOk || !clientsOk} onClick={save} {...lock(canEdit)}>
             {t("적용")}
           </Button>
         </div>

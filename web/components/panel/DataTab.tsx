@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
-import { createPortal } from "react-dom";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Lock, Plug, Unplug, X } from "lucide-react";
+import { Lock, Plug, Unplug } from "lucide-react";
 import { api, type CanvasService, type DatabaseKind, type Environment } from "@/lib/api";
 import { qk, useResolvedVariables } from "@/lib/queries";
-import { Button, CenterSpinner, IconButton, CopyField, EmptyState, ErrorBox, LABEL_CLS, Segmented, cx, useEscape } from "../ui";
+import { Button, CenterSpinner, CopyField, Dialog, EmptyState, ErrorBox, LABEL_CLS, Segmented, cx } from "../ui";
+import { MaskedField } from "./dataKit";
 import { DataBrowser } from "./DataBrowser";
 import { DbConfig, DbStats } from "./DbExtra";
 import { PostgresOps } from "./PostgresOps";
@@ -71,11 +71,12 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
   const [sub, setSub] = useState<Sub>("data");
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // Esc closes the connect dialog (and not the service panel behind it).
-  useEscape(() => setOpen(false), open);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const tcp = svc.instance.tcp_proxy;
   const v: Record<string, string> = Object.fromEntries(Object.entries(vars.data ?? {}).map(([k, r]) => [k, r.value]));
   const url = net === "private" ? v[spec.url] : v[spec.pub];
+  // The password variable is the 4th field for every engine; masking also catches user:password@ in URLs.
+  const password = v[spec.fields.find(([, k]) => /PASSWORD|SECRET/.test(k))?.[1] ?? ""];
 
   const enableTcp = async () => {
     setBusy(true);
@@ -136,12 +137,12 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
               )}
               <div>
                 <Label>{t("연결 URL ({name})", { name: net === "private" ? spec.url : spec.pub })}</Label>
-                {url ? <CopyField value={url} secret label={t("연결 URL")} /> : <div className="text-sm text-gray-500">{t("변수 {name}가 없습니다.", { name: net === "private" ? spec.url : spec.pub })}</div>}
+                {url ? <MaskedField value={url} secrets={[password]} label={t("연결 URL")} /> : <div className="text-sm text-gray-500">{t("변수 {name}가 없습니다.", { name: net === "private" ? spec.url : spec.pub })}</div>}
               </div>
               {url && (
                 <div>
                   <Label>{t("{client} 명령", { client: spec.client })}</Label>
-                  <CopyField value={spec.cli(url)} secret label={t("{client} 명령", { client: spec.client })} />
+                  <MaskedField value={spec.cli(url)} secrets={[password]} label={t("{client} 명령", { client: spec.client })} />
                 </div>
               )}
               {net === "private" ? (
@@ -194,16 +195,32 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
     ["stats", t("통계")],
     ["config", t("설정")],
   ];
+  // Tabs follow the WAI-ARIA pattern: one tab stop, arrow keys / Home / End move between tabs.
+  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
+    const n = subs.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    setSub(subs[to][0]);
+    tabRefs.current[to]?.focus();
+  };
   return (
     <div data-noscroll>
       <div className="flex items-center gap-1 border-b border-gray-200 pb-3">
         <div role="tablist" aria-label={t("데이터베이스 보기")} className="flex items-center gap-1">
-          {subs.map(([m, l]) => (
+          {subs.map(([m, l], i) => (
             <button
               key={m}
+              ref={(el) => {
+                tabRefs.current[i] = el;
+              }}
               type="button"
               role="tab"
+              id={`dbtab-${svc.id}-${m}`}
               aria-selected={sub === m}
+              aria-controls={`dbpanel-${svc.id}`}
+              tabIndex={sub === m ? 0 : -1}
+              onKeyDown={(e) => onTabKey(e, i)}
               onClick={() => setSub(m)}
               className={cx(
                 "shrink-0 cursor-pointer rounded-md px-2.5 py-1 text-[13px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500",
@@ -218,7 +235,7 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
           <Plug /> {t("연결")}
         </Button>
       </div>
-      <div className="pb-12">
+      <div className="pb-12" role="tabpanel" id={`dbpanel-${svc.id}`} aria-labelledby={`dbtab-${svc.id}-${sub}`}>
         {sub === "data" ? (
           <DataBrowser svc={svc} env={env} />
         ) : sub === "stats" ? (
@@ -231,23 +248,19 @@ export function DataTab({ svc, env }: { svc: CanvasService; env: Environment }) 
           </div>
         )}
       </div>
-      {open && createPortal(
-        <div
-          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/[.45] p-4 dark:bg-black/80"
-          onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}
-        >
-          <div role="dialog" aria-modal="true" aria-label={t("{name}에 연결", { name: svc.name })} className="relative max-h-[calc(100vh-2rem)] w-full max-w-[719px] animate-modal-scale-in overflow-y-auto rounded-lg bg-background p-6 dark:bg-secondaryBg">
-            <div className="flex items-center">
-              <h2 className="text-xl font-semibold">{t("{name}에 연결", { name: svc.name })}</h2>
-              <IconButton label={t("닫기")} onClick={() => setOpen(false)} className="ml-auto">
-                <X />
-              </IconButton>
-            </div>
-            <div className="mt-5">{connect}</div>
-          </div>
-        </div>,
-        document.body,
-      )}
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        title={t("{name}에 연결", { name: svc.name })}
+        wide
+        footer={
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            {t("닫기")}
+          </Button>
+        }
+      >
+        {connect}
+      </Dialog>
     </div>
   );
 }

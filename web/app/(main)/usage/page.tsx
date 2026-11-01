@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChartColumn, ChevronDown, Gauge } from "lucide-react";
-import type { UsageGroupBy, UsageTotals } from "@/lib/api";
+import type { UsageGroupBy, UsageSeriesPoint, UsageTotals } from "@/lib/api";
 import { useCaps, useProjectUsage, useWorkspaceUsage } from "@/lib/queries";
 import { useCtxHref } from "@/lib/nav";
 import { useWorkspace } from "@/lib/workspace";
@@ -45,6 +45,43 @@ const METRICS: { value: MetricKey; label: string; unit: string }[] = [
   { value: "net_egress_gb", label: t("송신"), unit: "GB" },
   { value: "disk_gb_hours", label: t("디스크"), unit: t("GB·시간") },
 ];
+
+/** Last day of the current UTC month (YYYY-MM-DD). */
+function monthEnd(): string {
+  const now = new Date();
+  return day(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0)));
+}
+
+/**
+ * One bar per UTC day from `from` to `to`, zero where the server has no row, so a short period does not
+ * render as a single bar across the whole chart and gaps stay visible.
+ */
+function dailyPoints(rows: UsageSeriesPoint[], metric: MetricKey, from: string, to: string): { t: number; v: number }[] {
+  const byDay = new Map<string, number>();
+  for (const r of rows) {
+    const k = r.t.slice(0, 10);
+    byDay.set(k, (byDay.get(k) ?? 0) + r[metric]);
+  }
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (isNaN(start) || isNaN(end) || end < start || end - start > 400 * 86400_000) {
+    return rows.map((r) => ({ t: Date.parse(r.t), v: r[metric] }));
+  }
+  const out: { t: number; v: number }[] = [];
+  for (let ms = start; ms <= end; ms += 86400_000) out.push({ t: ms, v: byDay.get(day(new Date(ms))) ?? 0 });
+  return out;
+}
+
+/** Linear month-end estimate from the cost so far in the current UTC month. */
+function monthEndProjection(soFar: number): number | null {
+  const now = new Date();
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
+  const elapsed = now.getTime() - start;
+  // Less than a day of data swings too much to extrapolate.
+  if (elapsed < 86400_000) return null;
+  return (soFar * (end - start)) / elapsed;
+}
 
 const num = (v: number) => (v === 0 ? "0" : v < 0.01 ? v.toFixed(4) : v < 10 ? v.toFixed(2) : v < 1000 ? v.toFixed(1) : Math.round(v).toLocaleString());
 const money = (v: number) => (v < 0.01 && v > 0 ? v.toFixed(4) : v.toFixed(2));
@@ -128,11 +165,22 @@ function UsageInner() {
   const hasCost = !!u?.totals.estimated_cost;
   const m = METRICS.find((x) => x.value === metric)!;
   const series = useMemo(
-    () => [{ name: m.label, color: SERIES_COLORS[0], points: (u?.series ?? []).map((p) => ({ t: Date.parse(p.t), v: p[metric] })) }],
-    [u, metric, m.label],
+    () => [{ name: m.label, color: SERIES_COLORS[0], points: dailyPoints(u?.series ?? [], metric, from, rk === "month" ? monthEnd() : to) }],
+    [u, metric, m.label, from, to, rk],
   );
   const alert = u?.usage_alert;
-  const pct = (used: number, lim?: number) => (lim ? Math.min(999, Math.round((used / lim) * 100)) : null);
+  const limit = u?.usage_limit;
+  const projected = rk === "month" && u?.totals.estimated_cost ? monthEndProjection(u.totals.estimated_cost.total) : null;
+  const meters: { label: string; used: number; lim?: number; kind: "alert" | "limit" }[] = u
+    ? [
+        { label: t("CPU 알림 기준"), used: u.totals.cpu_core_hours, lim: alert?.cpu_core_hours, kind: "alert" as const },
+        { label: t("메모리 알림 기준"), used: u.totals.memory_gb_hours, lim: alert?.memory_gb_hours, kind: "alert" as const },
+        { label: t("송신 알림 기준"), used: u.totals.net_egress_gb, lim: alert?.egress_gb, kind: "alert" as const },
+        { label: t("CPU 한도"), used: u.totals.cpu_core_hours, lim: limit?.cpu_core_hours, kind: "limit" as const },
+        { label: t("메모리 한도"), used: u.totals.memory_gb_hours, lim: limit?.memory_gb_hours, kind: "limit" as const },
+        { label: t("송신 한도"), used: u.totals.net_egress_gb, lim: limit?.egress_gb, kind: "limit" as const },
+      ].filter((x) => !!x.lim)
+    : [];
 
   const [detail, setDetail] = useState(false);
   const [openP, setOpenP] = useState<string | null>(null);
@@ -154,14 +202,18 @@ function UsageInner() {
         <div className="space-y-8 py-8">
           <div className="flex items-center">
             <h2 className="text-[17px] font-semibold leading-6">{t("{range} 사용량", { range: rangeLabel })}</h2>
-            <button type="button" onClick={() => setDetail((d) => !d)} className="ml-auto cursor-pointer text-sm font-medium text-pink-600 hover:underline">
-              {detail ? t("상세 숨기기") : t("상세 보기")}
+            <button type="button" aria-expanded={detail} onClick={() => setDetail((d) => !d)} className="ml-auto cursor-pointer text-sm font-medium text-pink-600 hover:underline">
+              {detail ? t("내역 숨기기") : t("내역 보기")}
             </button>
           </div>
           {ws.pid && <UsageLimitBanner pid={ws.pid} canAdmin={caps.canAdmin} />}
           <ErrorBox error={usage.error} />
           {!u ? (
-            usage.isPending && ws.pid ? <CenterSpinner /> : null
+            usage.isPending && ws.pid ? (
+              <CenterSpinner />
+            ) : !ws.pid && !ws.isPending ? (
+              <EmptyState icon={<ChartColumn className="size-5" />} title={t("프로젝트를 먼저 만드세요.")} />
+            ) : null
           ) : (
             <>
               <div className="grid gap-6 rounded-lg border border-gray-200 p-6 lg:grid-cols-2">
@@ -185,28 +237,43 @@ function UsageInner() {
                 </div>
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
-                    <Tile label={hasCost ? t("추정 비용") : "CPU"} value={hasCost ? `$ ${money(u.totals.estimated_cost!.total)}` : num(u.totals.cpu_core_hours)} />
-                    <Tile label={t("메모리")} value={num(u.totals.memory_gb_hours)} />
+                    {hasCost ? (
+                      <Tile
+                        label={t("추정 비용")}
+                        value={`$ ${money(u.totals.estimated_cost!.total)}`}
+                        sub={projected !== null ? t("이대로면 월말 약 ${amount}", { amount: money(projected) }) : `${from} ~ ${to}`}
+                      />
+                    ) : (
+                      <Tile label="CPU" value={num(u.totals.cpu_core_hours)} sub={t("코어·시간")} />
+                    )}
+                    <Tile label={t("메모리")} value={num(u.totals.memory_gb_hours)} sub={t("GB·시간")} />
                   </div>
-                  {[
-                    [t("CPU 알림 기준"), u.totals.cpu_core_hours, alert?.cpu_core_hours],
-                    [t("메모리 알림 기준"), u.totals.memory_gb_hours, alert?.memory_gb_hours],
-                    [t("송신 알림 기준"), u.totals.net_egress_gb, alert?.egress_gb],
-                  ].map(([l, used, lim]) =>
-                    lim ? (
-                      <div key={l as string}>
+                  {meters.map((x) => {
+                    const ratio = x.used / x.lim!;
+                    return (
+                      <div key={x.label}>
                         <div className="mb-1 flex justify-between text-xs">
-                          <span className="font-medium">{l as string}</span>
-                          <span className="tabular-nums text-gray-500">
-                            {num(used as number)} / {num(lim as number)}
+                          <span className="font-medium">{x.label}</span>
+                          <span className={cx("tabular-nums", ratio >= 1 ? "text-red-500" : "text-gray-500")}>
+                            {num(x.used)} / {num(x.lim!)} · {Math.round(ratio * 100)}%
                           </span>
                         </div>
-                        <div className="h-2 rounded-full bg-gray-100">
-                          <div className="h-full rounded-full bg-pink-500" style={{ width: `${Math.min(100, ((used as number) / (lim as number)) * 100)}%` }} />
+                        <div
+                          className="h-2 rounded-full bg-gray-100"
+                          role="meter"
+                          aria-label={x.label}
+                          aria-valuemin={0}
+                          aria-valuemax={x.lim}
+                          aria-valuenow={Math.min(x.used, x.lim!)}
+                        >
+                          <div
+                            className={cx("h-full rounded-full", ratio >= 1 ? "bg-red-500" : ratio >= 0.8 && x.kind === "limit" ? "bg-yellow-500" : "bg-pink-500")}
+                            style={{ width: `${Math.min(100, ratio * 100)}%` }}
+                          />
                         </div>
                       </div>
-                    ) : null,
-                  )}
+                    );
+                  })}
                   {caps.canAdmin && (
                     <Link
                       href={href("/settings/", { section: "usage" })}
@@ -224,15 +291,15 @@ function UsageInner() {
                 </div>
                 <div className="text-sm tabular-nums text-pink-600">{ws.detail?.name ?? t("프로젝트")} · {from} ~ {to} (UTC)</div>
               </div>
+              <Section
+                title={t("일별 사용량")}
+                aside={<Segmented size="sm" label={t("지표")} value={metric} onChange={setMetric} options={METRICS.map((x) => ({ value: x.value, label: x.label }))} />}
+              >
+                <LineChart series={series} bars format={num} height={220} emptyText={t("이 기간에 집계된 사용량이 없습니다")} />
+                <p className="mt-2 text-xs text-gray-500">{t("{unit} · 지표 점(7일 보관)을 매시 집계해 400일 동안 보관합니다.", { unit: m.unit })}</p>
+              </Section>
               {detail && (
                 <>
-                  <Section
-                    title={t("일별 사용량")}
-                    aside={<Segmented size="sm" label={t("지표")} value={metric} onChange={setMetric} options={METRICS.map((x) => ({ value: x.value, label: x.label }))} />}
-                  >
-                    <LineChart series={series} bars format={(v) => `${num(v)}`} height={220} emptyText={t("이 기간에 집계된 사용량이 없습니다")} />
-                    <p className="mt-2 text-xs text-gray-500">{t("{unit} · 지표 점(7일 보관)을 매시 집계해 400일 동안 보관합니다.", { unit: m.unit })}</p>
-                  </Section>
                   <Section
                     title={t("내역")}
                     aside={
@@ -272,7 +339,7 @@ function UsageInner() {
                       <button type="button" onClick={() => setOpenP((o) => (o === p.key ? null : p.key))} className="flex w-full cursor-pointer items-center px-4 py-3 text-left hover:bg-gray-100/50">
                         <span className="flex-1 truncate text-base font-medium">{p.name || p.key}</span>
                         <span className="mr-4 text-right">
-                          <span className="block text-xs text-gray-500">{p.estimated_cost ? t("현재 비용") : t("CPU 코어·시간")}</span>
+                          <span className="block text-xs text-gray-500">{p.estimated_cost ? t("추정 비용") : t("CPU 코어·시간")}</span>
                           <span className="text-base font-semibold tabular-nums">{p.estimated_cost ? `$${money(p.estimated_cost.total)}` : num(p.cpu_core_hours)}</span>
                         </span>
                         <ChevronDown className={cx("size-4 text-gray-500 transition-transform", openP === p.key && "rotate-180")} />

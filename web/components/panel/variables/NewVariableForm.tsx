@@ -2,10 +2,12 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, Link2 } from "lucide-react";
-import { parseDotenv } from "@/lib/format";
+import { parseEnvLoose, type DotenvError } from "@/lib/dotenv";
 import { t, tr } from "@/lib/i18n";
 import { Button, cx, useEscape } from "../../ui";
-import { REF_BUTTON_CLS, REF_POPUP_CLS, VAR_INPUT_CLS, VarInput, type Suggestion } from "../VarInput";
+import { REF_BUTTON_CLS, REF_POPUP_CLS, VAR_INPUT_CLS, VarInput, type Suggestion, type VarInputElement } from "../VarInput";
+import type { RefScope } from "@/lib/refs";
+import { RefCheck } from "./RefCheck";
 import { KEY_RE, KEY_RULE } from "./VariableRow";
 
 export type RefOption = { name: string; value: string; hint: string; icon?: ReactNode; exists?: boolean };
@@ -20,16 +22,19 @@ const MIN_QUERY = 5;
  */
 export function NewVariableForm({
   suggestions,
+  scope,
   refOptions,
   onAdd,
   onBulk,
   onCancel,
 }: {
   suggestions: Suggestion[];
+  scope: RefScope;
   refOptions: RefOption[];
   /** Adds one variable. The parent asks before overwriting an existing name. */
   onAdd: (key: string, value: string) => void;
-  onBulk: (pairs: [string, string][]) => void;
+  /** Several entries pasted at once (or one with a multi-line value): the parent shows a review step. */
+  onBulk: (pairs: [string, string][], errors: DotenvError[]) => void;
   onCancel: () => void;
 }) {
   const [k, setK] = useState("");
@@ -38,7 +43,7 @@ export function NewVariableForm({
   const [forced, setForced] = useState(false);
   const [active, setActive] = useState(0);
   const nameRef = useRef<HTMLInputElement>(null);
-  const valRef = useRef<HTMLInputElement>(null);
+  const valRef = useRef<VarInputElement>(null);
   const uid = useId();
   const key = k.trim();
   const keyErr = key === "" ? null : !KEY_RE.test(key) ? KEY_RULE : null;
@@ -122,16 +127,16 @@ export function NewVariableForm({
             onPaste={(e) => {
               const text = e.clipboardData.getData("text");
               if (!text.includes("=")) return;
-              const pairs = parseDotenv(text);
-              if (!pairs.length) return;
+              const { pairs, errors } = parseEnvLoose(text);
+              if (!pairs.length) return; // not .env text (a URL with "=", say): paste as usual
               e.preventDefault();
-              if (pairs.length === 1 && !text.trim().includes("\n")) {
+              if (pairs.length === 1 && !errors.length) {
                 setK(pairs[0][0]);
                 setV(pairs[0][1]);
                 requestAnimationFrame(() => valRef.current?.focus());
                 return;
               }
-              onBulk(pairs);
+              onBulk(pairs, errors);
             }}
           />
           <button
@@ -188,9 +193,13 @@ export function NewVariableForm({
         </div>
         <div className="w-full">
           <VarInput ref={valRef} refButton value={v} onChange={setV} suggestions={suggestions} placeholder="VALUE or ${{REF}}" ariaLabel={t("변수 값")} onEnter={submit} />
-          <p className="mt-2 hidden text-xs leading-[18px] text-gray-600 md:block">
-            {tr("{ref}를 입력하면 참조할 변수를 고를 수 있습니다", { ref: <span className="font-mono">{"${{"}</span> })}
-          </p>
+          {v.includes("${") ? (
+            <RefCheck value={v} name={key || undefined} scope={scope} />
+          ) : (
+            <p className="mt-2 hidden text-xs leading-[18px] text-gray-600 md:block">
+              {tr("{ref}를 입력하면 참조할 변수를 고를 수 있습니다", { ref: <span className="font-mono">{"${{"}</span> })}
+            </p>
+          )}
         </div>
         <div className="flex space-x-2">
           <Button type="submit" variant="primary" disabled={!key || !!keyErr} className="w-full md:max-w-max">

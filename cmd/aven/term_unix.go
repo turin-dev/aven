@@ -61,3 +61,23 @@ func watchResize(f func()) func() {
 	}()
 	return func() { signal.Stop(ch); close(done) }
 }
+
+// enableANSI: Unix terminals understand ANSI escapes as they are.
+func enableANSI(*os.File) bool { return true }
+
+// disableEcho turns off echo (line editing stays on) for password prompts. The returned function restores it.
+func disableEcho(f *os.File) (func(), error) {
+	fd := int(f.Fd())
+	old, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
+	if err != nil {
+		return nil, err
+	}
+	t := *old
+	t.Lflag &^= unix.ECHO
+	t.Lflag |= unix.ICANON | unix.ISIG
+	t.Iflag |= unix.ICRNL
+	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &t); err != nil {
+		return nil, err
+	}
+	return func() { unix.IoctlSetTermios(fd, ioctlWriteTermios, old) }, nil
+}

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+
+type BuildStep = NonNullable<ReturnType<typeof buildStep>>;
 import { useQueryClient } from "@tanstack/react-query";
 import { Moon, RefreshCw, X } from "lucide-react";
 import {
@@ -15,6 +17,7 @@ import {
 } from "@/lib/api";
 import { qk, useCaps, useDeployment } from "@/lib/queries";
 import { fmtDuration, fmtRelative, fmtTime, shortSha } from "@/lib/format";
+import { buildStep, stageTimes, type StageId } from "@/lib/logs";
 import { useLogStream, useParsedLines } from "@/lib/useLogStream";
 import type { DepTab } from "@/lib/nav";
 import type { ServiceActions } from "@/lib/useServiceActions";
@@ -50,14 +53,35 @@ function Info({ label, children }: { label: string; children: ReactNode }) {
 
 const BUILDER: Record<string, string> = { dockerfile: "Dockerfile", railpack: "Railpack", image: t("이미지") };
 
-function Details({ d, svc, env }: { d: Deployment; svc: CanvasService; env: Environment }) {
+function Details({ d, svc, env, times, step }: { d: Deployment; svc: CanvasService; env: Environment; times: Partial<Record<StageId, number>>; step: BuildStep | null }) {
   const running = !isTerminal(d.status);
+  const timeline = running || (d.status !== "skipped" && Object.keys(times).length > 0);
   return (
     <div className="h-full overflow-y-auto px-5 pb-12 pt-8 md:px-12" data-noscroll>
-      {running && (
-        <div className="mb-6 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 px-4 py-3.5">
-          <Stepper steps={stepsFor(svc.instance, d)} status={d.status} />
-        </div>
+      {timeline && (
+        <section aria-label={t("배포 단계")} className="mb-6 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3.5">
+          <div className="overflow-x-auto">
+            <Stepper steps={stepsFor(svc.instance, d)} status={d.status} times={times} end={d.finished_at} />
+          </div>
+          {d.status === "building" && step && (
+            <div className="mt-3 flex min-w-0 items-center gap-3 border-t border-gray-200 pt-3 text-xs" aria-live="polite">
+              <span className="shrink-0 tabular-nums text-gray-500">{t("빌드 단계 {n}/{of}", { n: step.n, of: step.of })}</span>
+              <span
+                className="h-1 w-24 shrink-0 overflow-hidden rounded-full bg-gray-200"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={step.of}
+                aria-valuenow={step.n}
+                aria-label={t("빌드 진행률")}
+              >
+                <span className="block h-full rounded-full bg-blue-500 transition-[width] motion-reduce:transition-none" style={{ width: `${Math.min(100, (step.n / Math.max(1, step.of)) * 100)}%` }} />
+              </span>
+              <span className="min-w-0 truncate font-mono text-gray-600" title={step.text}>
+                {step.text}
+              </span>
+            </div>
+          )}
+        </section>
       )}
       {d.error && (
         <div className="mb-6 rounded-lg border border-red-200 bg-red-100 px-4 py-3">
@@ -153,6 +177,8 @@ function DeployLogs({ d, svc, phase, filter }: { d: Deployment; svc: CanvasServi
       filter={filter}
       baseDate={d.started_at ?? d.created_at}
       showReplica
+      tools
+      downloadName={`${svc.name}-${d.commit_sha ? shortSha(d.commit_sha) : d.id}-deploy.log`}
       emptyText={d.status === "skipped" ? t("건너뛴 배포에는 로그가 없습니다.") : t("아직 출력된 로그가 없습니다.")}
       footer={
         ended ? (
@@ -233,8 +259,13 @@ export function DeploymentPanel({
     },
   });
   const { build, deploy } = useMemo(() => splitDeploymentLog(stream.lines), [stream.lines]);
+  // Stable rows: the ticker below re-renders every second while a deployment runs.
+  const buildLines: LogLine[] = useMemo(() => build.map((text) => ({ text })), [build]);
 
   const d = dep.data;
+  const base = d ? d.started_at ?? d.created_at : null;
+  const times = useMemo(() => (base ? stageTimes(stream.lines, new Date(base)) : {}), [stream.lines, base]);
+  const step = useMemo(() => (d?.status === "building" ? buildStep(build) : null), [build, d?.status]);
   const running = !!d && !isTerminal(d.status);
   useTicker(running);
 
@@ -361,15 +392,17 @@ export function DeploymentPanel({
             <span className="text-xs text-gray-500">{t("배포 정보를 불러오는 중…")}</span>
           </div>
         ) : tab === "details" ? (
-          <Details d={d} svc={svc} env={env} />
+          <Details d={d} svc={svc} env={env} times={times} step={step} />
         ) : tab === "build" ? (
           <LogTable
             className="h-full"
-            lines={build.map((text) => ({ text }))}
+            lines={buildLines}
             state={skipped ? undefined : stream.state}
             onReconnect={stream.reconnect}
             filter={filter}
             baseDate={d.started_at ?? d.created_at}
+            tools
+            downloadName={`${svc.name}-${d.commit_sha ? shortSha(d.commit_sha) : d.id}-build.log`}
             emptyText={skipped ? t("건너뛴 배포는 빌드하지 않았습니다.") : running ? t("빌드 로그를 기다리는 중…") : t("이 배포에는 빌드 로그가 없습니다.")}
           />
         ) : tab === "deploy" ? (

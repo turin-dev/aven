@@ -251,6 +251,7 @@ func (c *Collector) collect(ctx context.Context) error {
 	now := time.Now().Unix()
 	agg := map[string]*store.MetricRow{}
 	for _, s := range stats {
+		s = SanitizeStats(s)
 		id := byName[s.Name]
 		if id == "" {
 			continue
@@ -268,6 +269,7 @@ func (c *Collector) collect(ctx context.Context) error {
 		r.Replicas++
 	}
 	vols, _ := c.Store.ListVolumes(ctx)
+	var insertErr error
 	for id, r := range agg {
 		for _, v := range vols {
 			if v.InstanceID != nil && *v.InstanceID == id {
@@ -279,11 +281,12 @@ func (c *Collector) collect(ctx context.Context) error {
 				}
 			}
 		}
-		if err := c.Store.InsertMetrics(ctx, id, []store.MetricRow{*r}); err != nil {
-			return err
+		// 한 인스턴스의 저장 실패가 나머지 인스턴스의 점을 빠뜨리지 않게 계속하고 첫 오류만 알린다.
+		if err := c.Store.InsertMetrics(ctx, id, []store.MetricRow{*r}); err != nil && insertErr == nil {
+			insertErr = err
 		}
 	}
-	return nil
+	return insertErr
 }
 
 func (c *Collector) collectSource(ctx context.Context, src Source, byName map[string]string) ([]node.Stats, error) {

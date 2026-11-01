@@ -117,14 +117,21 @@ type deployResult struct {
 	Status store.DeployStatus `json:"status"`
 }
 
+const maxWebhookBody = 25 << 20
+
 func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 25<<20))
+	// 비밀이 없으면 본문(최대 25MB)을 읽기 전에 거절한다. GitHub payload 상한은 25MB다.
+	if s.GitHubSecret == "" {
+		writeErr(w, 403, "KEEL_GITHUB_WEBHOOK_SECRET is not configured")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))
 	if err != nil {
 		writeErr(w, 400, "read body")
 		return
 	}
-	if s.GitHubSecret == "" {
-		writeErr(w, 403, "KEEL_GITHUB_WEBHOOK_SECRET is not configured")
+	if len(body) > maxWebhookBody {
+		writeErr(w, http.StatusRequestEntityTooLarge, "payload too large")
 		return
 	}
 	if !VerifySignature(s.GitHubSecret, body, r.Header.Get("X-Hub-Signature-256")) {
@@ -201,12 +208,9 @@ func (s *Server) githubPush(ctx context.Context, w http.ResponseWriter, body []b
 			continue
 		}
 		o := deploy.EnqueueOpts{Trigger: "github", ChangedFiles: changed}
-		o.Commit = &nodeCommit{SHA: ev.After}
+		o.Commit = &nodeCommit{SHA: pushSHA(&ev)}
 		if ev.HeadCommit != nil {
 			o.Commit.Message, o.Commit.Author = firstLine(ev.HeadCommit.Message), ev.HeadCommit.Author.Name
-			if o.Commit.SHA == "" {
-				o.Commit.SHA = ev.HeadCommit.ID
-			}
 		}
 		switch {
 		case !watch.Match(in.WatchPaths, changed):
@@ -222,6 +226,18 @@ func (s *Server) githubPush(ctx context.Context, w http.ResponseWriter, body []b
 		out = append(out, deployResult{ID: d.ID, Status: d.Status})
 	}
 	writeJSON(w, 202, map[string]any{"deployments": out})
+}
+
+// pushSHA는 push가 가리키는 커밋이다. SHA는 git fetch/checkout 인자가 되므로 40자리 16진수만 쓴다
+// (아니면 비워 두고 브랜치 HEAD를 배포한다).
+func pushSHA(ev *pushEvent) string {
+	if fullSHARe.MatchString(ev.After) && strings.Trim(ev.After, "0") != "" {
+		return ev.After
+	}
+	if ev.HeadCommit != nil && fullSHARe.MatchString(ev.HeadCommit.ID) {
+		return ev.HeadCommit.ID
+	}
+	return ""
 }
 
 func (s *Server) previewEnvIDs(ctx context.Context) (map[string]bool, error) {

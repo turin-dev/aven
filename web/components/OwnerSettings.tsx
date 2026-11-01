@@ -175,7 +175,7 @@ function ServerCard({ data }: { data: OwnerOverview }) {
     <Card
       title={<span className="flex items-center gap-2"><Power className="size-4" />aven-server</span>}
       description={t("실행 정보와 주요 설정입니다. 비밀값은 설정 여부만 표시합니다.")}
-      action={<Button size="sm" variant="outline" disabled={!s.systemd} onClick={() => setRestarting(true)}><Power className="size-3.5" />{t("재시작")}</Button>}
+      action={<Button size="sm" variant="outline" disabled={!s.systemd} title={s.systemd ? undefined : t("systemd로 돌지 않아 여기서 재시작할 수 없습니다. 서버에서 직접 재시작하세요.")} onClick={() => setRestarting(true)}><Power className="size-3.5" />{t("재시작")}</Button>}
     >
       <dl className="divide-y divide-gray-200 rounded-lg border border-gray-200 px-4 tabular-nums">
         <Row label={t("버전")}>{s.version || t("개발 빌드")} <span className="text-gray-500">· {s.go_version}</span></Row>

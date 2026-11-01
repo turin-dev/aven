@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +115,102 @@ type Gateway struct {
 	ipLim   map[netip.Addr]*bucket
 	tunMu   sync.Mutex
 	tunnels map[string]int // peer → 열린 터널 수
+	active  map[*tunnel]struct{}
+}
+
+// tunnel은 열려 있는 터널 하나다. 설정이 바뀌면(노드 삭제, 인증서 폐기, export/import 변경) Apply가 다시 확인해
+// 더는 허용되지 않는 터널을 닫는다. mTLS 확인은 연결을 열 때 한 번뿐이라, 그러지 않으면 삭제된 노드가 이미 연 DB 연결 등이
+// 끝없이 남는다.
+type tunnel struct {
+	inbound bool
+	peer    string // 상대 노드
+	serial  string // 상대 인증서 serial(소문자 hex)
+	// inbound: 상대가 연 export(env/service)와 포트. outbound: 이 터널을 받은 로컬 import listener.
+	export string
+	port   int
+	local  *localListener
+	conns  []net.Conn
+}
+
+func (t *tunnel) close() {
+	for _, c := range t.conns {
+		c.Close()
+	}
+}
+
+// allowedLocked는 지금 설정에서 터널이 여전히 허용되는지다(g.mu를 쥔 채로 부른다).
+func (g *Gateway) allowedLocked(t *tunnel) bool {
+	if _, ok := g.peers[t.peer]; !ok || !g.serials[t.peer][t.serial] {
+		return false
+	}
+	if t.inbound {
+		e, ok := g.exports[t.export]
+		return ok && slices.Contains(e.Peers, t.peer) && slices.Contains(e.Ports, t.port)
+	}
+	if t.local == nil || g.locals[t.local.key] != t.local {
+		return false
+	}
+	t.local.mu.RLock()
+	defer t.local.mu.RUnlock()
+	return slices.Contains(t.local.im.Candidates(), t.peer)
+}
+
+// track은 터널을 기록한다. 기록하는 사이에 설정이 바뀌었을 수 있으므로 기록한 뒤 한 번 더 확인한다(ok=false면 이미 닫았다).
+func (g *Gateway) track(t *tunnel) (untrack func(), ok bool) {
+	g.tunMu.Lock()
+	if g.active == nil {
+		g.active = map[*tunnel]struct{}{}
+	}
+	g.active[t] = struct{}{}
+	g.tunMu.Unlock()
+	untrack = func() {
+		g.tunMu.Lock()
+		delete(g.active, t)
+		g.tunMu.Unlock()
+	}
+	g.mu.RLock()
+	ok = g.allowedLocked(t)
+	g.mu.RUnlock()
+	if !ok {
+		t.close()
+	}
+	return untrack, ok
+}
+
+// dropRevokedLocked는 지금 설정에서 허용되지 않는 터널을 닫는다(g.mu를 쥔 채로 부른다).
+func (g *Gateway) dropRevokedLocked() {
+	g.tunMu.Lock()
+	defer g.tunMu.Unlock()
+	for t := range g.active {
+		if !g.allowedLocked(t) {
+			g.log().Info("mesh: closing tunnel no longer allowed by the mesh config", "peer", t.peer, "inbound", t.inbound)
+			t.close()
+			delete(g.active, t)
+		}
+	}
+}
+
+// ActiveTunnels는 열려 있는 터널 수다(들어온 것과 나간 것 모두).
+func (g *Gateway) ActiveTunnels() int {
+	g.tunMu.Lock()
+	defer g.tunMu.Unlock()
+	return len(g.active)
+}
+
+// peerSerial은 mTLS 연결 상대 인증서의 serial(소문자 hex)이다.
+func peerSerial(c net.Conn) string {
+	if b, ok := c.(*bufConn); ok {
+		c = b.Conn
+	}
+	tc, ok := c.(*tls.Conn)
+	if !ok {
+		return ""
+	}
+	certs := tc.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return ""
+	}
+	return strings.ToLower(certs[0].SerialNumber.Text(16))
 }
 
 // bucket은 출발 IP 하나의 token bucket이다.
@@ -312,6 +409,12 @@ func (g *Gateway) Close() {
 	if g.ln != nil {
 		g.ln.Close()
 	}
+	g.tunMu.Lock()
+	for t := range g.active {
+		t.close()
+		delete(g.active, t)
+	}
+	g.tunMu.Unlock()
 	for k, l := range g.locals {
 		l.ln.Close()
 		delete(g.locals, k)
@@ -456,6 +559,11 @@ func (g *Gateway) handle(ctx context.Context, c *tls.Conn, release func()) {
 		return
 	}
 	defer up.Close()
+	untrack, ok := g.track(&tunnel{inbound: true, peer: peer, serial: peerSerial(c), export: h.Env + "/" + h.Service, port: h.Port, conns: []net.Conn{c, up}})
+	defer untrack()
+	if !ok {
+		return
+	}
 	if err := writeReply(c, Reply{OK: true, Node: g.NodeID}); err != nil {
 		return
 	}
@@ -668,6 +776,7 @@ func (g *Gateway) Apply(c Config, nets map[string]EnvNet, prefer map[string]int)
 			delete(g.locals, k)
 		}
 	}
+	g.dropRevokedLocked()
 	select {
 	case g.wake <- struct{}{}:
 	default:
@@ -690,6 +799,7 @@ func (g *Gateway) ensureLocal(k string, gw netip.Addr, prefer int) (*localListen
 	if err != nil {
 		return nil, err
 	}
+	l.key = k
 	g.locals[k] = l
 	go g.serveLocal(l)
 	return l, nil
@@ -715,6 +825,7 @@ func (g *Gateway) listenLocal(gw netip.Addr, prefer int) (*localListener, error)
 type localListener struct {
 	ln   net.Listener
 	addr netip.AddrPort
+	key  string // g.locals의 키(env/service/port[/6])
 
 	mu      sync.RWMutex
 	im      Import
@@ -770,11 +881,12 @@ func (g *Gateway) forward(l *localListener, c net.Conn) {
 	l.mu.RUnlock()
 	h := Header{V: 1, Op: "dial", Env: im.EnvID, Service: im.Service, Port: port}
 	var up net.Conn
+	var upNode string
 	var errs []string
 	for _, n := range g.Order(im.Candidates()) {
 		u, err := g.dialPeer(context.Background(), n, h)
 		if err == nil {
-			up = u
+			up, upNode = u, n
 			break
 		}
 		errs = append(errs, n+": "+err.Error())
@@ -787,6 +899,11 @@ func (g *Gateway) forward(l *localListener, c net.Conn) {
 		return
 	}
 	defer up.Close()
+	untrack, ok := g.track(&tunnel{peer: upNode, serial: peerSerial(up), local: l, conns: []net.Conn{c, up}})
+	defer untrack()
+	if !ok {
+		return
+	}
 	pipe(c, c, up)
 }
 

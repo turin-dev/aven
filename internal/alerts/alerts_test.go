@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -168,5 +169,66 @@ func TestSourcesValues(t *testing.T) {
 	in2 := &store.Instance{ServiceID: svc.ID, EnvironmentID: env.ID + "x"}
 	if _, ok := src.Value(ctx, "cpu_percent", in2); ok {
 		t.Error("value for an instance without samples")
+	}
+}
+
+func TestEvaluatorWorstValueAndNonFinite(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	p := &store.Project{Name: "acme"}
+	env, _ := st.CreateProject(ctx, p)
+	var ins []*store.Instance
+	for _, name := range []string{"a", "b", "c"} {
+		svc := &store.Service{ProjectID: p.ID, Name: name, SourceType: "image"}
+		st.CreateService(ctx, svc)
+		in := &store.Instance{ServiceID: svc.ID, EnvironmentID: env.ID}
+		st.CreateInstance(ctx, in)
+		ins = append(ins, in)
+	}
+	values := map[string]float64{ins[0].ID: 10, ins[1].ID: math.NaN(), ins[2].ID: 30}
+	e := &Evaluator{Store: st, Value: func(_ context.Context, _ string, in *store.Instance) (float64, bool) {
+		v, ok := values[in.ID]
+		return v, ok
+	}}
+	for _, tc := range []struct {
+		cmp  string
+		want float64
+	}{{">", 30}, {"<", 10}} {
+		rule := &store.AlertRule{ProjectID: p.ID, Metric: "cpu_percent", Comparator: tc.cmp, Threshold: 20, Enabled: true}
+		if err := st.CreateAlertRule(ctx, rule); err != nil {
+			t.Fatal(err)
+		}
+		e.Evaluate(ctx, rule)
+		r, _ := st.GetAlertRule(ctx, rule.ID)
+		if r.LastValue == nil || *r.LastValue != tc.want || r.LastState != store.AlertFiring {
+			t.Errorf("%s: %+v (value %v)", tc.cmp, r, r.LastValue)
+		}
+	}
+	// 값이 모두 NaN/Inf면 데이터 없음: 상태를 바꾸지 않는다
+	values = map[string]float64{ins[0].ID: math.Inf(1), ins[1].ID: math.NaN()}
+	rule := &store.AlertRule{ProjectID: p.ID, Metric: "cpu_percent", Comparator: ">", Threshold: 1, Enabled: true}
+	st.CreateAlertRule(ctx, rule)
+	e.Evaluate(ctx, rule)
+	if r, _ := st.GetAlertRule(ctx, rule.ID); r.LastValue != nil || r.LastState == store.AlertFiring || r.LastEvaluatedAt == nil {
+		t.Errorf("non-finite: %+v", r)
+	}
+}
+
+func TestDescribeAndMessage(t *testing.T) {
+	r := &store.AlertRule{Metric: "cpu_percent", Comparator: ">", Threshold: 80.5, ForSeconds: 60}
+	if got := Describe(r); got != "cpu_percent > 80.5 (60초 동안)" {
+		t.Errorf("Describe = %q", got)
+	}
+	r.ForSeconds = 0
+	if got := Message(r, "alert.firing", 91.234, "web (production)"); got != "알림 발생: cpu_percent > 80.5 — web (production) (현재 91.23, 기준 cpu_percent > 80.5)" {
+		t.Errorf("Message = %q", got)
+	}
+	r.Name = "CPU 높음"
+	if got := Message(r, "alert.resolved", 1, ""); got != "알림 해제: CPU 높음 (현재 1.00, 기준 cpu_percent > 80.5)" {
+		t.Errorf("Message = %q", got)
 	}
 }

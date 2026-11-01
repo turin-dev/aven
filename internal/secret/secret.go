@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -46,16 +47,10 @@ func LoadOrCreate(path string) (*Box, error) {
 		if _, err := rand.Read(key); err != nil {
 			return nil, err
 		}
-		enc := []byte(base64.StdEncoding.EncodeToString(key) + "\n")
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := f.Write(enc); err != nil {
-			f.Close()
-			return nil, err
-		}
-		if err := f.Close(); err != nil {
+		if err := writeKeyFile(path, key); err != nil {
+			if errors.Is(err, os.ErrExist) { // 다른 프로세스가 먼저 만들었다
+				return LoadOrCreate(path)
+			}
 			return nil, err
 		}
 		return NewBox(key)
@@ -75,10 +70,73 @@ func LoadOrCreate(path string) (*Box, error) {
 	return NewBox(key)
 }
 
-// Seal은 평문을 암호화한다. 이미 암호화된 값이나 빈 문자열은 그대로 둔다.
+// writeKeyFile은 키를 임시 파일에 쓰고 fsync한 뒤 path로 hard link한다. 중간에 죽어도 path에는 완전한 키만 생기고
+// (빈 파일이나 잘린 키 때문에 다음 시작이 실패하지 않는다), 이미 있으면 덮어쓰지 않고 os.ErrExist를 낸다.
+func writeKeyFile(path string, key []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(base64.StdEncoding.EncodeToString(key) + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tmp, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return err
+		}
+		// hard link를 못 쓰는 파일 시스템: O_EXCL로 직접 쓴다(예전 방식).
+		return writeKeyFileExcl(path, key)
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return nil
+}
+
+func writeKeyFileExcl(path string, key []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(base64.StdEncoding.EncodeToString(key) + "\n"); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(path)
+		return err
+	}
+	return f.Close()
+}
+
+// Seal은 평문을 암호화한다. 이 키로 복호화되는 암호문이나 빈 문자열은 그대로 둔다.
+// 접두어만 같고 복호화되지 않는 값(우연히 "enc:v1:"로 시작하는 비밀번호 등)은 평문으로 보고 암호화한다.
+// 예전에는 접두어만 보고 그대로 저장해서, 다시 읽을 때 복호화 에러가 나고 그 값이 평문으로 남았다.
 func (b *Box) Seal(plain string) string {
-	if plain == "" || strings.HasPrefix(plain, Prefix) {
+	if plain == "" {
 		return plain
+	}
+	if strings.HasPrefix(plain, Prefix) {
+		if _, _, err := b.Open(plain); err == nil {
+			return plain
+		}
 	}
 	nonce := make([]byte, b.gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {

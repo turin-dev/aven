@@ -49,13 +49,7 @@ func loadDevConfig() (*devLocalConfig, error) {
 	return c, nil
 }
 
-func (c *devLocalConfig) save() error {
-	if err := os.MkdirAll(filepath.Dir(devConfigPath()), 0o700); err != nil {
-		return err
-	}
-	b, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(devConfigPath(), b, 0o600)
-}
+func (c *devLocalConfig) save() error { return writeFileAtomic(devConfigPath(), c) }
 
 // applyDevOverride는 o의 --command/--dir/--port를 ov에 반영한다. 빈 값(포트 0)은 그 항목을 지운다.
 func applyDevOverride(ov *devServiceOverride, o *devOptions) {

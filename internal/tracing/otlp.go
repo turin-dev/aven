@@ -767,18 +767,14 @@ func jsonAnyValue(raw json.RawMessage, depth int) (any, error) {
 
 // ---------------- helpers ----------------
 
-func truncate(s string) string {
-	if len(s) > maxValueBytes {
-		return s[:maxValueBytes]
-	}
-	return s
-}
+func truncate(s string) string { return truncateUTF8(s, maxValueBytes) }
 
 // appendAttr는 상한(128)까지만 속성을 더한다. 넘친 것은 dropped에 센다.
 func appendAttr(attrs []keyValue, kv keyValue, dropped *int) []keyValue {
 	if kv.Key == "" {
 		return attrs
 	}
+	kv.Key = truncateUTF8(kv.Key, maxKeyBytes)
 	if len(attrs) >= maxAttributes {
 		if dropped != nil {
 			*dropped++

@@ -43,6 +43,8 @@ function matchesKey(combo: string, event: KeyboardEvent): boolean {
     if (!(key === "/" && event.code === "Slash" && event.shiftKey && !mods.has("shift"))) return false;
   }
   if (key === "/") return event.key === "/" || event.code === "Slash";
+  // Shift+digit produces "!", ")" … (and other characters on non-US layouts); the physical key is what matters.
+  if (/^[0-9]$/.test(key)) return event.code === `Digit${key}` || event.key === key;
   if (key === "arrowup") return event.key === "ArrowUp";
   if (key === "arrowdown") return event.key === "ArrowDown";
   if (key === "arrowright") return event.key === "ArrowRight";

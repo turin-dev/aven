@@ -10,6 +10,7 @@ import type { DetectedPort, DetectedPortSource, PortDetection } from "@/lib/api"
 import { t } from "@/lib/i18n";
 import { Menu, MenuItem, cx } from "../../ui";
 import { INPUT, SR_LABEL } from "./parts";
+import { isPort } from "./validate";
 
 const SOURCE: Record<DetectedPortSource | "service", string> = {
   service: t("서비스 포트"),
@@ -48,6 +49,14 @@ export function PortPicker({
   const detection = useContext(PortDetectionContext);
   const options: { port: number; source: DetectedPortSource | "service" }[] = [...detected];
   if (servicePort && !options.some((d) => d.port === servicePort)) options.unshift({ port: servicePort, source: "service" });
+  const typed = value.text;
+  const bad = value.mode === "custom" && typed !== "" && !isPort(typed);
+  // Ports were read from running containers and the chosen one isn't among the listening sockets: say so, the proxy
+  // would answer 502. Only when detection really ran (proc) and found something, so idle services get no false alarm.
+  const listening = detected.filter((d) => d.source === "listening").map((d) => d.port);
+  const loopback = isPort(typed) && detected.some((d) => d.port === Number(typed) && d.source === "loopback");
+  const notListening = !bad && isPort(typed) && !loopback && detection?.source === "proc" && listening.length > 0 && !listening.includes(Number(typed));
+  const hintId = `port-hint-${id}`;
   return (
     <>
       <Menu
@@ -112,13 +121,24 @@ export function PortPicker({
                 min={1}
                 max={65535}
                 value={value.text}
+                aria-invalid={bad || undefined}
+                aria-describedby={hintId}
                 onChange={(e) => onChange({ mode: "custom", text: e.target.value.replace(/[^0-9]/g, "").slice(0, 5) })}
-                className={INPUT}
+                className={cx(INPUT, bad && "!border-red-500")}
               />
             </div>
           </div>
         </>
       )}
+      <div id={hintId} aria-live="polite">
+        {bad && <p className="text-xs leading-[18px] text-red-600">{t("포트는 1부터 65535 사이의 숫자입니다")}</p>}
+        {loopback && <p className="text-xs leading-[18px] text-yellow-600">{t("127.0.0.1에서만 listen하고 있어 프록시가 닿지 않습니다. 앱이 0.0.0.0이나 ::에서 listen하도록 바꾸세요.")}</p>}
+        {notListening && (
+          <p className="text-xs leading-[18px] text-yellow-600">
+            {t("실행 중인 컨테이너에서 {port} 포트를 listen하는 프로세스를 찾지 못했습니다. 지금 listen 중인 포트: {ports}", { port: typed, ports: listening.join(", ") })}
+          </p>
+        )}
+      </div>
     </>
   );
 }

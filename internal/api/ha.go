@@ -1706,6 +1706,10 @@ func (s *Server) haCheckPostgres(ctx context.Context, hc *haCluster, rt *haRunti
 	if in := hc.insts[cl.PrimaryServiceID]; in.Status == store.InstDeploying {
 		return // 배포 중(사용자 재배포 등)에는 응답이 없어도 기다린다
 	}
+	if why := ha.FailoverBlocked(states, cl.PrimaryServiceID); why != "" {
+		s.haNoteOnce(ctx, cl, why) // 주 노드가 둘이 되지 않게 승격하지 않는다(ha.FailoverBlocked)
+		return
+	}
 	target, ok := ha.PickPromotion(states, cl.PrimaryServiceID)
 	if !ok {
 		s.haNoteOnce(ctx, cl, "주 노드가 응답하지 않지만 승격할 수 있는 정상 replica가 없습니다")

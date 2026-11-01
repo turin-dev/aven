@@ -8,12 +8,12 @@ import { BarChart2, Bell, Check, ChevronDown, Layout, LayoutGrid, LogOut, MoreHo
 import { api, type Workspace } from "@/lib/api";
 import { useMe } from "@/lib/queries";
 import { withCtx } from "@/lib/nav";
+import { rememberSelection } from "@/lib/workspaceSelection";
 import { Avatar, AvenMark, Menu, MenuItem, cx } from "@/components/ui";
 import { NewWorkspaceDialog } from "@/components/Shell";
 import { t, tr } from "@/lib/i18n";
 import { writeStorage } from "@/lib/legacyStorage";
 
-const WORKSPACE_KEY = "aven.workspace.v1";
 const DIVIDER = "border-t border-black/[0.08] dark:border-white/[0.08]";
 const ITEM = "flex items-center gap-3 px-3 py-2 h-9 rounded-lg text-sm overflow-hidden whitespace-nowrap";
 const IDLE = "text-neutral-secondary hover:bg-black/[0.02] dark:hover:bg-white/[0.03]";
@@ -26,7 +26,7 @@ export function workspaceKind(w: Pick<Workspace, "default" | "personal">) {
 export function useSwitchWorkspace() {
   const router = useRouter();
   return (id: string) => {
-    writeStorage(WORKSPACE_KEY, id);
+    rememberSelection("workspace", id);
     router.push(withCtx("/projects/", { ws: id }));
   };
 }

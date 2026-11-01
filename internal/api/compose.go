@@ -94,6 +94,21 @@ func parseDotenv(s string) (map[string]string, error) {
 	return dotenv.UnmarshalWithLookup(s, nil)
 }
 
+// fileInRoot는 symlink를 따라간 file의 실제 위치가 root(저장소) 안인지다. clone한 저장소는 사용자가 정하므로
+// 서버의 다른 파일을 가리키는 symlink를 담을 수 있다.
+func fileInRoot(root, file string) bool {
+	rr, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	rf, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rr, rf)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
 var composeFileNames = []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 
 // loadCompose는 요청을 읽어 계획(Plan)을 만든다. 호출한 쪽이 cleanup을 불러야 한다.
@@ -204,6 +219,10 @@ func (s *Server) loadCompose(ctx context.Context, p *store.Project, env *store.E
 			file = filepath.Join(root, clean)
 			rel = strings.TrimPrefix(clean, "/")
 		}
+		if !fileInRoot(root, file) { // 저장소 밖을 가리키는 symlink(예: /etc/keel/aven.env)는 읽지 않는다
+			l.cleanup()
+			return nil, failf(400, "cannot read %s in the repository", rel)
+		}
 		b, err := os.ReadFile(file)
 		if err != nil {
 			l.cleanup()
@@ -217,10 +236,13 @@ func (s *Server) loadCompose(ctx context.Context, p *store.Project, env *store.E
 		in.RepoURL, in.Branch, in.RepoDir, in.ComposeDir = repo, branch, root, filepath.Dir(file)
 		// 저장소의 .env는 기본값으로 쓰고, 요청의 env가 덮는다.
 		in.Vars = map[string]string{}
-		if eb, err := os.ReadFile(filepath.Join(in.ComposeDir, ".env")); err == nil {
-			if m, err := parseDotenv(string(eb)); err == nil {
-				for k, v := range m {
-					in.Vars[k] = v
+		// 저장소 밖을 가리키는 .env(symlink)는 무시한다.
+		if envPath := filepath.Join(in.ComposeDir, ".env"); fileInRoot(root, envPath) {
+			if eb, err := os.ReadFile(envPath); err == nil {
+				if m, err := parseDotenv(string(eb)); err == nil {
+					for k, v := range m {
+						in.Vars[k] = v
+					}
 				}
 			}
 		}
@@ -326,7 +348,14 @@ func (s *Server) loadCompose(ctx context.Context, p *store.Project, env *store.E
 		}
 	}
 	remote := !store.IsLocalNode(l.nodeID)
+	// bind mount는 호스트 파일(docker.sock, /etc 등)을 컨테이너에 연다: 서버 관리자만 가져올 수 있다.
+	// HTTP 요청은 항상 principal이 있다(authz). nil은 서버 내부 호출뿐이다.
+	p0, _ := ctx.Value(principalKey{}).(*principal)
+	hostAdmin := p0 == nil || s.instanceLevel(p0) >= lvAdmin
 	for _, sp := range plan.Services {
+		if len(sp.BindMounts) > 0 && !hostAdmin {
+			plan.AddIssue(compose.Issue{Severity: "error", Service: sp.ComposeName, Code: "bind_mount_admin", Message: "bind mounts expose host files to the container; only a server admin can import them"})
+		}
 		if remote {
 			if len(sp.BindMounts) > 0 {
 				plan.AddIssue(compose.Issue{Severity: "error", Service: sp.ComposeName, Code: "bind_mount_remote", Message: "bind mounts only work on the local node; choose the local node or use named volumes"})
@@ -341,6 +370,16 @@ func (s *Server) loadCompose(ctx context.Context, p *store.Project, env *store.E
 			}
 			sp.Aliases = keep
 			sp.Spec.Compose.Aliases = keep
+		}
+	}
+	// bind mount는 컨테이너에 호스트 경로(/, docker.sock 등)를 붙인다. 프로젝트 member가 서버를 장악하지 못하게
+	// 서버 관리자(인스턴스 admin)만 쓸 수 있다. 저장된 원본에서 allow_bind_mounts를 물려받아도 마찬가지다.
+	if pr, _ := ctx.Value(principalKey{}).(*principal); pr != nil && s.instanceLevel(pr) < lvAdmin {
+		for _, sp := range plan.Services {
+			if len(sp.BindMounts) > 0 {
+				plan.AddIssue(compose.Issue{Severity: "error", Service: sp.ComposeName, Code: "bind_mount_forbidden",
+					Message: "bind mounts expose host paths to the container; only a server administrator can deploy them. Use a named volume"})
+			}
 		}
 	}
 	// 같은 환경의 다른 서비스와 이름/별칭이 겹치면 DNS가 섞인다.

@@ -35,7 +35,7 @@ func TestDataRowEditPostgres(t *testing.T) {
 	if code != 200 || out["affected"] != float64(1) {
 		t.Fatalf("update: %d %v", code, out)
 	}
-	want := `WITH r AS (UPDATE "app"."users" SET "name" = E'O''Brien; DROP TABLE users' WHERE "id" = E'7' RETURNING 1) SELECT count(*) AS affected FROM r;` + "\n"
+	want := "BEGIN;\n" + `WITH r AS (UPDATE "app"."users" SET "name" = E'O''Brien; DROP TABLE users' WHERE "id" = E'7' RETURNING 1) SELECT CASE WHEN count(*) <= 1 THEN count(*) ELSE ('refusing to change ' || count(*) || ' rows: the primary key matched more than one row')::bigint END AS affected FROM r;` + "\nCOMMIT;\n"
 	if got := string(df.run.last().Stdin); got != want {
 		t.Errorf("update sql %q", got)
 	}

@@ -13,7 +13,30 @@ import (
 )
 
 func validMountPath(p string) bool {
-	return strings.HasPrefix(p, "/") && path.Clean(p) == p && p != "/" && !strings.ContainsAny(p, ",:\n")
+	if !strings.HasPrefix(p, "/") || path.Clean(p) != p || p == "/" || len(p) > 4096 || strings.ContainsAny(p, ",:") {
+		return false
+	}
+	for _, c := range p {
+		if c < ' ' || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+// mountPathTaken은 인스턴스에 다른 볼륨(except 제외)이 이미 mountPath에 붙어 있는지다.
+// 같은 경로에 볼륨 두 개를 붙이면 컨테이너를 만들 때 Docker가 거부해 배포가 실패한다.
+func (s *Server) mountPathTaken(ctx context.Context, instanceID, mountPath, except string) (bool, error) {
+	vols, err := s.Store.ListVolumesByInstance(ctx, instanceID)
+	if err != nil {
+		return false, err
+	}
+	for _, v := range vols {
+		if v.ID != except && v.MountPath == mountPath {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 const multiNodeVolumeErr = "this service is placed on several nodes; volumes need a single node (reduce placement to one node first)"
@@ -55,12 +78,12 @@ func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, multiNodeVolumeErr)
 		return
 	}
-	existing, _ := s.Store.ListVolumesByInstance(ctx, inst.ID)
-	for _, v := range existing {
-		if v.MountPath == in.MountPath {
-			writeErr(w, 409, "a volume is already mounted at "+in.MountPath)
-			return
-		}
+	if taken, err := s.mountPathTaken(ctx, inst.ID, in.MountPath, ""); err != nil {
+		s.storeErr(w, err)
+		return
+	} else if taken {
+		writeErr(w, 409, "a volume is already mounted at "+in.MountPath)
+		return
 	}
 	name := volumeName(svc.Name, in.MountPath)
 	if in.Name != nil && strings.TrimSpace(*in.Name) != "" {
@@ -132,6 +155,15 @@ func (s *Server) updateVolume(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		v.InstanceID = id
+	}
+	if v.InstanceID != nil {
+		if taken, err := s.mountPathTaken(ctx, *v.InstanceID, v.MountPath, v.ID); err != nil {
+			s.storeErr(w, err)
+			return
+		} else if taken {
+			writeErr(w, 409, "a volume is already mounted at "+v.MountPath)
+			return
+		}
 	}
 	limitChanged := false
 	if b, ok := raw["size_limit_mb"]; ok {

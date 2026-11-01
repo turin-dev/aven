@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -63,15 +64,27 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "selfhost" {
 		os.Exit(selfhost.Main(os.Args[2:]))
 	}
-	listen := flag.String("listen", env("LISTEN", "[::1]:7070"), "API/UI listen address")
+	listen := flag.String("listen", env("LISTEN", "[::1]:7070"), "API/UI listen address (AVEN_LISTEN)")
 	dataDir := flag.String("data", env("DATA", compat.DefaultDataDir()), "data directory (AVEN_DATA)")
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: aven-server [-listen addr] [-data dir]\n       aven-server selfhost ...\n\nConfiguration comes from AVEN_* environment variables (KEEL_* still work; see deploy/aven.env.example).\n\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("aven-server", version)
+		return
+	}
 
 	logLevel := slog.LevelInfo
 	if compat.Env("DEBUG") != "" {
 		logLevel = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	if flag.NArg() > 0 {
+		log.Warn("ignoring unexpected arguments (flags go before them)", "args", flag.Args())
+	}
 
 	if err := run(log, *listen, *dataDir); err != nil {
 		log.Error("fatal", "err", err)
@@ -79,49 +92,104 @@ func main() {
 	}
 }
 
-func run(log *slog.Logger, listen, dataDir string) error {
+// Shutdown timing: requests get drainTimeout to finish; then the contexts of the remaining ones (log
+// streams, agent and shell WebSockets) are cancelled and they get streamTimeout to end before the
+// connections are closed. Background loops then get loopTimeout before the database is closed.
+var (
+	drainTimeout  = 3 * time.Second
+	streamTimeout = 5 * time.Second
+	loopTimeout   = 10 * time.Second
+)
+
+// checkEnv validates settings that would otherwise fail late (after Docker and the proxy were touched).
+func checkEnv(listen string) error {
+	if len(compat.Env("ADMIN_PASSWORD")) < 8 {
+		return errors.New(compat.Describe("ADMIN_PASSWORD") + " must be set to at least 8 characters (see deploy/aven.env.example)")
+	}
+	if strings.TrimSpace(listen) == "" {
+		return errors.New("the listen address is empty (set -listen or AVEN_LISTEN, e.g. [::1]:7070)")
+	}
+	if _, _, err := net.SplitHostPort(listen); err != nil {
+		return fmt.Errorf("listen address %q: %v (set -listen or AVEN_LISTEN, e.g. [::1]:7070)", listen, err)
+	}
+	if (compat.Env("TLS_CERT") == "") != (compat.Env("TLS_KEY") == "") {
+		return errors.New(compat.Describe("TLS_CERT") + " and " + compat.Describe("TLS_KEY") + " must be set together")
+	}
+	if _, err := parsePrefixes(compat.Env("TRUSTED_PROXIES")); err != nil {
+		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
+	}
+	return nil
+}
+
+func run(log *slog.Logger, listen, dataDir string) (err error) {
+	if err := checkEnv(listen); err != nil {
+		return err
+	}
 	password := compat.Env("ADMIN_PASSWORD")
-	if len(password) < 8 {
-		return errors.New(compat.Describe("ADMIN_PASSWORD") + "(8자 이상)가 필요합니다")
-	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return err
+		return fmt.Errorf("data directory %s: %w (set -data or AVEN_DATA)", dataDir, err)
 	}
-	st, err := store.Open(compat.DBPath(dataDir))
+	dbPath := compat.DBPath(dataDir)
+	st, err := store.Open(dbPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("open database %s: %w", dbPath, err)
 	}
-	defer st.Close()
+	defer func() {
+		if cerr := st.Close(); cerr != nil {
+			log.Warn("close database", "err", cerr)
+		} else {
+			log.Info("database closed")
+		}
+	}()
 	box, err := secret.LoadOrCreate(filepath.Join(dataDir, "master.key"))
 	if err != nil {
-		return err
+		return fmt.Errorf("master key: %w", err)
 	}
 	st.SetSecretBox(box)
 	if err := st.EncryptLegacySecrets(context.Background()); err != nil {
-		return err
+		return fmt.Errorf("encrypt legacy secrets: %w", err)
 	}
 	key, err := sessionKey(filepath.Join(dataDir, "session.key"))
 	if err != nil {
-		return err
+		return fmt.Errorf("session key: %w", err)
 	}
 	logs, err := logbook.NewRegistry(filepath.Join(dataDir, "logs"))
 	if err != nil {
-		return err
+		return fmt.Errorf("log directory: %w", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	// sigCtx ends on SIGINT/SIGTERM. ctx is the lifetime of background work: during startup a signal
+	// cancels it right away; once serving, it is cancelled only after the HTTP servers have drained.
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+	ctx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	stopEarly := context.AfterFunc(sigCtx, cancelRun)
+	defer stopEarly()
+	// Background loops are tracked so the database is closed only after they returned.
+	var bg sync.WaitGroup
+	defer func() {
+		cancelRun()
+		if !waitTimeout(&bg, loopTimeout) {
+			log.Warn("background tasks did not stop in time; closing the database anyway", "timeout", loopTimeout)
+		}
+	}()
+	// reqCtx is the base context of every HTTP request; cancelling it ends long-lived streams on shutdown.
+	reqCtx, cancelRequests := context.WithCancel(context.Background())
+	defer cancelRequests()
+	baseCtx := func(net.Listener) context.Context { return reqCtx }
+	var servers []*http.Server
 	proxyTraceToken, err := getTracingProxyToken(st)
 	if err != nil {
-		return err
+		return fmt.Errorf("tracing token: %w", err)
 	}
 
 	docker := &node.Docker{}
 	if err := docker.Ping(ctx); err != nil {
-		return err
+		return fmt.Errorf("docker is not reachable: %w (is the Docker daemon running, and may this user use its socket?)", err)
 	}
 	if err := docker.EnsureNetwork(ctx); err != nil {
-		return err
+		return fmt.Errorf("docker network %s: %w", node.NetworkName, err)
 	}
 	caddy := proxy.New(proxy.Config{
 		HTTPPort:  envInt("HTTP_PORT", 80),
@@ -135,7 +203,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		OTLPEndpoint: otlpEndpoint(), TraceToken: proxyTraceToken,
 	})
 	if err := caddy.EnsureRunning(ctx, docker.ActiveBridge(ctx)); err != nil {
-		return err
+		return fmt.Errorf("start the proxy: %w (ports AVEN_HTTP_PORT/AVEN_HTTPS_PORT, default 80/443, must be free)", err)
 	}
 	// aven 밖의 upstream(다른 compose의 컨테이너 등): 허용 목록과 keel-proxy가 붙을 네트워크.
 	externalUps := proxy.ParseList(compat.Env("EXTERNAL_UPSTREAMS"))
@@ -254,7 +322,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		mgr.SyncDomainIPv6Async()            // 도메인별 IPv6 주소(재부팅이나 agent 교체 뒤 다시 붙인다)
 	}
 	if err := mgr.Init(ctx); err != nil {
-		return err
+		return fmt.Errorf("initialize deployments: %w", err)
 	}
 	// 노드 간 사설 네트워킹: AVEN_PRIVATE_ADDRESS(사설 IP):AVEN_MESH_PORT에서만 mTLS로 listen한다(AVEN_MESH=off로 끈다).
 	if err := mgr.StartLocalMesh(ctx); err != nil {
@@ -262,28 +330,28 @@ func run(log *slog.Logger, listen, dataDir string) error {
 	} else if mgr.LocalMesh != nil {
 		log.Info("mesh gateway enabled", "listen", mgr.LocalMesh.Listen)
 	}
-	go mgr.ReconcileLoop(ctx, 30*time.Second)
-	go mgr.EgressLoop(ctx, 30*time.Second)  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
-	go mgr.DomainIPv6Loop(ctx, time.Minute) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
+	bg.Go(func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
+	bg.Go(func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
+	bg.Go(func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
 	if !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)
 	}
-	go mgr.WatchCrashes(ctx)
-	go mgr.CronLoop(ctx)
-	go mgr.ImageUpdateLoop(ctx)
+	bg.Go(func() { mgr.WatchCrashes(ctx) })
+	bg.Go(func() { mgr.CronLoop(ctx) })
+	bg.Go(func() { mgr.ImageUpdateLoop(ctx) })
 	// wake handler: keel-proxy와 같이 쓰는 볼륨의 unix socket에서만 listen한다(외부에 열지 않음).
 	if wl, err := listenWake(ctx, docker, caddy); err != nil {
 		log.Warn("wake handler disabled (sleeping services cannot wake)", "err", err)
 	} else {
 		mgr.Cfg.WakeAddr = proxy.WakeDial
-		ws := &http.Server{Handler: mgr.WakeHandler(), ReadHeaderTimeout: 10 * time.Second}
+		ws := &http.Server{Handler: mgr.WakeHandler(), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		servers = append(servers, ws)
 		go ws.Serve(wl)
-		go func() { <-ctx.Done(); ws.Close() }()
 		log.Info("wake handler listening", "socket", proxy.WakeSocket)
 	}
-	go mgr.SleepLoop(ctx) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
-	go caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add)
+	bg.Go(func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
+	bg.Go(func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
 	collector := &metrics.Collector{Store: st, Docker: docker, Log: log, DataDir: dataDir, Events: bus, RemoteNodes: func(ctx context.Context) []metrics.NodeSource {
 		var out []metrics.NodeSource
 		for _, id := range mgr.OnlineRemoteNodeIDs(ctx) {
@@ -301,14 +369,14 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		}
 		return out
 	}}
-	go collector.Run(ctx)
+	bg.Go(func() { collector.Run(ctx) })
 	// 지표 알림 규칙(30초마다)과 시간별 사용량 집계(매시, 놓친 시간은 보관 중인 지표로 채운다).
 	sources := &alerts.Sources{Store: st, HTTP: mgr.HTTPLogs.Window, Restarts: mgr.InstanceRestarts, VolumeSize: collector.VolumeSize}
-	go (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx)
+	bg.Go(func() { (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx) })
 	// 수평 자동 확장(30초마다, 최근 2분 지표 평균으로 HPA 방식 계산).
-	go mgr.AutoscaleLoop(ctx)
-	go (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx)
-	go func() {
+	bg.Go(func() { mgr.AutoscaleLoop(ctx) })
+	bg.Go(func() { (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx) })
+	bg.Go(func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
@@ -322,7 +390,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 			case <-t.C:
 			}
 		}
-	}()
+	})
 
 	hostname, _ := os.Hostname()
 	traceReceiver := &tracing.Receiver{Store: st, ProxyToken: proxyTraceToken, Log: log}
@@ -337,13 +405,10 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		Notifier:    notifier, Pricing: pricing,
 		Traces: traceReceiver,
 	}
-	go tracing.RetentionLoop(ctx, st, traceRetention(log), log)
-	trusted, err := parsePrefixes(compat.Env("TRUSTED_PROXIES"))
-	if err != nil {
-		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
-	}
+	bg.Go(func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
+	trusted, _ := parsePrefixes(compat.Env("TRUSTED_PROXIES")) // checked by checkEnv
 	srv.TrustedProxies = trusted
-	go srv.RunHA(ctx) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
+	bg.Go(func() { srv.RunHA(ctx) }) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
 	// 공개 도메인 상태 확인(DNS 분류, Cloudflare/터널 감지, 소유 확인, 인증서): 60초마다, 검증된 도메인은 최대 10분까지 간격을 늘린다.
 	domainChecker := &netcheck.Checker{Store: st, Targets: srv.NetCheckTargets, CheckCerts: true, Log: log}
 	// 확인 전 신규 도메인이 검증되면 라우트를 다시 보내 ACME 보류(on-demand)를 풀고 관리 정책으로 옮긴다(원격 노드 포함).
@@ -356,7 +421,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		}()
 	}
 	srv.SetNetCheck(domainChecker)
-	go domainChecker.Run(ctx)
+	bg.Go(func() { domainChecker.Run(ctx) })
 	// 옛 Bearer 비밀키 agent는 기본 허용(첫 인증서 연결 때 자동 업그레이드).
 	srv.CA = agentCA
 	srv.DisableLegacyAgents = compat.Env("AGENT_LEGACY_BEARER") == "off"
@@ -373,12 +438,12 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		log.Warn("self project", "err", err)
 	}
 	handler := srv.Handler()
-	go srv.SandboxLoop(ctx)
-	go srv.SelfUpdateLoop(ctx) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
-	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	bg.Go(func() { srv.SandboxLoop(ctx) })
+	bg.Go(func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
+	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 	// OTLP 수신기(OTLP/HTTP + h2c OTLP/gRPC). 컨테이너가 host-gateway로 닿아야 하므로 기본은 모든 주소다.
 	// 요청마다 trace 토큰을 확인한다. 바깥에 열고 싶지 않으면 AVEN_OTLP_LISTEN을 docker bridge 주소로 좁히거나 off로 끈다.
-	traceServer := &http.Server{Handler: traceReceiver, ReadHeaderTimeout: 10 * time.Second}
+	traceServer := &http.Server{Handler: traceReceiver, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 	traceServer.Protocols = new(http.Protocols)
 	traceServer.Protocols.SetHTTP1(true)
 	traceServer.Protocols.SetUnencryptedHTTP2(true)
@@ -387,6 +452,7 @@ func run(log *slog.Logger, listen, dataDir string) error {
 			log.Error("OTLP receiver disabled", "addr", addr, "err", err)
 		} else {
 			log.Info("OTLP receiver listening", "addr", traceListener.Addr().String())
+			servers = append(servers, traceServer)
 			go func() {
 				if err := traceServer.Serve(traceListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					log.Error("OTLP receiver stopped", "err", err)
@@ -410,14 +476,9 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		} else {
 			log.Warn(compat.Describe("LISTEN_UNIX") + " without " + compat.Describe("GATEWAY_SECRET_FILE") + ": every peer that can reach the socket is trusted for X-Forwarded-* headers")
 		}
-		us := &http.Server{Handler: api.ViaGateway(gwSecret, handler), ReadHeaderTimeout: 10 * time.Second}
+		us := &http.Server{Handler: api.ViaGateway(gwSecret, handler), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		servers = append(servers, us)
 		go us.Serve(ul)
-		go func() {
-			<-ctx.Done()
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			us.Shutdown(shutdown)
-		}()
 		log.Info("aven-server listening (trusted gateway socket)", "socket", sock)
 	}
 	if selfListenPath != "" {
@@ -425,46 +486,88 @@ func run(log *slog.Logger, listen, dataDir string) error {
 		if err != nil {
 			return fmt.Errorf("self route socket: %w", err)
 		}
-		ss := &http.Server{Handler: api.ViaGateway(selfSecret, handler), ReadHeaderTimeout: 10 * time.Second}
+		ss := &http.Server{Handler: api.ViaGateway(selfSecret, handler), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		servers = append(servers, ss)
 		go ss.Serve(sl)
-		go func() {
-			<-ctx.Done()
-			shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			ss.Shutdown(shutdown)
-		}()
 		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "socket", selfListenPath)
 	}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
-		return err
+		shutdownServers(log, servers, cancelRequests)
+		return fmt.Errorf("listen on %s: %w (set -listen or AVEN_LISTEN)", listen, err)
 	}
 	// 원격 agent의 enroll/connect는 TLS가 필요하다. 직접 TLS로 열거나(AVEN_TLS_CERT/AVEN_TLS_KEY),
 	// TLS를 끝내는 reverse proxy 뒤라면 AVEN_TRUSTED_PROXIES로 그 proxy만 믿는다.
 	certFile, keyFile := compat.Env("TLS_CERT"), compat.Env("TLS_KEY")
-	if (certFile == "") != (keyFile == "") {
-		return errors.New(compat.Describe("TLS_CERT") + " and " + compat.Describe("TLS_KEY") + " must be set together")
-	}
 	if certFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			return fmt.Errorf("load TLS certificate: %w", err)
+			ln.Close()
+			shutdownServers(log, servers, cancelRequests)
+			return fmt.Errorf("load TLS certificate (AVEN_TLS_CERT/AVEN_TLS_KEY): %w", err)
 		}
 		hs.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 		ln = tls.NewListener(ln, hs.TLSConfig)
 	}
 	log.Info("aven-server listening", "addr", ln.Addr().String(), "version", version, "tls", certFile != "", "trusted_proxies", len(trusted))
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		hs.Shutdown(shutdown)
-		traceServer.Shutdown(shutdown)
-	}()
-	if err := hs.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
+	servers = append([]*http.Server{hs}, servers...)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- hs.Serve(ln) }()
+	// From here on a signal no longer cancels ctx directly: shutdown runs in order below.
+	stopEarly()
+	select {
+	case <-sigCtx.Done():
+		log.Info("shutting down: no new connections, draining requests")
+	case <-ctx.Done(): // the signal arrived just before stopEarly
+		log.Info("shutting down: no new connections, draining requests")
+	case err = <-serveErr:
+		log.Error("API server stopped", "err", err)
 	}
-	return nil
+	stopSignals() // a second Ctrl+C now kills the process the default way
+	shutdownServers(log, servers, cancelRequests)
+	log.Info("stopping background tasks")
+	// The deferred functions cancel ctx, wait for the background loops and close the database.
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	return err
+}
+
+// shutdownServers stops every server: no new connections, drainTimeout for running requests, then the
+// request contexts are cancelled so streams end, then whatever is left is closed.
+func shutdownServers(log *slog.Logger, servers []*http.Server, cancelRequests context.CancelFunc) {
+	var wg sync.WaitGroup
+	for _, s := range servers {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+			err := s.Shutdown(ctx)
+			cancel()
+			if err == nil {
+				return
+			}
+			cancelRequests() // log streams and WebSockets end with their request context
+			ctx, cancel = context.WithTimeout(context.Background(), streamTimeout)
+			defer cancel()
+			if err := s.Shutdown(ctx); err != nil {
+				log.Warn("closing connections that did not finish", "err", err)
+				s.Close()
+			}
+		})
+	}
+	wg.Wait()
+	cancelRequests() // hijacked connections (WebSockets) are not tracked by Shutdown
+}
+
+// waitTimeout waits for wg, at most d. It reports whether wg finished.
+func waitTimeout(wg *sync.WaitGroup, d time.Duration) bool {
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }
 
 // parsePrefixes는 쉼표로 구분한 IP/CIDR 목록을 읽는다(단일 IP는 /32, /128).

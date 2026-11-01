@@ -14,6 +14,7 @@ import { useKeyboardShortcuts } from "./KeyboardShortcuts";
 import { RegistryHint } from "./panel/SettingsTab";
 import { TemplateInputsForm, inputErrorsFrom, inputValues, validateInputs } from "./TemplateParts";
 import { Button, ErrorBox, IconButton, Spinner, cx, useEscape } from "./ui";
+import { fuzzyMatch } from "./canvas/geometry";
 import { t } from "@/lib/i18n";
 
 type Entry = {
@@ -37,8 +38,8 @@ type PickedRepo = { url: string; name: string; branch: string };
 /** Create options whose source can't be verified against an approved GitHub organization (deployment source guardrail). */
 const UNVERIFIED_SOURCES = new Set(["function", "template", "image", "compose"]);
 
-function templateMatch(q: string, tp: Template) {
-  return match(q, tp.name, tp.key, tp.description, tp.category, ...tp.tags, ...tp.services.map((s) => s.name));
+function templateRank(q: string, tp: Template) {
+  return rank(q, tp.name, tp.key, tp.description, tp.category, ...tp.tags, ...tp.services.map((s) => s.name));
 }
 
 const DBS: { kind: DatabaseKind; label: string; desc: string }[] = [
@@ -70,9 +71,47 @@ const PLACEHOLDER: Record<NewView, string> = {
   volume: t("볼륨을 연결할 서비스 검색"),
 };
 
-function match(q: string, ...parts: (string | undefined)[]) {
+/**
+ * Relevance of an entry: fuzzy on the label (so "pgsql" finds PostgreSQL), plain substring on the other fields
+ * (descriptions and keyword lists are long enough that a subsequence would match almost anything). null = no match.
+ */
+function rank(q: string, label: string, ...parts: (string | undefined)[]): number | null {
   const needle = q.trim().toLowerCase();
-  return !needle || parts.some((p) => p?.toLowerCase().includes(needle));
+  if (!needle) return 0;
+  const m = fuzzyMatch(needle, label);
+  if (m) return m.score;
+  return parts.some((p) => p?.toLowerCase().includes(needle)) ? 300 : null;
+}
+function match(q: string, label: string | undefined, ...parts: (string | undefined)[]) {
+  return rank(q, label ?? "", ...parts) !== null;
+}
+/** Sorts by relevance (best first), keeping the original order among equals and when the query is empty. */
+function byRank<T>(q: string, list: T[], score: (x: T) => number | null): T[] {
+  if (!q.trim()) return list;
+  return list
+    .map((x, i) => ({ x, i, s: score(x) }))
+    .filter((e): e is { x: T; i: number; s: number } => e.s !== null)
+    .sort((a, b) => b.s - a.s || a.i - b.i)
+    .map((e) => e.x);
+}
+
+/** Label with the characters that matched the query emphasised. */
+function Highlight({ text, q }: { text: string; q: string }) {
+  const hits = q.trim() ? new Set(fuzzyMatch(q, text)?.hits ?? []) : null;
+  if (!hits?.size) return <>{text}</>;
+  return (
+    <>
+      {[...text].map((ch, i) =>
+        hits.has(i) ? (
+          <mark key={i} className="bg-transparent font-semibold text-foreground">
+            {ch}
+          </mark>
+        ) : (
+          <span key={i}>{ch}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 function repoOk(url: string) {
@@ -239,11 +278,15 @@ export function CreatePalette({
         { id: "volume", label: t("볼륨"), desc: t("서비스에 영구 디스크를 연결합니다"), icon: <HardDrive className="size-[18px] text-gray-600" />, view: "volume", keywords: "volume disk 볼륨 디스크" },
       ];
       // 배포 출처 guardrail: 출처를 GitHub 조직으로 확인할 수 없는 항목은 숨긴다(서버도 403).
-      const top = root.filter((e) => !(sourcesRestricted && UNVERIFIED_SOURCES.has(e.id)) && match(q, e.label, e.desc, e.keywords));
+      const top = byRank(
+        q,
+        root.filter((e) => !(sourcesRestricted && UNVERIFIED_SOURCES.has(e.id))),
+        (e) => rank(q, e.label, e.desc, e.keywords),
+      );
       if (!q.trim()) return top;
-      const dbs = DBS.filter((d) => match(q, d.label, d.kind)).map((d) => dbEntry(d, t("데이터베이스")));
-      const tpls = (sourcesRestricted ? [] : (templates.data ?? []))
-        .filter((tp) => templateMatch(q, tp))
+      const dbs = byRank(q, DBS, (d) => rank(q, d.label, d.kind)).map((d) => dbEntry(d, t("데이터베이스")));
+      const tpls = byRank(q, sourcesRestricted ? [] : (templates.data ?? []), (tp) => templateRank(q, tp))
+        .slice(0, 8)
         .map<Entry>((tp) => ({
           id: `tpl-${tp.key}`,
           label: tp.name,
@@ -255,10 +298,9 @@ export function CreatePalette({
         }));
       return [...top, ...dbs, ...tpls];
     }
-    if (view === "database") return DBS.filter((d) => match(q, d.label, d.kind)).map((d) => dbEntry(d));
+    if (view === "database") return byRank(q, DBS, (d) => rank(q, d.label, d.kind)).map((d) => dbEntry(d));
     if (view === "template")
-      return (templates.data ?? [])
-        .filter((tp) => templateMatch(q, tp))
+      return byRank(q, templates.data ?? [], (tp) => templateRank(q, tp))
         .map((tp) => ({
           id: `tpl-${tp.key}`,
           label: tp.name,
@@ -304,8 +346,7 @@ export function CreatePalette({
       }
       const typed = q.trim();
       const key = repoOk(typed) ? repoKey(typed) : "";
-      const list = (repos.data ?? [])
-        .filter((r) => (key && r.full_name.toLowerCase() === key) || match(typed, r.full_name))
+      const list = byRank(typed, repos.data ?? [], (r) => (key && r.full_name.toLowerCase() === key ? 5000 : rank(typed, r.full_name)))
         .map<Entry>((r: GithubRepo) => ({
           id: `repo-${r.full_name}`,
           label: r.full_name,
@@ -326,8 +367,7 @@ export function CreatePalette({
     }
     if (view === "volume") {
       if (!volTarget)
-        return services
-          .filter((s) => match(q, s.name))
+        return byRank(q, services, (s) => rank(q, s.name))
           .map((s) => ({
             id: `vol-${s.id}`,
             label: s.name,
@@ -389,12 +429,23 @@ export function CreatePalette({
   }, [idx]);
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowDown") {
+    const n = entries.length;
+    if (e.key === "ArrowDown" || (e.ctrlKey && e.key === "n")) {
+      // Wraps around at the ends, like most command palettes.
       e.preventDefault();
-      setActive((a) => Math.min(entries.length - 1, a + 1));
-    } else if (e.key === "ArrowUp") {
+      if (n) setActive((idx + 1) % n);
+    } else if (e.key === "ArrowUp" || (e.ctrlKey && e.key === "p")) {
       e.preventDefault();
-      setActive((a) => Math.max(0, a - 1));
+      if (n) setActive((idx - 1 + n) % n);
+    } else if (e.key === "PageDown") {
+      e.preventDefault();
+      setActive(Math.min(n - 1, idx + 5));
+    } else if (e.key === "PageUp") {
+      e.preventDefault();
+      setActive(Math.max(0, idx - 5));
+    } else if ((e.key === "Home" || e.key === "End") && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      setActive(e.key === "Home" ? 0 : Math.max(0, n - 1));
     } else if (e.key === "ArrowRight" && (entries[idx]?.view || entries[idx]?.repo)) {
       e.preventDefault();
       choose(entries[idx]);
@@ -561,7 +612,12 @@ export function CreatePalette({
                     )}
                   >
                     <span className="flex size-4 shrink-0 items-center justify-center text-lg text-current [&_svg]:size-4">{e.icon}</span>
-                    <span className={cx("min-w-0 truncate", view === "image" && "font-mono")}>{e.label}</span>
+                    <span className={cx("min-w-0 truncate", view === "image" && "font-mono")}>
+                      <Highlight text={e.label} q={picked || volTarget ? "" : q} />
+                      {e.desc && view !== "image" && (
+                        <span className={cx("ml-2 text-xs", i === idx ? "text-gray-500" : "text-gray-400")}>{e.desc}</span>
+                      )}
+                    </span>
                     <span className="flex items-center gap-2">
                       {busy === e.id ? (
                         <Spinner />

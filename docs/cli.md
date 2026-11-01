@@ -12,15 +12,31 @@ aven-server publishes the CLI itself: the dashboard's CLI page (`/cli/`, rail ic
 
 ## Auth and config
 
-- `aven login [--email you@example.com] <url>` logs in and stores the session cookie. The password comes from `AVEN_PASSWORD` or a prompt; `--email` (or `AVEN_EMAIL`) selects a user account, without it the built-in owner account is used (password = `AVEN_ADMIN_PASSWORD`). When the account has 2FA the CLI asks for the code (or reads `AVEN_TOTP`; a recovery code also works). If `AVEN_TOKEN` is set, every request uses `Authorization: Bearer $AVEN_TOKEN` instead (the stored cookie is ignored); this accepts both the legacy `AVEN_API_TOKEN` and scoped `keel_…` API tokens.
+- `aven login [--email you@example.com] <url>` logs in and stores the session cookie. The password comes from `AVEN_PASSWORD` or a prompt; `--email` (or `AVEN_EMAIL`) selects a user account, without it the built-in owner account is used (password = `AVEN_ADMIN_PASSWORD`). When the account has 2FA the CLI asks for the code (or reads `AVEN_TOTP`; a recovery code also works). If `AVEN_TOKEN` is set, every request uses `Authorization: Bearer $KEEL_TOKEN` instead (the stored cookie is ignored); this accepts both the legacy `AVEN_API_TOKEN` and scoped `keel_…` API tokens.
 - When SAML SSO is enforced for the account's email domain, `aven login` with a password fails with `this account must sign in with SAML SSO`: sign in through the dashboard's SSO button, create an API token in settings and use `AVEN_TOKEN=<token> aven login <url>`.
-- `aven tokens [list]`, `aven tokens create --name <n> [--workspace <id> | --instance | --project <name|id> [--environment <name|id>]] [--role admin|member|viewer] [--expires-days n]` (prints the token once on stdout), `aven tokens revoke <id>`. `--environment` without `--project` uses the linked project. Token management needs a session or the legacy `AVEN_API_TOKEN`; a scoped token cannot create tokens.
+- `aven tokens [list] [--json]`, `aven tokens create --name <n> [--workspace <id> | --instance | --project <name|id> [--environment <name|id>]] [--role admin|member|viewer] [--expires-days n]` (prints the token once on stdout), `aven tokens revoke <id>`. `--environment` without `--project` uses the linked project. Token management needs a session or the legacy `AVEN_API_TOKEN`; a scoped token cannot create tokens.
 - Sessions created before v1.5 (HMAC cookies) are no longer valid: run `aven login` again.
 - Passkeys work only in the dashboard; for an account whose only second factor is a passkey, `aven login` asks for a recovery code instead. When the workspace requires 2FA and the account has none yet, `aven login` warns and other commands fail with `this workspace requires two-factor authentication …` until it is set up in the dashboard (Account → Security). API tokens (`AVEN_TOKEN`) are not affected.
-- `AVEN_URL` overrides the stored server URL.
-- Config file: `<user config dir>/keel/config.json` (mode 0600), e.g. `~/.config/keel/config.json` on Linux, `%AppData%\aven\config.json` on Windows. It holds the URL, the session cookie and the directory links.
+- `AVEN_URL` overrides the stored server URL for one command; it is never written to the config file (only `aven login` changes the stored URL). Login URLs must not contain credentials or a query.
+- Config file: `<user config dir>/aven/config.json`: `~/.config/aven/config.json` on Linux (or `$XDG_CONFIG_HOME/aven`), `~/Library/Application Support/aven/config.json` on macOS, `%AppData%\aven\config.json` on Windows. `AVEN_CONFIG_DIR` overrides the directory (handy in CI). It holds the URL, the session cookie and the directory links; `dev.json` and `sandboxes.json` live next to it. Files are written atomically (temporary file + rename) with mode 0600, and an existing file with looser permissions is tightened on the next save. A config left by the keel CLI (`<user config dir>/keel/config.json`) is read until the next save. A damaged file is reported on stderr instead of looking like a logged-out CLI.
+- Tokens never go on the command line: `AVEN_TOKEN` comes from the environment and is not stored; `aven login` with `AVEN_TOKEN` (or the legacy `KEEL_TOKEN`) saves only the URL. Passwords are read from `AVEN_PASSWORD` or a prompt without echo (termios on Unix, console mode on Windows; Ctrl+C restores the terminal).
 - A directory link is project + environment + (optional) service. Commands look for a link in the current directory and its parents.
-- `aven logout` ends the stored session on the server and clears it locally (it does not unset `AVEN_TOKEN`). `aven whoami` prints the user, email, instance role, server and auth method (plus the token's scope/role for scoped tokens).
+- `aven logout` ends the stored session on the server and clears it locally (it does not unset `AVEN_TOKEN`). `aven whoami [--json]` prints the user, email, instance role, server and auth method (plus the token's scope/role for scoped tokens).
+
+## Help, output and exit codes
+
+- `aven help` lists every command by area; `aven help <command>` or `aven <command> --help` shows that command's usage, aliases, examples and target flags. A bad flag prints the same help. Unknown commands exit 2 with a suggestion (`unknown command "lgos"; did you mean "logs"?`).
+- **Colors** are used only on a terminal. `NO_COLOR` (any value) turns them off, `TERM=dumb` too; `FORCE_COLOR=1` or `CLICOLOR_FORCE=1` forces them on pipes. On Windows the console's VT mode is enabled for them.
+- **JSON.** `--json` prints machine-readable output for `status`, `whoami`, `version`, `link`, `environment list`, `service list`, `tokens list`, `variables`, `up` (the deployment; no log output), `logs` (newline-delimited) and the commands listed in the table. Messages and hints go to stderr, data to stdout.
+- **Errors** start with `aven:` on stderr and often end with a `hint:` line: 401 → log in again, 403 → role/token scope, 404 → check the link, 5xx → retry; network errors name the server (connection refused, DNS, TLS).
+- **Exit codes:** `0` success, `1` error (API error, failed deployment, …), `2` usage error (unknown command or flag, missing argument; `config plan --detailed-exit-code` also uses 2 for pending changes), `130` interrupted with Ctrl+C. `aven run`/`aven shell`/`aven ssh`/`aven connect` pass through the child's code.
+- **Shell completion:** `aven completion bash|zsh|fish|powershell` prints a script that completes commands, aliases, subcommands and common flags:
+  ```sh
+  source <(aven completion bash)                               # ~/.bashrc
+  aven completion zsh > "${fpath[1]}/_aven"                     # zsh
+  aven completion fish > ~/.config/fish/completions/aven.fish  # fish
+  aven completion powershell | Out-String | Invoke-Expression  # $PROFILE
+  ```
 
 ## Targeting
 
@@ -33,8 +49,8 @@ Most service commands take `-s/--service <name|id>` and `-e/--environment <name|
 | Command | What it does |
 | --- | --- |
 | `aven init <name> [--workspace id] [--description t]` | Create a project and link this directory to its default environment |
-| `aven link [-p project] [-e env] [-s service]` | Link this directory (long forms `--project/--environment/--service`). With one service it is picked automatically; with several and no `-s`, the link has no service until `aven service use` |
-| `aven status` | Linked project/environment/service, instance status, latest deployment, replicas, domains, TCP proxy, pending changes |
+| `aven link [-p project] [-e env] [-s service] [--json]` | Link this directory (long forms `--project/--environment/--service`). Without `-p` and with several projects it asks on a terminal (numbered list; fails with the project names otherwise). A project name used in several workspaces must be given by ID. With one service it is picked automatically; with several and no `-s` it asks on a terminal (`0` = no service), otherwise the link has no service until `aven service use` |
+| `aven status [--json]` | Linked project/environment/service, instance status, latest deployment, replicas, domains, TCP proxy, pending changes (colored on a terminal). `--json` prints `{project, environment, service, instance, deployment}` with the API field names |
 | `aven config import [--format ts\|json\|yaml] [--file f] [--include-variables] [--force] [--json] [-e env]` | Write the linked environment as `.keel/aven.ts` (alias `pull`; also writes `.keel/keel-iac.mjs`, its types and a `package.json`). Variables become `preserve()`; `--include-variables` inlines non-sealed values (warns) |
 | `aven config plan [--file f] [-e env] [--json] [--show-values] [--detailed-exit-code] [--out plan.json]` | Evaluate the nearest `.keel/aven.ts` (or `aven.json`/`aven.yaml`) and print what would change (alias `preview`). `--detailed-exit-code`: exit 2 when changes are pending |
 | `aven config apply [--file f] [-e env] [-y] [--confirm-destructive] [--deploy] [--json] [--plan plan.json]` | Plan, confirm and apply as staged changes (`--deploy` also deploys). Non-interactive destructive applies need `--confirm-destructive`; `--plan` applies a pinned `plan --out` file without re-evaluating |
@@ -42,18 +58,18 @@ Most service commands take `-s/--service <name|id>` and `-e/--environment <name|
 | `aven github status\|connect\|disconnect\|repos [q]\|webhook <repo>...` | GitHub connection (OAuth App, see api-v1 "GitHub"): `connect` prints/opens `<url>/api/github/oauth/start` for a browser logged in as workspace admin; `repos` lists repositories the account sees; `webhook` creates or updates aven's webhook on each repository (owner/name or URL) |
 | `aven import dokploy export-compose --dir DIR [proj/name ...]` | Write stacks that stay outside aven (default: blocked/needs-decision ones) in Dokploy's layout (`<appName>/code/docker-compose.yml`, `.env` 0600, `../files/...`) to run with `docker compose -p <appName>` |
 | `aven config partials [list] \| release <partial> \| transfer <from> <to> [--resource ADDR]... [--dry-run] [-y] [--json] [--base-config-etag t]` | Inspect or change named partial ownership (metadata only) |
-| `aven environment [list]` | List environments (`*` = linked). Alias `aven env` |
+| `aven environment [list] [--json]` | List environments (`*` = linked). Alias `aven env` |
 | `aven environment new <name> [--copy-from env]` | Create an environment (optionally copying settings/variables) and switch to it |
 | `aven environment use <name>` | Switch the linked environment |
 | `aven environment delete <name> [-y]` | Delete an environment (not the linked one). Asks unless `-y` |
 | `aven environment sync [target] --from <env> [--deploy] [-y]` | Print what differs between `<env>` and the linked (or `target`) environment (settings, variables with masked values, shared variables, missing volumes), then apply it after confirmation (`-y` skips). Changes are staged; `--deploy` also deploys the changed services. Domains, TCP proxy, node placement, deploy keys and database passwords are never synced |
 | `aven environment restrict [name]` / `aven environment unrestrict [name]` | Restrict the linked (or named) environment so only project admins can access its services, variables, logs and settings (Environment RBAC; git push deploys continue). Project admins only. `aven environment list` marks restricted environments |
-| `aven service [list]` / `aven service use <name>` | List services / switch the linked service |
+| `aven service [list] [--json]` / `aven service use <name>` | List services / switch the linked service |
 | `aven add --database postgres\|mysql\|redis\|mongo` | Add a database service (first deploy starts in the linked environment) and link it |
 | `aven add --database bucket` (alias `s3`) | Add an S3-compatible bucket service (MinIO, volume at `/data`, variables `BUCKET`, `ENDPOINT`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION`, `AWS_*`) and link it |
 | `aven add --image <img> [--name n]` | Add an image service |
 | `aven add --repo <url> [--branch b] [--name n]` | Add a repo service |
-| `aven up [-d]` | Upload this directory (tar.gz, skips `.git`, `node_modules`, ...) and follow the build |
+| `aven up [dir] [-d] [--no-gitignore] [--json]` | Upload this directory (or `dir`) as tar.gz and follow the build. Always skips `.git`, `node_modules`, `.next`, `__pycache__`, `.venv`; also skips what the root `.gitignore` matches (so `.env` and build output stay local; `--no-gitignore` uploads them) and what `.avenignore`, `.keelignore` or `.railwayignore` match (gitignore syntax, `!` re-includes). The archive is packed to a temporary file and uploaded with a progress line on a terminal; above the server's 512 MiB limit it stops before uploading. The build log stream reconnects when the connection drops (no duplicated lines) and shows status changes; Ctrl+C stops following (exit 130) while the deployment continues on the server. `deployment <id>` and the final `status: <s>` go to stdout; exit 1 unless the deployment ends `live`. `-d/--detach` returns after the upload; `--json` prints the deployment object instead of logs |
 | `aven redeploy [-y]` | Redeploy the latest deployment (same image, current variables); `--force-build` starts a deployment from the latest commit and builds it even if a retained image matches |
 | `aven restart` | Restart the running containers |
 | `aven scale [<n>]` | Without `n`: running/configured replicas, placement and autoscale status. With `n`: change the replica count now, without a redeploy (`POST .../scale`; waits for the new replicas' healthchecks) |
@@ -62,11 +78,11 @@ Most service commands take `-s/--service <name|id>` and `-e/--environment <name|
 | `aven ha convert [--replicas n] [--edge n] [--internal n] [--no-auto-failover] [--skip-backup] [-y]` | Convert the linked postgres/redis/mongo service into an HA cluster (asks unless `-y`). Prints which services had their references moved to the cluster endpoint |
 | `aven ha scale --replicas n` / `aven ha switchover --to <member>` / `aven ha auto-failover on\|off` / `aven ha revert [-y]` | Change the replica count, move the primary (Make Leader), toggle Aven's automatic postgres failover, or revert to a standalone database (only while the original service is primary; member volumes are kept) |
 | `aven down [-y]` | Stop the service (`POST .../stop`); it stays down until the next deploy |
-| `aven logs [-n 200] [--filter q] [--deployment id]` | Runtime logs of the current (or given) deployment; follows while it is live. `--filter` uses the server syntax: words, `"phrase"`, `-exclude` |
-| `aven logs --build [--deployment id] [--filter q]` | Build logs of the latest (or given) deployment (`-b` also works) |
+| `aven logs [-n 200] [-f/--filter q] [--deployment id] [--errors] [-r/--replica r] [--stream stdout\|stderr] [--json]` | Runtime logs of the current (or given) deployment as `time replica message`; follows while it is live and reconnects without repeating lines when the connection drops. `--filter` uses the server syntax: words, `"phrase"`, `-exclude`. `--errors` keeps stderr lines and lines with error/fatal/panic (server `level=error`); `--replica` matches the replica name, a prefix or its number suffix; `--stream` keeps one stream. `--json` prints the raw entries (`{t, replica, stream, msg}`) one per line. Ctrl+C exits 130; closing the pipe (`aven logs \| head`) ends quietly |
+| `aven logs --build [--deployment id] [--filter q] [--json]` | Build logs of the latest (or given) deployment (`-b` also works), with the same reconnect behaviour as `aven up` |
 | `aven logs --dns [--domain d] [--qname n] [--qtype A] [--rcode NXDOMAIN] [--zone internal\|external] [--status ok\|failed]` | DNS lookups made by the service (columns Time, Zone, Type, Rcode, Name, Answers). Streams by default; `-n/--lines`, `-S/--since` or `-U/--until` (`30m`, `2h`, `1d`, RFC3339) fetch history instead. `--qtype`/`--rcode` are upper-cased. `--json` prints newline-delimited JSON (the API record). Not per deployment: `--build`/`--deployment` are rejected |
 | `aven logs --network [--protocol tcp\|udp] [--direction ingress\|egress] [--peer p] [--peer-kind k] [--port n] [--status ok\|refused\|timeout\|reset] [--dropped true] [--src ip] [--dst ip] [--host ip]` | Connection (flow) logs of the service (columns Time, Dir, Proto, Source, Destination, Peer, Traffic, Latency, Status). Same `--lines/--since/--until/--json/--filter` as `--dns`. Typed flags become `@field:value` filter terms and combine with `-f/--filter` (see `docs/api-v1.md`, "DNS query and network flow logs") |
-| `aven variables` | Raw variables as an aligned table (alias `aven vars`, which keeps the `KEY=VALUE` output) |
+| `aven variables [--json]` | Raw variables as an aligned table, sealed ones as `<sealed>` (alias `aven vars`, which keeps the `KEY=VALUE` output). `--json` prints `{variables, sealed, pending_changes}` |
 | `aven variables --set K=V --unset K [--deploy]` | Change variables (repeatable). `--deploy` applies them right away. The old `vars set K=V unset K` form still works |
 | `aven variables --kv` | `KEY=VALUE` output |
 | `aven variables --seal KEY [--seal KEY]...` | Seal variables (`sealed_variables` in PATCH). Irreversible: the value is never shown again by any API or CLI command but is still injected at deploy time and usable in references. Delete and recreate to unseal. Can be combined with `--set` in the same call |
@@ -148,16 +164,17 @@ Most service commands take `-s/--service <name|id>` and `-e/--environment <name|
 | `aven sandbox file ls [path] / read <path> / write <path> [local-file\|-] [--mode 0755] [--id id]` | Browse, download (stdout) or upload (≤ 256 KiB, stdin by default) files |
 | `aven sandbox checkpoint create <name> [--id id] / list / rename <old> <new> / delete <name> [--json]` | Save the active sandbox's filesystem under a name (reusing a name replaces it), boot later with `create --checkpoint <name>` |
 | `aven sandbox destroy [id]` | Destroy the active (or given) sandbox (aliases `rm`, `delete`) |
-| `aven version` | CLI version and, if logged in, server version |
+| `aven version [--json]` | CLI version and platform and, if logged in, server version |
+| `aven completion bash\|zsh\|fish\|powershell` | Print a shell completion script (see "Help, output and exit codes") |
 | `aven mcp` | Serve the hosted Aven MCP endpoint (`/mcp`) over stdio for an MCP client. Uses `AVEN_TOKEN` if set, otherwise the `aven login` session; `aven login` or `AVEN_URL` supplies the server URL |
 | `aven mcp install [--agent claude-code\|cursor\|vscode]...` | Merge a `aven` stdio server (`aven mcp`) into `.mcp.json`, `.cursor/mcp.json` or `.vscode/mcp.json` in the current directory, keeping other servers. Without `--agent`: Claude Code, plus Cursor/VS Code if their directory exists |
-| `aven help` | All commands |
+| `aven help [command]` | All commands, or one command with examples (`aven <command> --help` is the same) |
 
 ## Notes
 
 - **Secrets stay out of argv.** `aven connect` passes passwords through environment variables only (`PGPASSWORD`, `MYSQL_PWD`, `REDISCLI_AUTH`; for mongosh the URL is in `AVEN_MONGO_URL` and read by `--eval "db = connect(process.env.AVEN_MONGO_URL)"`). The `cmd` of `aven ssh` is sent to the server but not logged.
 - **Terminal mode.** `aven ssh` puts the local terminal into raw mode (termios on Linux/macOS/BSD, console VT mode on Windows; implemented with `golang.org/x/sys`, no extra dependency) and forwards window size changes (SIGWINCH, or polling every 500 ms on Windows). If stdin is not a terminal it falls back to line mode (bytes are forwarded as they are read).
-- **Ctrl-C** in `aven run`/`aven shell` goes to the child process; the CLI waits for it and returns its exit code.
+- **Ctrl-C** in `aven run`/`aven shell` goes to the child process; the CLI waits for it and returns its exit code. `aven shell` warns when started inside another `aven shell` (`AVEN_SHELL=1`).
 - `aven dev` needs Docker only when the project has image/database services. Code services without a start command (and function services) are skipped with a hint. Sealed variables remain unavailable locally and their names are printed to stderr; an account that only sees masked values cannot run `aven dev`. Docker volumes attached to a service are kept between sessions as `keel-dev-<volume-id>` (remove with `aven dev clean`). Secret values are passed to `docker run` through the environment (`-e KEY`), never argv. If a port was busy and got remapped, separate port variables such as `PGPORT` still contain the original port (URLs with `host:port` are rewritten).
 - `aven connect` needs the client binary in `PATH`.
 - `aven mcp` forwards each newline-delimited JSON-RPC message to `POST /mcp` (adding the `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers) and writes only protocol responses to stdout; diagnostics go to stderr. To limit what an agent can do, give it a scoped token instead of your session, e.g. `AVEN_TOKEN=$(aven tokens create --name mcp --project <project> --environment <environment> --role member)`.

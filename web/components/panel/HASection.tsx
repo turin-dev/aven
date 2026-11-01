@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Crown } from "lucide-react";
+import { AlertTriangle, ArrowDown, Crown, Network, Server } from "lucide-react";
 import type { CanvasService, Environment } from "@/lib/api";
 import { qk, useCaps, useNodes } from "@/lib/queries";
 import { fmtBytes } from "@/lib/format";
@@ -12,6 +12,7 @@ import { HA_ENGINE_LABEL, HA_ROLE_LABEL, haApi, haKeys, useHAStatus, type HAClus
 import { lock } from "../Perm";
 import { Button, Card, CopyField, ErrorBox, LABEL_CLS, Segmented, Spinner, Toggle, cx, errorMessage, useConfirm } from "../ui";
 import { t, tr } from "@/lib/i18n";
+import { useTypedConfirm } from "./dataKit";
 
 const STATUS_LABEL: Record<HACluster["status"], string> = { provisioning: t("구성 중"), active: t("정상"), switching: t("주 노드 전환 중") };
 
@@ -183,6 +184,7 @@ function ClusterOverview({
 }) {
   const nodes = useNodes();
   const { confirm, node: confirmNode } = useConfirm();
+  const typed = useTypedConfirm();
   const [error, setError] = useState<unknown>(null);
   const root = cluster.members.find((m) => m.role === "root");
   const replicas = cluster.members.filter((m) => m.role === "replica");
@@ -215,10 +217,10 @@ function ClusterOverview({
     });
 
   const revert = () =>
-    confirm({
+    typed.confirm({
       title: t("단독 데이터베이스로 되돌리기"),
       confirmLabel: t("되돌리기"),
-      danger: true,
+      expected: svc.name,
       message: (
         <ul className="list-disc space-y-1.5 pl-5">
           <li>{tr("replica, 프록시, 조정 노드 서비스를 모두 지웁니다. {bold}(확인한 뒤 직접 지우세요).", { bold: <b>{t("그 볼륨은 지우지 않고 남깁니다")}</b> })}</li>
@@ -226,8 +228,50 @@ function ClusterOverview({
           <li>{t("클러스터 접속 지점을 참조하던 변수를 원본 서비스로 되돌립니다(다시 배포하면 적용).")}</li>
         </ul>
       ),
-      run: () => run(() => haApi.revert(svc.id, env.id), t("단독 데이터베이스로 되돌렸습니다")),
+      // Errors stay in the dialog.
+      run: async () => {
+        await haApi.revert(svc.id, env.id);
+        toast(t("단독 데이터베이스로 되돌렸습니다"), "success");
+        await refresh();
+      },
     });
+
+  const setFailover = (v: boolean) => {
+    if (v) return void run(() => haApi.update(svc.id, env.id, { auto_failover: true }), t("자동 failover를 켰습니다"));
+    confirm({
+      title: t("자동 failover를 끌까요?"),
+      message: t("끄면 주 노드가 멈춰도 replica를 승격하지 않습니다. 직접 주 노드를 바꿀 때까지 데이터베이스에 쓸 수 없습니다."),
+      confirmLabel: t("끄기"),
+      danger: true,
+      run: () => run(() => haApi.update(svc.id, env.id, { auto_failover: false }), t("자동 failover를 껐습니다")),
+    });
+  };
+
+  const scale = (n: number) => {
+    const doIt = () => run(() => haApi.update(svc.id, env.id, { replicas: n }), t("replica를 {count}개로 바꿨습니다", { count: n }));
+    if (n >= replicas.length) return void doIt();
+    const gone = [...replicas].sort((a, b) => b.ordinal - a.ordinal).slice(0, replicas.length - n);
+    confirm({
+      title: t("replica를 {count}개로 줄일까요?", { count: n }),
+      message: (
+        <div className="space-y-2">
+          <p>{t("다음 replica 서비스를 지웁니다. 볼륨은 남깁니다.")}</p>
+          <ul className="list-disc pl-5 font-mono text-xs text-foreground">
+            {gone.map((m) => (
+              <li key={m.service_id}>
+                {m.name}
+                {m.db_role === "primary" && <span className="ml-1 font-sans text-danger">({t("지금 주 노드")})</span>}
+              </li>
+            ))}
+          </ul>
+          <p>{t("남는 노드가 적을수록 장애를 견디는 힘이 줄어듭니다.")}</p>
+        </div>
+      ),
+      confirmLabel: t("줄이기"),
+      danger: true,
+      run: doIt,
+    });
+  };
 
   const replicaSel = cluster.counts.replica;
 
@@ -261,8 +305,11 @@ function ClusterOverview({
         </div>
       )}
 
+      <Topology cluster={cluster} nodeName={multiNode ? nodeName : undefined} />
+
       <div className="overflow-x-auto rounded-lg border border-gray-200">
         <table className="w-full text-sm">
+          <caption className="sr-only">{t("클러스터 구성원")}</caption>
           <thead className="bg-gray-50 text-left text-xs text-gray-600">
             <tr>
               <th className="px-3 py-2 font-semibold">{t("구성원")}</th>
@@ -314,12 +361,12 @@ function ClusterOverview({
               label={t("자동 failover")}
               checked={cluster.auto_failover}
               disabled={!canEdit}
-              onChange={(v) => run(() => haApi.update(svc.id, env.id, { auto_failover: v }), v ? t("자동 failover를 켰습니다") : t("자동 failover를 껐습니다"))}
+              onChange={setFailover}
             />
           </div>
         )}
         {replicaSel !== undefined && cluster.replica_options.length > 0 && (
-          <ReplicaScale cluster={cluster} canEdit={canEdit} onScale={(n) => run(() => haApi.update(svc.id, env.id, { replicas: n }), t("replica를 {count}개로 바꿨습니다", { count: n }))} count={replicas.length} />
+          <ReplicaScale cluster={cluster} canEdit={canEdit} onScale={scale} count={replicas.length} />
         )}
         <div className="flex items-center justify-between gap-3 px-4 py-3">
           <div>
@@ -344,7 +391,100 @@ function ClusterOverview({
       </div>
       {error ? <ErrorBox className="mt-3" error={error} /> : null}
       {confirmNode}
+      {typed.node}
     </Card>
+  );
+}
+
+/** Lag above this many bytes is shown as a warning. */
+const LAG_WARN = 16 << 20;
+
+/**
+ * Cluster at a glance: the endpoint clients use, the primary, and the replicas streaming from it with their lag.
+ * Proxies and coordinators sit beside the data path. The member table below has the same data in text form.
+ */
+function Topology({ cluster, nodeName }: { cluster: HACluster; nodeName?: (id: string) => string }) {
+  const data = cluster.members.filter((m) => m.role === "root" || m.role === "replica");
+  const primary = data.find((m) => m.db_role === "primary") ?? data.find((m) => m.service_id === cluster.primary_service_id);
+  const followers = data.filter((m) => m !== primary);
+  const side = cluster.members.filter((m) => m.role === "edge" || m.role === "internal");
+  const maxLag = Math.max(LAG_WARN, ...followers.map((m) => m.lag_bytes ?? 0));
+  const box = (m: HAMember, big?: boolean) => (
+    <div
+      key={m.service_id}
+      className={cx(
+        "min-w-0 rounded-lg border bg-secondaryBg px-3 py-2",
+        big ? "border-pink-400" : "border-gray-200",
+        !m.healthy && "border-red-400 bg-danger-surface",
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+        <span className={cx("size-2 shrink-0 rounded-full", m.healthy ? "bg-success" : "bg-red-500")} aria-hidden />
+        <span className="truncate">{m.name}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+        {roleBadge(m)}
+        {nodeName && (
+          <span className="inline-flex items-center gap-1 text-xs text-gray-500">
+            <Server className="size-3" aria-hidden /> {nodeName(m.node_id)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+  return (
+    <figure className="mb-5 rounded-lg border border-gray-200 p-4" aria-label={t("클러스터 구성도")}>
+      <div className="flex flex-col items-center gap-1">
+        {cluster.endpoint && (
+          <>
+            <div className="flex items-center gap-1.5 rounded-full border border-gray-200 px-3 py-1 font-mono text-xs text-gray-600">
+              <Network className="size-3.5" aria-hidden /> {cluster.endpoint.private_host}
+            </div>
+            <ArrowDown className="size-4 text-gray-400" aria-hidden />
+          </>
+        )}
+        <div className="w-full max-w-[260px]">{primary ? box(primary, true) : <div className="rounded-lg border border-dashed border-red-400 px-3 py-2 text-center text-sm text-danger">{t("주 노드 없음")}</div>}</div>
+      </div>
+      {followers.length > 0 && (
+        <>
+          <div className="mx-auto mt-1 h-3 w-px bg-gray-300" aria-hidden />
+          <ul className="grid gap-3 border-t border-gray-300 pt-3 sm:grid-cols-[repeat(auto-fit,minmax(180px,1fr))]">
+            {followers.map((m) => {
+              const lag = m.lag_bytes;
+              const high = lag !== undefined && lag > LAG_WARN;
+              return (
+                <li key={m.service_id} className="min-w-0 space-y-1.5">
+                  {box(m)}
+                  <div className="px-1 text-xs text-gray-500">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={cx(!m.streaming && "text-warn")}>{m.streaming ? t("복제 중") : t("복제 끊김")}</span>
+                      <span className={cx("tabular-nums", high && "text-warn")}>{lag !== undefined ? t("지연 {lag}", { lag: fmtBytes(lag) }) : "—"}</span>
+                    </div>
+                    {lag !== undefined && (
+                      <div className="mt-1 h-1 overflow-hidden rounded-full bg-gray-100" aria-hidden>
+                        <div className={cx("h-full", high ? "bg-yellow-500" : "bg-success")} style={{ width: `${Math.max(2, Math.min(100, (lag / maxLag) * 100))}%` }} />
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {side.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-3 text-xs text-gray-500">
+          <span>{t("함께 도는 서비스")}</span>
+          {side.map((m) => (
+            <span key={m.service_id} className={cx("inline-flex items-center gap-1.5 rounded border px-1.5 py-0.5", m.healthy ? "border-gray-200" : "border-red-400 text-danger")}>
+              <span className={cx("size-1.5 rounded-full", m.healthy ? "bg-success" : "bg-red-500")} aria-hidden />
+              <span className="font-mono">{m.name}</span>
+              <span>{HA_ROLE_LABEL[m.role]}</span>
+            </span>
+          ))}
+        </div>
+      )}
+    </figure>
   );
 }
 

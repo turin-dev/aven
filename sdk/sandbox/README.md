@@ -35,4 +35,4 @@ await fresh.destroy();
 
 Commands run over HTTP (no streaming, detach/reattach or writable stdin), each `exec` is limited to 110 seconds, and there are no templates or public sandbox domains.
 
-Type-check with `npx tsc -p sdk/tsconfig.json --noEmit`.
+Type-check with `npx tsc -p sdk/sandbox/tsconfig.json --noEmit`.

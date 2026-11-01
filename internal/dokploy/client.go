@@ -245,6 +245,9 @@ func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 		for _, le := range lp.Environments {
 			e := &Environment{ID: le.ID, Name: le.Name, Env: le.Env}
 			for _, a := range le.Applications {
+				if a.ID == "" {
+					continue // id 없는 행(부분 데이터)
+				}
 				var app Application
 				if err := c.get(ctx, "application.one", url.Values{"applicationId": {a.ID}}, &app); err != nil {
 					return nil, err
@@ -252,6 +255,9 @@ func (c *Client) Fetch(ctx context.Context) (*Snapshot, error) {
 				e.Applications = append(e.Applications, &app)
 			}
 			for _, x := range le.Compose {
+				if x.ID == "" {
+					continue
+				}
 				var cp Compose
 				if err := c.get(ctx, "compose.one", url.Values{"composeId": {x.ID}}, &cp); err != nil {
 					return nil, err
@@ -292,7 +298,9 @@ func idsOf[T any](xs []T) []string {
 		var m map[string]string
 		json.Unmarshal(b, &m)
 		for _, v := range m {
-			out = append(out, v)
+			if v != "" { // id 없는 행(부분 데이터)은 .one 호출이 실패하므로 건너뛴다
+				out = append(out, v)
+			}
 		}
 	}
 	return out

@@ -236,21 +236,27 @@ func lone(body string) bool {
 
 func num(s string) json.Number { return json.Number(s) }
 
+// pgEdit는 postgres 편집 스크립트다: 트랜잭션 안에서 두 행 이상이 바뀌면 오류로 되돌린다.
+func pgEdit(stmt string) string {
+	return "BEGIN;\nWITH r AS (" + stmt + " RETURNING 1) SELECT CASE WHEN count(*) <= 1 THEN count(*) ELSE " +
+		"('refusing to change ' || count(*) || ' rows: the primary key matched more than one row')::bigint END AS affected FROM r;\nCOMMIT;\n"
+}
+
 func TestRowEditSQL(t *testing.T) {
 	pg := RowEdit{Kind: "postgres", Schema: "app", Table: `us"ers`, PK: map[string]any{"id": num("7")},
 		Set: map[string]any{"name": "O'Brien", "active": true, "note": nil, "meta": map[string]any{"a": num("1")}}}
 	q, err := pg.UpdateSQL()
-	want := `WITH r AS (UPDATE "app"."us""ers" SET "active" = TRUE, "meta" = E'{"a":1}', "name" = E'O''Brien', "note" = NULL WHERE "id" = E'7' RETURNING 1) SELECT count(*) AS affected FROM r;` + "\n"
+	want := pgEdit(`UPDATE "app"."us""ers" SET "active" = TRUE, "meta" = E'{"a":1}', "name" = E'O''Brien', "note" = NULL WHERE "id" = E'7'`)
 	if err != nil || q != want {
 		t.Errorf("pg update\n%s\n%s %v", q, want, err)
 	}
 	q, _ = pg.DeleteSQL()
-	if q != `WITH r AS (DELETE FROM "app"."us""ers" WHERE "id" = E'7' RETURNING 1) SELECT count(*) AS affected FROM r;`+"\n" {
+	if q != pgEdit(`DELETE FROM "app"."us""ers" WHERE "id" = E'7'`) {
 		t.Errorf("pg delete %s", q)
 	}
 	ins := RowEdit{Kind: "postgres", Schema: "public", Table: "t", Set: map[string]any{"b": "x", "a": num("-1.5e3")}}
 	q, _ = ins.InsertSQL()
-	if q != `WITH r AS (INSERT INTO "public"."t" ("a", "b") VALUES (E'-1.5e3', E'x') RETURNING 1) SELECT count(*) AS affected FROM r;`+"\n" {
+	if q != pgEdit(`INSERT INTO "public"."t" ("a", "b") VALUES (E'-1.5e3', E'x')`) {
 		t.Errorf("pg insert %s", q)
 	}
 	q, _ = RowEdit{Kind: "postgres", Table: "t"}.InsertSQL()

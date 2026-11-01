@@ -28,7 +28,35 @@ for authorization, allocation accounting and the volume driver's write-limit cav
 
 `POST /mcp` serves the Model Context Protocol over stateless Streamable HTTP (JSON responses, no SSE stream; `GET`/`DELETE` return 405). It accepts the `2026-07-28` per-request metadata protocol (`server/discover`, `_meta` protocol version and client capabilities, matching `MCP-Protocol-Version`/`Mcp-Method`/`Mcp-Name` headers) and the older `initialize` handshake (`2025-11-25`, `2025-06-18`, `2025-03-26`; the client's version is echoed when supported). Authenticate with `Authorization: Bearer <token>` (`AVEN_API_TOKEN` or a `keel_` API token); a session cookie also works for non-browser clients such as `aven mcp`, with the usual cross-origin rejection.
 
-Tools: `whoami`, `list_projects`, `inspect_project`, `list_services`, `list_environments`, `inspect_environment`, `inspect_service`, `list_templates`, `list_deployments`, `inspect_deployment`, `get_logs` (build or runtime, `tail` ≤ 1000, optional `filter`), `get_variables`, `set_variables` (merge; `null` deletes; optional `deploy`), `deploy`, `redeploy`, `restart_service`, `rollback`, `create_service_from_image`, `create_service_from_template`, `add_domain`. Each tool calls the matching `/api` route with the caller's credentials, so token scope and project RBAC apply (hidden resources stay 404, insufficient role is 403) and the error is returned as a tool result with `isError: true`. Sealed variables are always redacted and kept when variables change. Deploys, rollbacks, restarts and variable changes carry `destructiveHint: true`.
+Tools (each has a `title`, a description, a closed JSON Schema and `readOnlyHint`/`destructiveHint`/`idempotentHint`/`openWorldHint` annotations):
+
+| Tool | Arguments | REST |
+| --- | --- | --- |
+| `whoami` | | `GET /auth/me` |
+| `list_projects` | | `GET /projects` |
+| `inspect_project`, `list_services`, `list_environments` | `project_id` | `GET /projects/{pid}` |
+| `inspect_environment` | `environment_id` | `GET /environments/{eid}/canvas` |
+| `inspect_service` | `service_id`, `environment_id` | `GET /services/{sid}/instances/{eid}` |
+| `list_templates` | | `GET /templates` |
+| `list_deployments` | `service_id`, `environment_id`, `limit` (1–500, default 50) | `GET …/deployments` |
+| `inspect_deployment` | `deployment_id` | `GET /deployments/{did}` |
+| `get_logs` | `deployment_id`, `type` (`runtime`\|`build`), `tail` (1–1000, default 200), `filter` | snapshot after `GET /deployments/{did}` |
+| `get_variables` | `service_id`, `environment_id` | `GET …/variables/resolved` |
+| `set_variables` ⚠ | `service_id`, `environment_id`, `variables` (`null` deletes), `deploy` | `PATCH …/instances/{eid}` `{variables_patch}` (`?deploy=1`) |
+| `deploy` ⚠ | `service_id`, `environment_id` | `POST …/deploy` |
+| `redeploy` ⚠, `rollback` ⚠ | `deployment_id` | `POST /deployments/{did}/redeploy\|rollback` |
+| `cancel_deployment` ⚠ | `deployment_id` | `POST /deployments/{did}/cancel` |
+| `restart_service` ⚠, `stop_service` ⚠ | `service_id`, `environment_id` | `POST …/restart\|stop` |
+| `create_service_from_image` | `project_id`, `environment_id`, `image`, `name` | `POST /projects/{pid}/services` |
+| `create_service_from_template` | `project_id`, `environment_id`, `template_key`, `inputs` | `POST /projects/{pid}/templates/{key}` |
+| `add_domain` | `service_id`, `environment_id`, `host`, `target_port` (1–65535) | `POST …/domains` |
+
+⚠ = `destructiveHint: true` (clients that honor hints ask before running it). Each tool calls the matching `/api` route in-process with the caller's credentials, so token scope and project RBAC apply exactly as in REST (hidden resources stay 404, insufficient role is 403). `get_logs` first authorizes with `GET /deployments/{did}` and then reads the log store; the `filter` (dashboard search syntax: all words must match, `-word` excludes, `"quoted phrase"`) is applied before `tail` is cut, so matching lines further back are found. Sealed variables are always redacted and kept when variables change.
+
+Errors:
+- An unknown tool name is a JSON-RPC error `-32602` (`unknown tool: …`).
+- Arguments are checked against the tool's schema before anything runs: unknown keys (`unknown argument "projectId" for inspect_project; allowed: project_id`), missing required keys, wrong JSON types, enum values and integer ranges return a tool result with `isError: true`. `null` for an optional argument means "not set".
+- REST errors come back as `isError: true` results like `Aven API (404): not found. Check the ID (list_projects and inspect_project show valid IDs). …`, with a hint for 401, 403, 404, 409 and 429.
 
 `aven mcp` is the stdio bridge for MCP clients (see cli.md). The dashboard's **설정 → AI 도구 · MCP** section shows Claude Code, Cursor and VS Code configuration.
 
@@ -161,7 +189,7 @@ type MetricPoint = { t: string; cpu_percent: number; memory_bytes: number; memor
 ```
 
 ### Variable rules
-- References: `${{ VAR }}` (same instance), `${{ shared.VAR }}`, `${{ <service-name>.VAR }}` (another service in the same environment). Spaces are allowed.
+- References: `${{ VAR }}` (same instance), `${{ shared.VAR }}`, `${{ <service-name>.VAR }}` (another service in the same environment). Spaces are allowed. Write `$${{ VAR }}` for a literal `${{ VAR }}` that is not resolved.
 - Injected automatically. These can be referenced, and a user value with the same name overrides them:
   `PORT` (when port is set), `AVEN_SERVICE_NAME`, `AVEN_SERVICE_ID`, `AVEN_ENVIRONMENT_NAME`, `AVEN_ENVIRONMENT_ID`,
   `AVEN_PROJECT_NAME`, `AVEN_PROJECT_ID`, `AVEN_PRIVATE_DOMAIN`, `AVEN_PUBLIC_DOMAIN` (first domain),
@@ -1333,7 +1361,7 @@ Multi-factor authentication (authenticator app or passkeys, shared recovery code
 ### Infrastructure as Code (project config)
 Project-level IaC: one definition describes the services of an environment; the server plans it against the live state and applies it through the normal staged-changes model. The CLI evaluates `.keel/aven.ts` (TypeScript DSL) or reads `.keel/aven.json` / `aven.yaml` and sends the JSON below; see `docs/cli.md` (`aven config`). New table `iac_ownership(environment_id, address, partial)` (migration `migrateIAC`).
 
-Definition (`"version": 1`, unknown fields → error):
+Definition (`"version": 1`). The definition is decoded strictly, by the API and by the CLI: an unknown key anywhere (`setings`, a misspelled top-level field) is an error that lists the allowed keys, so a typo never turns into a silent no-op.
 ```ts
 type Definition = {
   version: 1;
@@ -1362,12 +1390,14 @@ Endpoints (all under `/projects/{pid}/environments/{eid}/config`; env-scoped tok
    "summary": {"create": 1, "change": 1, "destroy": 1},
    "changes": [
      {"action": "create", "resource": "service.worker", "detail": "image"},
+     {"action": "change", "resource": "service.worker", "field": "replicas", "to": 3},
      {"action": "change", "resource": "service.web", "field": "replicas", "from": 1, "to": 2},
      {"action": "change", "resource": "service.web", "field": "variables.OLD", "from": "«hidden»", "destructive": true},
      {"action": "destroy", "resource": "service.old", "destructive": true, "detail": "deletes the service in every environment"}],
    "claims": ["service.web"], "errors": [], "warnings": []}
   ```
-  Variable values are `«hidden»` unless they contain a `${{ }}` reference or `show_values: true` (member+; sealed values stay hidden). Field changes cover every settable key plus `node_id` (placement). Validation problems (invalid settings, sealed literal, unknown source, reference cycle, duplicate domain, ownership conflicts) are listed in `errors` with `200`.
+  Variable values are `«hidden»` unless `show_values: true`; `${{ }}` references stay visible and the literal text around them is replaced with `«hidden»` (`«hidden»${{db.HOST}}«hidden»`) (member+; sealed values stay hidden). Field changes cover every settable key plus `node_id` (placement). A service to create is followed by one `change` line (without `from`) for each declared setting that differs from the default of a new service and for each declared variable, so the plan shows what will be created. Validation problems (invalid settings, sealed literal, unknown source, reference cycle, duplicate domain, ownership conflicts) are listed in `errors` with `200`.
+  Every error starts with the path of the offending value in the definition, for example `services[0].setings: unknown field (allowed: name, source_type, database_kind, settings, variables)`, `services[1] (web): settings.replicas: must be an integer (got string)` or `services[2] (api): variables.SECRET: is sealed; use preserve() or remove it`. Errors found while decoding (shape, unknown keys, types) are reported alone and the plan has no `plan_hash`.
   `config_etag` hashes the environment's IaC state (services, settings, variables, node, ownership); `plan_hash` = hash(config_etag + definition).
 - `POST …/config/apply {definition, plan_hash, confirm_destructive?, deploy?}` (member) → `200 {plan, staged, services: [{service, action: "created"|"updated"|"deleted", deployment_id?, deploy_skipped?}], claimed}`. The server re-plans under a lock: `422 {error, plan}` when the plan has errors, `409` when `plan_hash` differs (definition or environment changed since the plan; a dashboard edit or another apply also changes it), `409` for destructive plans without `confirm_destructive`. Creating or deleting services needs project-level member access (environment tokens get `403`).
   - New services are created like `POST /projects/{pid}/services` (instances in every environment, generated domain, database passwords, volumes, function code), then the declared settings/variables are saved on the target environment's instance.

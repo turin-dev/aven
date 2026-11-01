@@ -24,6 +24,8 @@ import { toast } from "@/lib/uiState";
 import { t } from "@/lib/i18n";
 import { IconButton, Input, Menu, MenuItem, cx, useEscape } from "../../ui";
 import { VarInput, type Suggestion } from "../VarInput";
+import type { RefScope } from "@/lib/refs";
+import { RefCheck } from "./RefCheck";
 
 export const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const KEY_RULE = t("이름은 영문, 숫자, 밑줄(_)만 쓸 수 있고 숫자로 시작할 수 없습니다.");
@@ -80,6 +82,7 @@ export function VariableRow({
   r,
   resolved,
   resolvedPending,
+  refWarning,
   savedNotDeployed,
   shown,
   onToggleReveal,
@@ -94,6 +97,8 @@ export function VariableRow({
   r: Row;
   resolved: ResolvedVar | undefined;
   resolvedPending: boolean;
+  /** Set when the value's references need attention (unknown target, cycle). */
+  refWarning?: string;
   savedNotDeployed: boolean;
   shown: boolean;
   onToggleReveal: () => void;
@@ -136,6 +141,12 @@ export function VariableRow({
           <span className={cx("truncate", r.deleted && "line-through")} title={stateLabel ? t("{key} ({state})", { key: r.key, state: stateLabel }) : r.key}>
             {r.key}
           </span>
+          {refWarning && (
+            <span title={refWarning} className="!ml-2 flex shrink-0 text-yellow-600">
+              <AlertTriangle className="size-3.5" aria-hidden />
+              <span className="sr-only">{refWarning}</span>
+            </span>
+          )}
           {resolved?.cross_node &&
             (resolved.mesh ? (
               <span title={t("다른 노드의 서비스를 노드 간 사설 네트워크로 참조합니다")} className="!ml-2 shrink-0 text-gray-500">
@@ -173,6 +184,10 @@ export function VariableRow({
                   revealed
                 )}
               </div>
+            ) : hidden ? (
+              <span className="flex h-full items-center gap-1.5 font-sans text-xs text-gray-500" title={t("봉인된 변수입니다. 봉인된 값은 볼 수 없고 배포할 때만 주입됩니다.")}>
+                <Lock className="size-3" aria-hidden /> {t("봉인됨")}
+              </span>
             ) : (
               <span className="flex h-full items-center">{MASK}</span>
             )}
@@ -249,6 +264,7 @@ export function EditVariableRow({
   initialValue,
   existing,
   suggestions,
+  scope,
   onCommit,
   onCancel,
 }: {
@@ -257,6 +273,7 @@ export function EditVariableRow({
   /** Names already used (for rename collisions). */
   existing: Record<string, string>;
   suggestions: Suggestion[];
+  scope: RefScope;
   onCommit: (key: string, value: string) => void;
   onCancel: () => void;
 }) {
@@ -315,6 +332,7 @@ export function EditVariableRow({
           {keyErr}
         </p>
       )}
+      {val.includes("${") && <RefCheck value={val} name={k || r.key} scope={scope} />}
     </li>
   );
 }

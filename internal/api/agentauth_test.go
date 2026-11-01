@@ -133,7 +133,7 @@ func (e *authEnv) host() string {
 
 func waitOnline(t *testing.T, hub *agentprotocol.Hub, id string, want bool) {
 	t.Helper()
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 500; i++ {
 		if hub.Online(id) == want {
 			return
 		}

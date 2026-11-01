@@ -231,6 +231,50 @@ export function TemplateInputsForm({
   );
 }
 
+/* ── What a deploy creates ──────────────────────────────────────────── */
+
+type DefService = {
+  name?: unknown;
+  icon?: unknown;
+  source?: { database?: unknown; image?: unknown; repo?: { url?: unknown; branch?: unknown } };
+  variables?: unknown;
+  volumes?: unknown;
+  domains?: unknown;
+  tcp_proxy?: unknown;
+  replicas?: unknown;
+  cron_schedule?: unknown;
+};
+
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+const arr = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => !!x && typeof x === "object") : []);
+
+/** One row per service of the definition, with the resources each creates. Unknown shapes are skipped, not thrown. */
+export type BlueprintRow = { name: string; icon: string; source: string; chips: string[] };
+
+export function templateBlueprint(definition: TemplateDefinition | undefined): BlueprintRow[] {
+  return (definition?.services ?? []).map((raw) => {
+    const s = raw as DefService;
+    const db = str(s.source?.database);
+    const repo = s.source?.repo;
+    const source = db || str(s.source?.image) || (repo ? `${str(repo.url)}${str(repo.branch) ? `#${str(repo.branch)}` : ""}` : "");
+    const chips: string[] = [];
+    const vars = s.variables && typeof s.variables === "object" ? Object.keys(s.variables).length : 0;
+    if (db) chips.push(t("접속 변수"));
+    if (vars) chips.push(t("변수 {count}개", { count: vars }));
+    const volumes = arr(s.volumes);
+    for (const v of volumes) {
+      const mb = typeof v.size_limit_mb === "number" ? v.size_limit_mb : 0;
+      chips.push(mb ? t("볼륨 {path} ({size})", { path: str(v.mount_path), size: mb >= 1024 ? `${+(mb / 1024).toFixed(1)} GB` : `${mb} MB` }) : t("볼륨 {path}", { path: str(v.mount_path) }));
+    }
+    if (db && !volumes.length) chips.push(t("데이터 볼륨"));
+    for (const d of arr(s.domains)) if (d.generate) chips.push(typeof d.target_port === "number" ? t("공개 도메인 :{port}", { port: d.target_port }) : t("공개 도메인"));
+    if (s.tcp_proxy) chips.push(t("TCP 프록시"));
+    if (typeof s.replicas === "number" && s.replicas > 1) chips.push(t("레플리카 {n}개", { n: s.replicas }));
+    if (str(s.cron_schedule)) chips.push(t("크론 {schedule}", { schedule: str(s.cron_schedule) }));
+    return { name: str(s.name), icon: str(s.icon) || db || (repo ? "github" : "docker"), source, chips };
+  });
+}
+
 /* ── Publish as template (environment menu) ─────────────────────────── */
 
 const VIS_OPTIONS: { value: TemplateVisibility; label: string }[] = [
@@ -372,7 +416,7 @@ export function PublishTemplateDialog({ pid, env, open, onClose }: { pid: ID | n
           <div className={LABEL_CLS}>{t("공개 범위")}</div>
           <Segmented label={t("공개 범위")} value={visibility} onChange={setVisibility} options={VIS_OPTIONS} />
           <p className="mt-1.5 text-xs text-gray-500">
-            {t("나만: 나와 작업 공간 admin · 작업 공간/공개: 로그인한 모든 사용자")}
+            {t("나만: 나와 작업 공간 admin · 작업 공간: 그 작업 공간의 멤버 · 공개: 로그인한 모든 사용자")}
           </p>
         </div>
         {warnings.length > 0 && (

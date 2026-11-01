@@ -790,7 +790,38 @@ func (s *Server) listEvents(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
-	writeJSON(w, 200, evs)
+	visible := s.eventFilter(r, true)
+	out := make([]*store.Event, 0, len(evs))
+	for _, ev := range evs {
+		if visible(ev) {
+			out = append(out, ev)
+		}
+	}
+	writeJSON(w, 200, out)
+}
+
+// eventFilter는 요청 주체가 볼 수 있는 이벤트인지 판정한다. 프로젝트 viewer 라우트지만 환경 이벤트는 그 환경을 볼 수
+// 있어야 한다: 제한된 환경(프로젝트 admin만)과 환경 토큰의 다른 환경 이벤트는 뺀다. cache면 환경별 판정을 기억한다
+// (목록 한 번). 스트림은 제한이 바뀔 수 있어 매번 판정한다.
+func (s *Server) eventFilter(r *http.Request, cache bool) func(*store.Event) bool {
+	p := principalFrom(r)
+	if p == nil { // 핸들러를 직접 부르는 테스트
+		return func(*store.Event) bool { return true }
+	}
+	seen := map[string]bool{}
+	return func(ev *store.Event) bool {
+		if ev == nil || ev.EnvironmentID == nil || *ev.EnvironmentID == "" {
+			return ev != nil
+		}
+		eid := *ev.EnvironmentID
+		if v, ok := seen[eid]; ok && cache {
+			return v
+		}
+		lv, err := s.projectLevel(context.WithoutCancel(r.Context()), p, ev.ProjectID, eid)
+		v := err == nil && lv > lvNone
+		seen[eid] = v
+		return v
+	}
 }
 
 func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
@@ -799,8 +830,11 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
+	ctx, stop := s.guardStream(r, p.ID, "")
+	defer stop()
 	ch, cancel := s.Events.Subscribe(p.ID)
 	defer cancel()
+	visible := s.eventFilter(r, false)
 	e, ok := newSSE(w)
 	if !ok {
 		return
@@ -809,7 +843,7 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	defer keepalive.Stop()
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-keepalive.C:
 			fmt.Fprint(w, ": ping\n\n")
@@ -817,6 +851,9 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 		case ev, ok := <-ch:
 			if !ok {
 				return
+			}
+			if !visible(ev) {
+				continue
 			}
 			e.sendJSON("event", ev)
 			e.f.Flush()

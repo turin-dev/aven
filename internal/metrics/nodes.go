@@ -25,6 +25,7 @@ type NodeSource struct {
 func (c *Collector) collectNodes(ctx context.Context) {
 	now := time.Now().Unix()
 	row := func(s NodeStat) store.NodeMetricRow {
+		s = SanitizeNodeStat(s)
 		return store.NodeMetricRow{T: now, Resolution: int(Interval.Seconds()), CPU: s.CPUPercent, Mem: int64(s.MemoryBytes), DiskFree: int64(s.DiskFreeBytes)}
 	}
 	ls := c.sampler.Sample(c.DataDir)

@@ -94,8 +94,7 @@ export function PrivateNetworking({
                   </IconBtn>
                 </div>
               </div>
-              <p className="text-xs font-medium text-gray-600" />
-              <div className="flex flex-wrap items-center space-x-0">
+              <div className="flex flex-wrap items-center space-x-0 text-sm">
                 <span>{t("비공개 통신 준비됨")} · </span>
                 <div className="pr-0.5" />
                 <div className="flex min-w-0 flex-wrap items-center gap-0.5">
@@ -103,7 +102,6 @@ export function PrivateNetworking({
                   <span className="min-w-0 truncate rounded-md border border-gray-100 bg-pink-100 px-[3px] font-mono text-xs text-pink-600">{name}</span>
                 </div>
               </div>
-              <p />
             </div>
           </div>
           <Sliding open={editing}>
@@ -121,6 +119,7 @@ export function PrivateNetworking({
             />
           </Sliding>
         </div>
+        <ConnectionExamples svc={svc} inst={inst} name={name} fqdn={fqdn} port={view.effective_port} />
         {nodeCount >= 2 && <MeshPorts inst={inst} draft={draft} stage={stage} />}
       </div>
     </NetSection>
@@ -210,6 +209,51 @@ function MeshPorts({ inst, draft, stage }: { inst: ServiceInstance; draft: Servi
       />
       <Hint>
         {t("이 환경은 여러 노드에서 실행됩니다. 다른 노드의 서비스가 이 서비스에 접속할 포트를 쉼표로 구분해 적으세요(최대 16개). 비워 두면 포트(PORT) 하나만 엽니다. 같은 노드 안에서는 모든 포트가 열려 있고, 변경 사항을 적용하면 재배포 없이 바로 반영됩니다.")}
+      </Hint>
+    </div>
+  );
+}
+
+/** Database URL variables the catalog sets (internal/catalog), with the variable holding their port. */
+const DB_URLS: { url: string; port: string }[] = [
+  { url: "DATABASE_URL", port: "PGPORT" },
+  { url: "MYSQL_URL", port: "MYSQLPORT" },
+  { url: "REDIS_URL", port: "REDISPORT" },
+  { url: "MONGO_URL", port: "MONGOPORT" },
+];
+
+/**
+ * How another service in the same environment reaches this one: the short name, the full private name and, for the
+ * catalog databases, the variable reference to paste into the other service's variables.
+ */
+function ConnectionExamples({ svc, inst, name, fqdn, port }: { svc: CanvasService; inst: ServiceInstance; name: string; fqdn: string; port: number }) {
+  const vars = inst.variables ?? {};
+  // Only for database services: an app may hold DATABASE_URL too, but as a reference to some other service.
+  const db = svc.source_type === "database" ? DB_URLS.find((d) => d.url in vars) : undefined;
+  const p = (db && Number(vars[db.port])) || port;
+  const ref = (v: string) => "${{" + svc.name + "." + v + "}}";
+  const rows: { label: string; value: string }[] = [
+    { label: t("같은 환경의 서비스에서"), value: `${name}:${p}` },
+    { label: t("전체 이름"), value: db ? `${fqdn}:${p}` : `http://${fqdn}:${p}` },
+    { label: t("변수 참조(호스트)"), value: ref("AVEN_PRIVATE_DOMAIN") },
+  ];
+  if (db) rows.push({ label: t("변수 참조(연결 URL)"), value: ref(db.url) });
+  return (
+    <div>
+      <p className="mb-2 text-xs font-semibold text-gray-600">{t("연결 예시")}</p>
+      <dl className="divide-y divide-gray-200 rounded-lg border border-gray-200 text-sm">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center gap-3 px-4 py-2">
+            <dt className="w-40 shrink-0 text-xs text-gray-600">{r.label}</dt>
+            <dd className="min-w-0 flex-1 truncate font-mono text-xs" title={r.value}>
+              {r.value}
+            </dd>
+            <CopyBtn value={r.value} small />
+          </div>
+        ))}
+      </dl>
+      <Hint>
+        {t("비공개 네트워크는 인터넷에 노출되지 않아 TLS 없이 http로 접속해도 됩니다. 변수 참조를 쓰면 이름이나 포트가 바뀌어도 다음 배포에 자동으로 따라갑니다. 앱은 0.0.0.0이나 ::에서 listen해야 합니다.")}
       </Hint>
     </div>
   );

@@ -85,7 +85,7 @@ func HandleTLSAsk(w http.ResponseWriter, r *http.Request, allowed func(host stri
 		return true
 	}
 	d := strings.ToLower(strings.TrimSuffix(r.URL.Query().Get("domain"), "."))
-	if d == "" || len(d) > 253 || IsWildcard(d) || strings.Trim(d, "abcdefghijklmnopqrstuvwxyz0123456789.-") != "" {
+	if !validASKDomain(d) {
 		http.Error(w, "invalid domain", http.StatusBadRequest)
 		return true
 	}
@@ -95,6 +95,20 @@ func HandleTLSAsk(w http.ResponseWriter, r *http.Request, allowed func(host stri
 	}
 	w.WriteHeader(http.StatusOK)
 	return true
+}
+
+// validASKDomain은 on-demand 인증서를 물어볼 수 있는 이름인지다: label이 1..63자인 DNS 이름(점 하나 이상)이고
+// 와일드카드, IP 주소, 밑줄이 없다. 빈 label("a..b")이나 하이픈으로 시작·끝나는 label도 받지 않는다.
+func validASKDomain(d string) bool {
+	if d == "" || len(d) > 253 || !strings.Contains(d, ".") {
+		return false
+	}
+	for _, l := range strings.Split(d, ".") {
+		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' || strings.Trim(l, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+			return false
+		}
+	}
+	return strings.Trim(d, "0123456789.") != "" // 숫자와 점뿐이면 IPv4 주소다
 }
 
 type TLSMode string
@@ -121,6 +135,10 @@ type Config struct {
 	// OTLPEndpoint/TraceToken이 있으면 Caddy의 trace exporter를 aven-server 수신기로 보낸다(edge span).
 	OTLPEndpoint string
 	TraceToken   string
+
+	// TrustedProxies는 keel-proxy 앞단 proxy의 IP/CIDR이다(이 주소에서 온 X-Forwarded-For만 믿는다). nil이면
+	// AVEN_PROXY_TRUSTED_PROXIES를 읽는다(예전 이름 KEEL_도 읽는다). Cloudflare 공개 대역은 항상 믿는다(forwarded.go).
+	TrustedProxies []string
 }
 
 // Route는 호스트(들)의 규칙 하나다. 같은 호스트에 경로가 다른 Route가 여러 개 있을 수 있다.
@@ -203,9 +221,12 @@ type Caddy struct {
 	adminPath string // AdminSocket의 호스트 경로(WakeVolume의 mountpoint 아래)
 	client    *http.Client
 
-	nameMu    sync.Mutex
-	haveNames bool
-	lay       runtimeNames
+	nameMu        sync.Mutex
+	haveNames     bool
+	lay           runtimeNames
+	applyMu       sync.Mutex
+	lastApplied   []byte // 마지막으로 Caddy가 받아들인 설정(Build 결과)
+	lastAppliedAt time.Time
 }
 
 func New(cfg Config) *Caddy {
@@ -256,6 +277,7 @@ func (c *Caddy) adminClient(ctx context.Context) (*http.Client, error) {
 
 // EnsureRunning은 aven-proxy 컨테이너가 없으면 띄운다. 이미 떠 있는 keel-proxy는 지우지 않는다.
 func (c *Caddy) EnsureRunning(ctx context.Context, network string) error {
+	c.forgetApplied() // 컨테이너를 새로 만들거나 다시 시작하면 설정을 다시 넣어야 한다
 	n := c.Resolve(ctx)
 	if _, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "inspect", n.WakeVolume).CombinedOutput(); err != nil {
 		if out, err := exec.CommandContext(ctx, c.cfg.DockerBin, "volume", "create", "--label", "aven.managed=true", "--label", "keel.managed=true", n.WakeVolume).CombinedOutput(); err != nil {
@@ -478,7 +500,11 @@ func (h *hostCfg) handlers() []map[string]any {
 	if h.checkToken != "" && !h.viaEdge {
 		out = append(out, domainCheckHandler(h.checkToken))
 	}
-	if h.auth != nil && h.auth.User != "" && h.auth.Hash != "" {
+	if h.auth != nil {
+		if !validAuth(h.auth) {
+			// basic auth를 요청했는데 쓸 수 없는 값(빈 사용자, bcrypt가 아닌 해시)이면 보호 없이 열지 않는다(fail closed).
+			return append(out, authUnavailable())
+		}
 		out = append(out, map[string]any{"handler": "authentication", "providers": map[string]any{"http_basic": map[string]any{
 			"hash":  map[string]any{"algorithm": "bcrypt"},
 			"realm": "restricted",
@@ -487,16 +513,16 @@ func (h *hostCfg) handlers() []map[string]any {
 		}}})
 	}
 	if h.redirect != nil {
-		to := h.redirect.To
-		if !strings.Contains(to, "://") {
-			to = "https://" + to
+		loc, ok := redirectLocation(h.redirect.To)
+		if !ok { // sanitizeRoutes가 이미 걸렀다. 혹시 남았으면 열린 리다이렉트 대신 404
+			return append(out, map[string]any{"handler": "static_response", "status_code": 404, "body": "not found"})
 		}
 		status := 307
 		if h.redirect.Permanent {
 			status = 308
 		}
 		out = append(out, map[string]any{"handler": "static_response", "status_code": status,
-			"headers": map[string][]string{"Location": {strings.TrimRight(to, "/") + "{http.request.uri}"}}})
+			"headers": map[string][]string{"Location": {loc}}})
 		return out
 	}
 	if h.useEdge {
@@ -567,6 +593,7 @@ var metricsSourceRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/1
 
 // Build는 라우트 목록으로 Caddy 전체 설정 JSON을 만든다.
 func (c *Caddy) Build(routes []Route) ([]byte, error) {
+	routes = sanitizeRoutes(routes)
 	byHost := map[string]*hostCfg{}
 	for _, r := range routes {
 		for _, host := range r.Hosts {
@@ -626,8 +653,32 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	var tlsRoutes, plainRoutes []map[string]any
 	var acmeHosts, internalHosts, onDemandHosts []string
 	var originRoutes []map[string]any
+	// 와일드카드와 TLS 모드가 다른 구체 호스트: 구체 호스트의 라우트가 없는 쪽 서버에서는 와일드카드가 그 이름을 잡아
+	// 다른 서비스로 보낸다. tls=off 호스트의 https 요청은 404로 막고, TLS 호스트의 http 요청은 https로 보낸다
+	// (Caddy가 붙이는 자동 리다이렉트는 우리 라우트 뒤에 오므로 와일드카드에 가려진다).
+	wildTLS, wildPlain := map[string]bool{}, map[string]bool{}
+	for _, n := range names {
+		if IsWildcard(n) {
+			if c.effectiveTLS(byHost[n]) == TLSOff {
+				wildPlain[n] = true
+			} else {
+				wildTLS[n] = true
+			}
+		}
+	}
 	for _, n := range names {
 		h := byHost[n]
+		if w := WildcardFor(n); w != "" {
+			match := []map[string]any{{"host": []string{n}}}
+			if c.effectiveTLS(h) == TLSOff && wildTLS[w] {
+				tlsRoutes = append(tlsRoutes, map[string]any{"match": match, "terminal": true,
+					"handle": []map[string]any{{"handler": "static_response", "status_code": 404, "body": "not found"}}})
+			} else if c.effectiveTLS(h) != TLSOff && wildPlain[w] {
+				plainRoutes = append(plainRoutes, map[string]any{"match": match, "terminal": true,
+					"handle": []map[string]any{{"handler": "static_response", "status_code": 308,
+						"headers": map[string][]string{"Location": {"https://{http.request.host}{http.request.uri}"}}}}})
+			}
+		}
 		if c.edge != nil && h.edge != nil && h.redirect == nil {
 			// 엣지 엔진을 거친 요청은 origin 서버에서 원래 경로 규칙대로 컨테이너로 간다.
 			o := *h
@@ -685,6 +736,9 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	}
 	plainServer := map[string]any{"listen": []string{":80"}, "routes": plainRoutes, "logs": logs,
 		"automatic_https": map[string]any{"disable": true}}
+	ranges := c.trustedRanges()
+	c.applyClientIP(tlsServer, ranges)
+	c.applyClientIP(plainServer, ranges)
 	servers := map[string]any{}
 	if c.cfg.TLS == TLSOff {
 		servers["aven"] = plainServer
@@ -769,8 +823,16 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	return json.Marshal(cfg)
 }
 
-// Apply는 전체 설정을 원자적으로 교체한다. 실패하면 Caddy가 이전 설정을 유지한다.
+// ReapplyEvery는 같은 설정이라도 다시 보내는 간격이다. 그 사이 Caddy가 다른 이유로 설정을 잃었어도(컨테이너 재생성 등) 되살린다.
+const ReapplyEvery = 5 * time.Minute
+
+// Apply는 전체 설정을 원자적으로 교체한다(/load는 새 설정을 다 준비한 다음 바꾸고, 실패하면 Caddy가 이전 설정을 유지한다).
+// 동시에 부른 Apply는 차례로 처리해 늦게 만든 설정이 먼저 만든 설정에 덮이지 않게 한다. 마지막으로 적용한 설정과 같으면
+// (ReapplyEvery 안에서는) Caddy를 부르지 않는다.
 func (c *Caddy) Apply(ctx context.Context, routes []Route) error {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+	routes = sanitizeRoutes(routes)
 	if c.edge != nil {
 		c.edge.Configure(EdgePolicies(routes))
 	}
@@ -778,13 +840,29 @@ func (c *Caddy) Apply(ctx context.Context, routes []Route) error {
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	if c.lastApplied != nil && bytes.Equal(body, c.lastApplied) && now.Sub(c.lastAppliedAt) < ReapplyEvery {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	err = c.do(ctx, http.MethodPost, "/load", body)
 	if err != nil && hasTracedRoute(routes) {
-		return c.applyUntraced(ctx, routes, err)
+		err = c.applyUntraced(ctx, routes, err)
 	}
-	return err
+	if err != nil {
+		c.lastApplied = nil
+		return err
+	}
+	c.lastApplied, c.lastAppliedAt = body, now
+	return nil
+}
+
+// forgetApplied는 마지막으로 적용한 설정을 잊는다(다음 Apply는 반드시 Caddy에 보낸다).
+func (c *Caddy) forgetApplied() {
+	c.applyMu.Lock()
+	c.lastApplied = nil
+	c.applyMu.Unlock()
 }
 
 // AccessLog는 Caddy access log 한 줄을 API 형식으로 바꾼 것이다.
@@ -851,22 +929,54 @@ func splitHostPort(h string) (string, string, error) {
 	return strings.Trim(h[:i], "[]"), h[i+1:], nil
 }
 
+// maxAccessLogLine은 access log 한 줄의 최대 길이다. 더 긴 줄(아주 큰 헤더)은 건너뛴다.
+const maxAccessLogLine = 1 << 20
+
+// eachLine은 r의 줄마다 fn을 부른다. max보다 긴 줄은 버리고 다음 줄부터 계속한다
+// (bufio.Scanner는 긴 줄 하나에서 멈추고, 그러면 그 뒤 기록을 모두 놓쳤다).
+func eachLine(r io.Reader, max int, fn func(string)) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var buf []byte
+	skipping := false
+	for {
+		chunk, isPrefix, err := br.ReadLine()
+		if err != nil {
+			return
+		}
+		if !skipping {
+			if len(buf)+len(chunk) > max {
+				skipping, buf = true, buf[:0]
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		if isPrefix {
+			continue
+		}
+		if !skipping {
+			fn(string(buf))
+		}
+		buf, skipping = buf[:0], false
+	}
+}
+
 // FollowAccessLogs는 keel-proxy 컨테이너 stdout을 따라가며 access log를 넘긴다. ctx가 끝날 때까지 재시도한다.
 func (c *Caddy) FollowAccessLogs(ctx context.Context, out func(AccessLog)) {
 	for ctx.Err() == nil {
-		cmd := exec.CommandContext(ctx, c.cfg.DockerBin, "logs", "-f", "--since", "1s", c.Resolve(ctx).Container)
+		cctx, cancel := context.WithCancel(ctx)
+		cmd := exec.CommandContext(cctx, c.cfg.DockerBin, "logs", "-f", "--since", "1s", c.Resolve(ctx).Container)
 		cmd.WaitDelay = 2 * time.Second
 		so, err := cmd.StdoutPipe()
 		if err == nil && cmd.Start() == nil {
-			sc := bufio.NewScanner(so)
-			sc.Buffer(make([]byte, 64*1024), 1024*1024)
-			for sc.Scan() {
-				if l, ok := ParseAccessLog(sc.Text()); ok {
+			eachLine(so, maxAccessLogLine, func(line string) {
+				if l, ok := ParseAccessLog(line); ok {
 					out(l)
 				}
-			}
+			})
+			cancel() // 읽기가 끝났으면(오류 포함) docker logs도 끝낸다. 남겨 두면 파이프가 차서 Wait가 영영 돌아오지 않는다
 			cmd.Wait()
 		}
+		cancel()
 		select {
 		case <-ctx.Done():
 		case <-time.After(3 * time.Second):

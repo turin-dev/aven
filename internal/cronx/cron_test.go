@@ -63,3 +63,43 @@ func TestNext(t *testing.T) {
 		t.Errorf("leap next = %v", got)
 	}
 }
+
+// Next는 분 단위로 훑는 것과 같은 결과를 낸다(날짜를 건너뛰어도).
+func TestNextMatchesBruteForce(t *testing.T) {
+	exprs := []string{"30 4 * * *", "0 0 13 * 5", "*/15 9-17 * * MON-FRI", "0 12 1,15 * *", "5 0 * 2 SUN", "0 0 31 * *", "@weekly", "59 23 28-31 * *"}
+	starts := []string{"2026-10-16 05:00", "2026-12-31 23:59", "2027-02-27 12:00", "2028-02-28 23:30"}
+	for _, e := range exprs {
+		s, err := Parse(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, st := range starts {
+			from := at(st)
+			want := time.Time{}
+			for c := from.Truncate(time.Minute).Add(time.Minute); c.Before(from.AddDate(1, 1, 0)); c = c.Add(time.Minute) {
+				if s.Match(c) {
+					want = c
+					break
+				}
+			}
+			if got := s.Next(from); !got.Equal(want) {
+				t.Errorf("%q after %s: got %v, want %v", e, st, got, want)
+			}
+		}
+	}
+}
+
+// 절대 오지 않는 날짜(2월 30일)는 빨리 zero를 돌려준다.
+func TestNextImpossibleIsFast(t *testing.T) {
+	s, err := Parse("0 0 30 2 *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if got := s.Next(at("2026-10-16 05:00")); !got.IsZero() {
+		t.Fatalf("next = %v", got)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("Next took %s", d)
+	}
+}

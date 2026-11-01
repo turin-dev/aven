@@ -29,6 +29,7 @@ export function OutboundIPv6({ svc, env, view }: { svc: CanvasService; env: Envi
         <Hint>{t("노드의 IPv6 연결 상태를 확인하지 못했습니다{reason}", { reason: o.egress_reason ? `: ${o.egress_reason}` : "." })}</Hint>
       )}
       {cannotBlock && <Hint>{t("이 노드에서는 아웃바운드 IPv6를 끌 수 없습니다{reason}", { reason: o.enforce_reason ? `: ${o.enforce_reason}` : "." })}</Hint>}
+      {o.ipv6_enabled && o.node_ipv6_egress !== false && <Hint>{t("IPv6 주소가 있는 외부 서버에는 IPv6로, 나머지는 IPv4로 연결합니다. 외부 API가 IPv6에서 이상하게 동작할 때만 끄세요.")}</Hint>}
       {!o.ipv6_enabled && <Hint>{t("IPv6로는 사설 주소(fc00::/7, 같은 환경과 노드 간 네트워크)에만 연결할 수 있습니다. IPv4는 그대로입니다.")}</Hint>}
       {error ? <ErrorBox className="mt-2" error={error} /> : null}
     </NetSection>

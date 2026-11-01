@@ -127,6 +127,14 @@
   --radius-badge: 4px;
   --radius-control: 6px;
 
+  /* Elevation scale. Values live in the theme blocks below so light and dark get their own shadows. */
+  --shadow-raised: var(--elev-raised);
+  --shadow-popover: var(--elev-popover);
+  --shadow-dialog: var(--elev-dialog);
+  --shadow-toast: var(--elev-toast);
+
+  --ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+
   --font-sans: "Inter Variable", "Pretendard Variable", -apple-system, BlinkMacSystemFont,
     "Apple SD Gothic Neo", "Noto Sans KR", "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
@@ -142,6 +150,8 @@
   --animate-metro-in: metro-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
   --animate-metro-top-in: metro-top-in 260ms cubic-bezier(0.2, 0.9, 0.3, 1);
   --animate-metro-out: metro-out 160ms cubic-bezier(0.4, 0, 1, 1) forwards;
+  --animate-toast-in: toast-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-shimmer: shimmer 1.6s ease-in-out infinite;
 
   @keyframes modal-overlay-in {
     0% {
@@ -154,7 +164,7 @@
   @keyframes modal-scale-in {
     0% {
       opacity: 0;
-      transform: scale(0.8);
+      transform: translateY(6px) scale(0.97);
     }
     to {
       opacity: 1;
@@ -237,6 +247,24 @@
       opacity: 0;
     }
   }
+  @keyframes toast-in {
+    from {
+      transform: translateY(12px) scale(0.98);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: 150% 0;
+    }
+    to {
+      background-position: -50% 0;
+    }
+  }
   @keyframes soft-pulse {
     0%,
     100% {
@@ -281,7 +309,7 @@
   --gray-200: hsl(246, 11%, 22%);
   --gray-300: hsl(246, 8%, 35%);
   --gray-400: hsl(246, 7%, 45%);
-  --gray-500: hsl(246, 6%, 55%);
+  --gray-500: hsl(246, 6%, 57%); /* 4.8:1 on gray-100, AA for secondary text */
   --gray-600: hsl(246, 6%, 65%);
   --gray-700: hsl(246, 6%, 78%);
   --gray-800: hsl(246, 6%, 87%);
@@ -334,6 +362,26 @@
   --dots: #2b2937;
   --canvas-bg: var(--background);
   --spreadShadow: 0 0 30px hsla(0, 0%, 30%, 0.25);
+  --elev-raised: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --elev-popover: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 4px 12px -2px rgba(0, 0, 0, 0.45), 0 12px 32px -8px rgba(0, 0, 0, 0.55);
+  --elev-dialog: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 24px 64px -16px rgba(0, 0, 0, 0.8);
+  --elev-toast: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+  --skeleton-base: var(--gray-100);
+  --skeleton-shine: var(--gray-200);
+  --scrollbar-thumb: var(--gray-300);
+  --scrollbar-thumb-hover: var(--gray-400);
+  /* Hover fills for solid buttons that keep white text at 4.5:1 or more. */
+  --primary-hover: hsl(271, 64%, 57%);
+  --danger-hover: hsl(1, 64%, 52%);
+  /* Chart series, tuned to stay distinct and readable on the dark surfaces. */
+  --chart-1: hsl(271, 72%, 66%);
+  --chart-2: hsl(215, 85%, 62%);
+  --chart-3: hsl(152, 45%, 52%);
+  --chart-4: hsl(1, 70%, 64%);
+  --chart-5: hsl(44, 80%, 56%);
+  --chart-6: hsl(180, 55%, 50%);
+  --chart-other: hsl(246, 6%, 50%);
+  --chart-grid: hsl(246, 11%, 18%);
 }
 
 .light {
@@ -368,7 +416,7 @@
   --gray-200: #dcdce0;
   --gray-300: #c4c4ca;
   --gray-400: #a1a0ab;
-  --gray-500: #878593;
+  --gray-500: #72707d; /* was #878593 (3.6:1 on white); now 4.8:1, AA */
   --gray-600: #6c6b7b;
   --gray-700: #545260;
   --gray-800: #33323e;
@@ -413,7 +461,7 @@
   --yellow-300: #efd280;
   --yellow-400: #eac153;
   --yellow-500: #dfaf2a;
-  --yellow-600: #ad871f;
+  --yellow-600: #8c6c14; /* warning text: 4.9:1 on white (was 3.4:1) */
   --yellow-700: #675218;
   --yellow-800: #3d3214;
   --yellow-900: #241e0f;
@@ -421,6 +469,25 @@
   --dots: #e7e6ea;
   --canvas-bg: var(--secondaryBg);
   --spreadShadow: 0 8px 18px rgba(0, 0, 0, 0.1);
+  --elev-raised: 0 1px 2px rgba(19, 17, 28, 0.06);
+  --elev-popover: 0 0 0 1px rgba(19, 17, 28, 0.02), 0 4px 12px -2px rgba(19, 17, 28, 0.08), 0 12px 32px -8px rgba(19, 17, 28, 0.12);
+  --elev-dialog: 0 0 0 1px rgba(19, 17, 28, 0.04), 0 24px 64px -16px rgba(19, 17, 28, 0.25);
+  --elev-toast: 0 0 0 1px rgba(19, 17, 28, 0.02), 0 8px 24px -6px rgba(19, 17, 28, 0.16);
+  --skeleton-base: var(--gray-100);
+  --skeleton-shine: var(--gray-50);
+  --scrollbar-thumb: var(--gray-300);
+  --scrollbar-thumb-hover: var(--gray-400);
+  --primary-hover: var(--pink-600);
+  --danger-hover: var(--red-600);
+  /* Chart series: darker tones so thin lines keep 3:1 against white. */
+  --chart-1: #873bce;
+  --chart-2: #2b63d1;
+  --chart-3: #2f8a60;
+  --chart-4: #c8403d;
+  --chart-5: #b58a12;
+  --chart-6: #23898a;
+  --chart-other: #a1a0ab;
+  --chart-grid: #ececef;
 }
 
 html,
@@ -438,26 +505,52 @@ body {
 ::selection {
   background: color-mix(in srgb, var(--color-accent) 40%, transparent);
 }
+.light ::selection {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
 
+/* Thin scrollbars: a 2px transparent border keeps the thumb slim; it darkens on hover. */
 ::-webkit-scrollbar-corner {
   background-color: #0000;
 }
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
   background: 0 0;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--gray-400);
-  border-radius: 5px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 @supports not selector(::-webkit-scrollbar) {
   * {
-    scrollbar-color: var(--color-border) transparent;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
     scrollbar-width: thin;
   }
+}
+
+/* applyTheme() sets this for one frame so switching themes does not animate every colour transition. */
+.theme-switching,
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* Loading placeholder. Pair with an explicit size; Skeleton in ui.tsx does this. */
+.skeleton {
+  background-color: var(--skeleton-base);
+  background-image: linear-gradient(90deg, transparent 0%, var(--skeleton-shine) 50%, transparent 100%);
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: var(--animate-shimmer);
 }
 
 @layer base {
@@ -476,6 +569,10 @@ body {
     outline: 2px solid var(--color-accent);
     outline-offset: 2px;
   }
+  /* Elements drawing their own ring (ring utilities) should not get a second outline. */
+  [class*="focus-visible:ring"]:focus-visible {
+    outline: none;
+  }
   input:focus-visible,
   textarea:focus-visible,
   select:focus-visible,
@@ -492,6 +589,13 @@ body {
   }
 }
 
+/* Soft focus halo for text fields (border colour changes too). */
+@utility glow-accent {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+@utility glow-danger {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red-500) 22%, transparent);
+}
 @utility border-neutral {
   border-color: var(--color-gray-200);
 }
@@ -690,7 +794,8 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .staged-changes-banner-shadow {
+  .staged-changes-banner-shadow,
+  .skeleton {
     animation: none;
   }
 

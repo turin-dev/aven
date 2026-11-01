@@ -7,36 +7,27 @@ import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
-  Bell,
-  Box,
-  ChartNoAxesColumn,
   Check,
   ChevronDown,
   Copy,
-  FileText,
-  Gauge,
   GitPullRequest,
   LayoutTemplate,
   LogOut,
-  Network,
   Pencil,
   Plus,
   RefreshCcw,
   RotateCw,
-  Server,
+  Search,
   Settings,
   ShieldCheck,
-  Waypoints,
   Share2,
   Trash2,
   UserRound,
-  SlidersHorizontal,
-  SquareTerminal,
 } from "lucide-react";
 import { api, type Environment } from "@/lib/api";
-import { qk, useCanvas, useCaps, useMe, useNotifications, useProjects, useSystem } from "@/lib/queries";
+import { qk, useCanvas, useCaps, useMe, useSystem } from "@/lib/queries";
 import { ActivityPanel } from "./canvas/ActivityPanel";
-import { canvasHref, useCtxHref } from "@/lib/nav";
+import { SHELL_NAV, canvasHref, useCtxHref, type ShellNavItem } from "@/lib/nav";
 import { Toaster } from "./Toaster";
 import { MfaSetupGate } from "./MfaSetupGate";
 import { InstanceNotice } from "./InstanceNotice";
@@ -46,10 +37,12 @@ import { PublishTemplateDialog } from "./TemplateParts";
 import { setActivityOpen, useActivityOpen } from "@/lib/uiState";
 import { envColor, useWorkspace, type Workspace } from "@/lib/workspace";
 import { useProjectEvents } from "@/lib/useProjectEvents";
-import { useInboxStream } from "@/lib/useInboxStream";
-import { lock, NO_PERM } from "./Perm";
+import { NO_PERM } from "./Perm";
 import { AgentButton } from "./AgentPanel";
-import { Button, Dialog, ErrorBox, Field, IconButton, Input, AvenMark, Menu, MenuItem, Select, Spinner, Textarea, cx, errorMessage } from "./ui";
+import { BootSplash } from "./Providers";
+import { InboxMenu } from "./InboxMenu";
+import { CommandPalette, openCommandPalette } from "./CommandPalette";
+import { Button, Dialog, ErrorBox, Field, Input, AvenMark, Menu, MenuItem, Select, Spinner, Textarea, cx, errorMessage } from "./ui";
 import { useKeyboardShortcuts } from "./KeyboardShortcuts";
 import { t, tr } from "@/lib/i18n";
 
@@ -458,6 +451,55 @@ function WorkspaceSection({ ws, close, onCreate }: { ws: Workspace; close: () =>
   );
 }
 
+/** Projects of the current workspace; a filter field appears once the list gets long. */
+function ProjectList({ ws, close }: { ws: Workspace; close: () => void }) {
+  const [q, setQ] = useState("");
+  const all = ws.projects.data ?? [];
+  const needle = q.trim().toLowerCase();
+  const list = needle ? all.filter((p) => p.name.toLowerCase().includes(needle)) : all;
+  const searchable = all.length > 6;
+  return (
+    <>
+      <div className="px-3 py-1 text-xs font-medium text-gray-600">{t("프로젝트|plural")}</div>
+      {searchable && (
+        <div className="px-1.5 pb-1">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && list[0]) {
+                e.preventDefault();
+                close();
+                if (list[0].id !== ws.pid) ws.switchProject(list[0].id);
+              }
+            }}
+            placeholder={t("프로젝트 검색...")}
+            aria-label={t("프로젝트 검색")}
+            className="h-8 w-full rounded-md border border-gray-200 bg-transparent px-2.5 text-sm text-foreground outline-none placeholder:text-gray-400 focus:border-pink-400"
+          />
+        </div>
+      )}
+      <div className="max-h-[300px] overflow-y-auto">
+        {list.map((p) => (
+          <MenuItem
+            key={p.id}
+            icon={p.id === ws.pid ? <Check className="size-3.5 text-pink-600" /> : <span className="inline-block size-3.5" />}
+            onSelect={() => {
+              close();
+              if (p.id !== ws.pid) ws.switchProject(p.id);
+            }}
+          >
+            <span className="min-w-0 flex-1 truncate">{p.name}</span>
+          </MenuItem>
+        ))}
+        {needle && list.length === 0 && <div className="px-3 py-3 text-center text-xs text-gray-500">{t("“{query}”와 일치하는 프로젝트가 없습니다", { query: q.trim() })}</div>}
+        {!needle && all.length === 0 && !ws.projects.isPending && <div className="px-3 py-3 text-xs text-gray-500">{t("프로젝트가 아직 없습니다")}</div>}
+      </div>
+    </>
+  );
+}
+
 function ProjectMenu({ ws }: { ws: Workspace }) {
   const router = useRouter();
   const health = useHealth();
@@ -483,12 +525,12 @@ function ProjectMenu({ ws }: { ws: Workspace }) {
         label={t("프로젝트")}
         trigger={(p) => (
           <button type="button" {...p} className={cx(crumbBtn, "select-project")} aria-label={t("프로젝트: {name}. 프로젝트 바꾸기", { name })}>
-            <span className="inline-block size-4 shrink-0 overflow-hidden rounded-full" aria-hidden>
+            <span className="hidden size-4 shrink-0 overflow-hidden rounded-full sm:inline-block" aria-hidden>
               <span className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[#6f31aa] to-[#306ee8] text-[9px] font-semibold leading-none text-white">
                 {(user ?? "?").slice(0, 1).toUpperCase()}
               </span>
             </span>
-            <span className="project-name max-w-[110px] truncate whitespace-nowrap text-left font-medium text-sm sm:max-w-[240px]">{name}</span>
+            <span className="project-name max-w-[80px] truncate whitespace-nowrap text-left font-medium text-sm sm:max-w-[240px]">{name}</span>
             {!health.ok && <span className="size-2 shrink-0 rounded-full bg-red-600" title={health.label} />}
             {crumbChevron}
           </button>
@@ -496,21 +538,7 @@ function ProjectMenu({ ws }: { ws: Workspace }) {
       >
         {(close) => (
           <div className="w-[279px]">
-            <div className="px-3 py-1 text-xs font-medium text-gray-600">{t("프로젝트|plural")}</div>
-            <div className="max-h-[300px] overflow-y-auto">
-              {(ws.projects.data ?? []).map((p) => (
-                <MenuItem
-                  key={p.id}
-                  icon={p.id === ws.pid ? <Check className="size-3.5 text-pink-600" /> : <span className="inline-block size-3.5" />}
-                  onSelect={() => {
-                    close();
-                    if (p.id !== ws.pid) ws.switchProject(p.id);
-                  }}
-                >
-                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
-                </MenuItem>
-              ))}
-            </div>
+            <ProjectList ws={ws} close={close} />
             <div className="my-2 h-px w-full bg-gray-100" />
             <MenuItem
               icon={<LayoutTemplate />}
@@ -629,13 +657,13 @@ function EnvMenu({ ws }: { ws: Workspace }) {
             style={color ? { borderColor: `${color}66`, background: `${color}1f`, color } : undefined}
           >
             {color && <span className="size-2 shrink-0 rounded-full" style={{ background: color }} />}
-            <span className="environment-name min-w-0 max-w-[96px] truncate text-left font-medium text-sm sm:max-w-[160px]">{env?.name ?? "…"}</span>
+            <span className="environment-name min-w-0 max-w-[64px] truncate text-left font-medium text-sm sm:max-w-[160px]">{env?.name ?? "…"}</span>
             {crumbChevron}
           </button>
         )}
       >
         {(close) => (
-          <div className="w-[259px]">
+          <div className="w-[224px] sm:w-[259px]">
             <div className="px-3 py-1 text-xs font-medium text-gray-600">{t("환경")}</div>
             {sortEnvs(ws.envs).flatMap((e, i, all) => {
               const def = e.id === ws.detail?.default_environment_id;
@@ -834,21 +862,30 @@ function AccountMenu({ user, side = "bottom" }: { user?: string; side?: "bottom"
     </Menu>
   );
 }
-const NAV = [
-  { href: "/", label: t("아키텍처"), icon: Network, match: (p: string) => p === "/" },
-  { href: "/observability/", label: t("관측"), icon: ChartNoAxesColumn, match: (p: string) => p.startsWith("/observability") },
-  { href: "/logs/", label: t("로그"), icon: FileText, match: (p: string) => p.startsWith("/logs") },
-  { href: "/traces/", label: t("트레이스"), icon: Waypoints, match: (p: string) => p.startsWith("/traces") },
-  { href: "/nodes/", label: t("노드"), icon: Server, match: (p: string) => p.startsWith("/nodes") },
-  { href: "/sandboxes/", label: t("샌드박스"), icon: Box, match: (p: string) => p.startsWith("/sandboxes") },
-  { href: "/usage/", label: t("사용량"), icon: Gauge, match: (p: string) => p.startsWith("/usage") },
-  { href: "/templates/", label: t("템플릿"), icon: LayoutTemplate, match: (p: string) => p.startsWith("/templates") },
-  { href: "/cli/", label: "CLI", icon: SquareTerminal, match: (p: string) => p.startsWith("/cli") },
-  { href: "/settings/", label: t("설정"), icon: Settings, match: (p: string) => p.startsWith("/settings"), bottom: true },
-  { href: "/admin/", label: t("어드민"), icon: ShieldCheck, match: (p: string) => p.startsWith("/admin"), bottom: true },
-];
 const barBtn =
   "relative flex min-h-[28px] cursor-pointer items-center gap-1 rounded-md border border-transparent p-1.5 text-neutral-secondary focus-visible:ring-2 focus-visible:ring-pink-500 hover:bg-gray-100 hover:text-gray-900";
+/** Opens the command palette; shows the shortcut on wide screens. */
+export function SearchButton() {
+  const [mac, setMac] = useState(false);
+  useEffect(() => setMac(/Mac|iPhone|iPad/.test(navigator.platform)), []);
+  return (
+    <button
+      type="button"
+      onClick={openCommandPalette}
+      aria-label={t("검색 및 명령")}
+      aria-keyshortcuts={mac ? "Meta+K" : "Control+K"}
+      title={t("검색 및 명령")}
+      className={cx(barBtn, "lg:gap-2 lg:border-gray-200 lg:px-2 lg:py-1 lg:text-sm dark:lg:border-white/10")}
+    >
+      <span className="icon-container icon-sm text-lg text-current"><Search /></span>
+      <span className="hidden lg:inline">{t("검색")}</span>
+      <span className="hidden items-center gap-0.5 lg:flex" aria-hidden>
+        <kbd className="rounded border border-gray-200 bg-gray-100 px-1 font-sans text-xs text-gray-500">{mac ? "⌘" : "Ctrl"}</kbd>
+        <kbd className="rounded border border-gray-200 bg-gray-100 px-1 font-sans text-xs text-gray-500">K</kbd>
+      </span>
+    </button>
+  );
+}
 function ActivityButton() {
   const pathname = usePathname() || "/";
   const router = useRouter();
@@ -872,112 +909,23 @@ function ActivityButton() {
     </button>
   );
 }
-const ATTENTION = /(\.failed|_failed|\.crashed|alert\.firing|limit_exceeded|threshold_reached)$/;
-/**
- * v1.5: per-user inbox (GET /notifications). Live via the inbox SSE stream; polled every 30 s while the stream is down.
- * Kinds follow the account's notification preferences.
- */
-function BellMenu() {
-  const router = useRouter();
-  const qc = useQueryClient();
-  const inbox = useNotifications(useInboxStream());
-  const projects = useProjects();
-  const list = inbox.data?.notifications ?? [];
-  const unread = inbox.data?.unread ?? 0;
-  const projectName = (pid: string) => projects.data?.find((p) => p.id === pid)?.name ?? t("프로젝트");
-  const markRead = async (input: { ids: string[] } | { all: true }) => {
-    try {
-      await api.readNotifications(input);
-    } finally {
-      qc.invalidateQueries({ queryKey: qk.notifications });
-    }
-  };
+const EXTRA_PAGES: { prefix: string; label: string }[] = [
+  { prefix: "/account", label: t("계정 설정") },
+  { prefix: "/deployments", label: t("배포") },
+  { prefix: "/apps", label: t("앱") },
+];
+/** Last breadcrumb segment: the page you are on, when it is not the canvas. */
+function PageCrumb() {
+  const pathname = usePathname() || "/";
+  if (pathname === "/") return null;
+  const label = SHELL_NAV.find((n) => n.href !== "/" && n.match(pathname))?.label ?? EXTRA_PAGES.find((p) => pathname.startsWith(p.prefix))?.label;
+  if (!label) return null;
   return (
-    <Menu
-      label={t("알림")}
-      trigger={(p) => (
-        <button
-          type="button"
-          {...p}
-          aria-label={unread ? t("알림 (읽지 않음 {count}개)", { count: unread }) : t("알림")}
-          title={t("알림")}
-          className={cx(barBtn, p["aria-expanded"] && "bg-gray-100")}
-        >
-          <span className="relative">
-            <span className="icon-container icon-sm text-lg text-current"><Bell /></span>
-            {unread > 0 && (
-              <span
-                aria-hidden="true"
-                className="absolute -right-[7px] -top-[6px] flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-red-600 px-[3px] text-xs font-semibold leading-none text-white"
-              >
-                {unread > 99 ? "99+" : unread}
-              </span>
-            )}
-          </span>
-        </button>
-      )}
-    >
-      {(close) => (
-        <div className="w-[379px]">
-          <div className="flex items-center justify-between px-3 pb-2 pt-3">
-            <span className="text-sm font-medium text-foreground">{t("알림")}</span>
-            <span className="flex items-center gap-[10px]">
-              {unread > 0 && (
-                <button type="button" className="cursor-pointer text-xs text-pink-500 hover:underline" onClick={() => markRead({ all: true })}>
-                  {t("모두 읽음")}
-                </button>
-              )}
-              <Link href="/account/?section=notifications" onClick={close} className="text-xs text-gray-500 hover:text-foreground">
-                {t("설정")}
-              </Link>
-            </span>
-          </div>
-          {inbox.isPending ? (
-            <div className="flex justify-center py-[16px]">
-              <Spinner />
-            </div>
-          ) : list.length === 0 ? (
-            <div className="mx-3 mb-3 rounded border border-dashed border-gray-200 px-[10px] py-8 text-center text-sm text-gray-500">{t("알림이 없습니다")}</div>
-          ) : (
-            <div className="max-h-[420px] overflow-y-auto">
-              {list.map((n) => (
-                <MenuItem
-                  key={n.id}
-                  className="!h-auto items-start !py-2"
-                  onSelect={() => {
-                    close();
-                    if (!n.read_at) void markRead({ ids: [n.id] });
-                    router.push(n.service_id ? canvasHref({ svc: n.service_id }, { project: n.project_id }) : canvasHref({}, { project: n.project_id }));
-                  }}
-                >
-                  <span className={cx("mt-[5px] size-[6px] shrink-0 self-start rounded-full", n.read_at ? "bg-transparent" : ATTENTION.test(n.kind) ? "bg-red-600" : "bg-pink-500")} />
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-[8px]">
-                      <span className={cx("truncate text-xs", n.read_at ? "text-gray-500" : "font-medium text-foreground")}>
-                        {projectName(n.project_id)} · {n.kind}
-                      </span>
-                      <span className="shrink-0 text-xs text-gray-400">{relTime(n.created_at)}</span>
-                    </span>
-                    <span className={cx("line-clamp-2 text-xs", n.read_at ? "text-gray-400" : "text-gray-500")}>{n.message}</span>
-                  </span>
-                </MenuItem>
-              ))}
-            </div>
-          )}
-          <Link href="/account/?section=notifications" onClick={close} className="flex items-center gap-2 border-t border-gray-200 px-3 py-3 text-xs font-medium text-foreground hover:text-pink-600">
-            <SlidersHorizontal className="size-3.5" /> {t("환경설정 편집")}
-          </Link>
-        </div>
-      )}
-    </Menu>
+    <div className="hidden min-w-0 items-center md:flex">
+      <div className="mr-1 h-5 w-px shrink-0 rotate-[15deg] border-l border-neutral-secondary" />
+      <span aria-current="page" className="truncate px-2 text-sm font-medium text-foreground">{label}</span>
+    </div>
   );
-}
-function relTime(iso: string): string {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return t("방금");
-  if (s < 3600) return t("{n}분 전", { n: Math.floor(s / 60) });
-  if (s < 86400) return t("{n}시간 전", { n: Math.floor(s / 3600) });
-  return t("{n}일 전", { n: Math.floor(s / 86400) });
 }
 function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: boolean }) {
   return (
@@ -993,22 +941,28 @@ function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: bool
             <div className="flex items-center gap-2 text-sm font-medium"><ShieldCheck className="size-4" />{t("서버 관리")}</div>
           ) : <nav aria-label={t("경로")} className="flex min-w-0 flex-nowrap items-center gap-1">
             <div className="ml-1 mr-1 h-5 w-px shrink-0 border-l border-neutral-secondary md:ml-2 md:mr-2" />
-            <div className="min-w-0 hidden sm:block">
+            <div className="min-w-0">
               <ProjectMenu ws={ws} />
             </div>
-            <div className="flex min-w-0 items-center rounded-none bg-transparent">
-              <div className="mr-1 hidden h-5 w-px shrink-0 rotate-[15deg] border-l border-neutral-secondary sm:block" />
-              <EnvMenu ws={ws} />
-            </div>
+            {(ws.pid || ws.isPending) && (
+              <div className="flex min-w-0 items-center rounded-none bg-transparent">
+                <div className="mr-1 hidden h-5 w-px shrink-0 rotate-[15deg] border-l border-neutral-secondary sm:block" />
+                <EnvMenu ws={ws} />
+              </div>
+            )}
+            <PageCrumb />
           </nav>}
         </div>
         <nav className="ml-auto flex shrink-0 items-center gap-x-3">
           <div className="flex items-center">
             <div className="flex items-center gap-2">
+              <div className="hidden sm:block">
+                <SearchButton />
+              </div>
               {!admin && <div className="hidden md:block">
                 <ActivityButton />
               </div>}
-              <BellMenu />
+              <InboxMenu />
               <div className="mx-1 hidden h-5 w-0.5 rounded-full bg-black/[0.05] lg:block dark:bg-white/10" />
               {!admin && <AgentButton ws={ws} />}
               <div className="flex items-center md:hidden">
@@ -1022,7 +976,7 @@ function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: bool
     </div>
   );
 }
-function RailLink({ n, active }: { n: (typeof NAV)[number]; active: boolean }) {
+function RailLink({ n, active }: { n: ShellNavItem; active: boolean }) {
   const href = useCtxHref();
   const Icon = n.icon;
   return (
@@ -1047,7 +1001,7 @@ function RailLink({ n, active }: { n: (typeof NAV)[number]; active: boolean }) {
 function Rail({ user }: { user?: string }) {
   const pathname = usePathname() || "/";
   const me = useMe().data;
-  const nav = NAV.filter((n) => n.href !== "/admin/" || me?.instance_admin);
+  const nav = SHELL_NAV.filter((n) => n.href !== "/admin/" || me?.instance_admin);
   const idx = nav.findIndex((n) => n.match(pathname));
   // Rows are h-10 (2.5rem) + gap-1 (0.25rem).
   const step = idx < 0 ? 0 : idx * 2.75;
@@ -1170,6 +1124,7 @@ function ShellInner({ children }: { children: ReactNode }) {
     <div className="relative h-dvh bg-transparent dark:bg-background">
       <div className="absolute inset-0 flex flex-col">
         <Toaster shifted={activityShown} />
+        {me.data && <CommandPalette ws={ws} />}
         <TopBar user={me.data?.user} ws={ws} admin={admin} />
         <div className="flex min-h-0 flex-1 flex-col-reverse md:flex-row">
           <Rail user={me.data?.user} />
@@ -1241,13 +1196,7 @@ function ShellInner({ children }: { children: ReactNode }) {
 
 export function Shell({ children }: { children: ReactNode }) {
   return (
-    <Suspense
-      fallback={
-        <div className="dot-grid flex h-dvh items-center justify-center">
-          <Spinner />
-        </div>
-      }
-    >
+    <Suspense fallback={<BootSplash />}>
       <ShellInner>{children}</ShellInner>
     </Suspense>
   );

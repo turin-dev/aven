@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { t } from "@/lib/i18n";
 import { qk, useMe } from "@/lib/queries";
-import { ErrorBox, Toggle } from "@/components/ui";
+import { ErrorBox, Toggle, useConfirm } from "@/components/ui";
 
 export function WorkspaceTwoFactorSetting() {
   const qc = useQueryClient();
@@ -16,6 +16,7 @@ export function WorkspaceTwoFactorSetting() {
   const required = !!security.data?.require_2fa;
   const selfHasMfa = !!(me?.mfa_enabled ?? me?.totp_enabled);
   const blocked = !required && !selfHasMfa;
+  const { confirm, node } = useConfirm();
 
   const set = async (v: boolean) => {
     setBusy(true);
@@ -32,6 +33,7 @@ export function WorkspaceTwoFactorSetting() {
 
   return (
     <div className="max-w-3xl rounded-lg border border-gray-200 p-4">
+      {node}
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">{t("2FA 요구")}</div>
@@ -40,7 +42,21 @@ export function WorkspaceTwoFactorSetting() {
           </p>
           {blocked && <p className="mt-2 text-xs text-gray-500">{t("먼저 내 계정의 보안 설정에서 2단계 인증을 켜야 이 옵션을 켤 수 있습니다.")}</p>}
         </div>
-        <Toggle label={t("2FA 요구")}checked={required} disabled={busy || security.isPending || blocked} onChange={set} />
+        <Toggle
+          label={t("2FA 요구")}
+          checked={required}
+          disabled={busy || security.isPending || blocked}
+          onChange={(v) =>
+            v
+              ? confirm({
+                  title: t("2FA 요구"),
+                  message: t("2단계 인증을 설정하지 않은 멤버는 다음 접속 때 설정을 마쳐야 대시보드와 CLI를 쓸 수 있습니다. API 토큰을 쓰는 자동화는 영향을 받지 않습니다."),
+                  confirmLabel: t("켜기"),
+                  run: () => set(true),
+                })
+              : void set(false)
+          }
+        />
       </div>
       <ErrorBox error={security.error ?? error} className="mt-3" />
     </div>

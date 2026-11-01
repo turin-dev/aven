@@ -322,9 +322,12 @@ func (e RowEdit) check(needPK, needSet bool) (string, error) {
 }
 
 // affected는 편집 문장을 영향받은 행 수(열 affected) 하나를 돌려주는 스크립트로 감싼다.
+// postgres에는 LIMIT이 없다: 상속 표는 부모와 자식에 같은 기본 키 값이 있을 수 있으므로, 트랜잭션 안에서 두 행 이상이
+// 바뀌면 오류를 내 되돌린다(psql은 ON_ERROR_STOP으로 COMMIT 전에 끝나고 연결이 닫히며 롤백된다).
 func (e RowEdit) affected(stmt, mysqlLimit string) string {
 	if e.Kind == "postgres" {
-		return "WITH r AS (" + stmt + " RETURNING 1) SELECT count(*) AS affected FROM r;\n"
+		return "BEGIN;\nWITH r AS (" + stmt + " RETURNING 1) SELECT CASE WHEN count(*) <= 1 THEN count(*) ELSE " +
+			"('refusing to change ' || count(*) || ' rows: the primary key matched more than one row')::bigint END AS affected FROM r;\nCOMMIT;\n"
 	}
 	return MySQLSessionPrelude + stmt + mysqlLimit + ";\nSELECT ROW_COUNT() AS affected;\n"
 }

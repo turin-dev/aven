@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -65,7 +64,7 @@ var domainSubcommands = map[string]bool{"list": true, "ls": true, "status": true
 	"rm": true, "remove": true, "delete": true, "verify": true, "rename": true, "add": true}
 
 func cmdDomain(c *config, args []string) {
-	fl := flag.NewFlagSet("domain", flag.ExitOnError)
+	fl := newFlagSet("domain")
 	port := fl.Int("port", 0, "target container port (default: the service port)")
 	fl.IntVar(port, "p", 0, "target container port")
 	yes := fl.Bool("y", false, "don't ask for confirmation")

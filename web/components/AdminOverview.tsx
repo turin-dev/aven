@@ -3,11 +3,16 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Building2, CircleAlert, Crown, Folder, Mail, Pause, Play, RefreshCw, Server, Trash2, Users } from "lucide-react";
-import { api, type AdminWorkspace, type OwnerHold, type OwnerHoldScope, type PreviousOwnerAction, type Project } from "@/lib/api";
-import { qk, useMe, useProjects } from "@/lib/queries";
+import { ArrowUpRight, Building2, CheckCircle2, CircleAlert, Crown, Folder, Mail, Pause, Play, RefreshCw, Server, Trash2, Users } from "lucide-react";
+import { api, type AdminWorkspace, type OwnerHold, type OwnerHoldScope, type PreviousOwnerAction, type Project, type SelfServiceStatus } from "@/lib/api";
+import { qk, useMe, useNodes, useProjects, useSystem } from "@/lib/queries";
+import { canvasHref } from "@/lib/nav";
+import { fmtBytes, fmtRelative } from "@/lib/format";
+import { diskLevel } from "@/lib/metrics";
+import { HealthItem, NodeHealthRow, ProblemEventList, useRecentProblems, type HealthState } from "./nodes/NodeHealth";
+import { useSetupStatus } from "./SetupChecklist";
 import { dateLocale, t, tr } from "@/lib/i18n";
-import { Button, Card, Dialog, ErrorBox, Input, Select, Spinner, cx } from "./ui";
+import { Button, Card, Dialog, ErrorBox, Input, Select, Spinner, cx, errorMessage } from "./ui";
 
 function useOverview() {
   return useQuery({ queryKey: qk.instanceOverview, queryFn: api.instanceOverview, refetchInterval: 30_000 });
@@ -24,16 +29,103 @@ function Refresh({ query }: { query: ReturnType<typeof useOverview> }) {
 
 export function AdminOverview() {
   const query = useOverview();
+  const me = useMe().data;
+  const owner = me?.instance_owner === true;
   const data = query.data;
+  const sys = useSystem();
+  const nodes = useNodes();
+  const setup = useSetupStatus(owner);
+  const self = useQuery({ queryKey: qk.selfService, queryFn: api.selfService, enabled: owner, staleTime: 60_000 });
+  const problems = useRecentProblems(!!data);
   const projects = data?.workspaces.reduce((n, w) => n + w.projects, 0) ?? 0;
   const services = data?.workspaces.reduce((n, w) => n + w.services, 0) ?? 0;
   const unhealthy = data?.workspaces.reduce((n, w) => n + w.unhealthy_instances, 0) ?? 0;
   const online = data?.nodes.filter((n) => n.status !== "offline").length ?? 0;
   const offline = data?.nodes.filter((n) => n.status === "offline").length ?? 0;
+  const s = sys.data;
+  const nodeList = [...(nodes.data ?? [])].sort((a, b) => Number(b.is_local) - Number(a.is_local) || a.name.localeCompare(b.name));
+  const offlineNodes = nodeList.filter((n) => n.status === "offline");
+  const lowDisk = nodeList.filter((n) => n.status !== "offline" && diskLevel(n.disk_free_bytes) !== "ok");
+  const update = self.data?.update;
+
+  // Things that need the operator, most severe first. Each links to where it is fixed.
+  const attention: { key: string; tone: "bad" | "warn"; text: string; href: string }[] = [];
+  if (s && s.docker !== "ok") attention.push({ key: "docker", tone: "bad", text: t("Docker가 응답하지 않습니다 ({status}). 배포와 재시작이 실패합니다.", { status: s.docker }), href: "/admin/?section=system" });
+  if (s && s.proxy !== "ok") attention.push({ key: "proxy", tone: "bad", text: t("프록시(aven-proxy)가 응답하지 않습니다 ({status}). 도메인 접속이 끊길 수 있습니다.", { status: s.proxy }), href: "/admin/?section=system" });
+  for (const n of offlineNodes) attention.push({ key: `off-${n.id}`, tone: "bad", text: t("노드 {name}의 연결이 끊겼습니다 · 마지막 응답 {time}", { name: n.name, time: fmtRelative(n.last_seen_at) }), href: "/admin/?section=nodes" });
+  for (const n of lowDisk) attention.push({ key: `disk-${n.id}`, tone: diskLevel(n.disk_free_bytes) === "danger" ? "bad" : "warn", text: t("노드 {name}의 디스크 여유가 {free}뿐입니다.", { name: n.name, free: fmtBytes(n.disk_free_bytes) }), href: "/admin/?section=nodes" });
+  if (unhealthy > 0) attention.push({ key: "unhealthy", tone: "warn", text: t("배포 실패·실행 오류 상태인 서비스가 {count}개 있습니다.", { count: unhealthy }), href: "/admin/?section=workspaces" });
+  if (owner && setup.data && !setup.data.complete) attention.push({ key: "setup", tone: "warn", text: t("초기 설정 필수 항목이 {count}개 남았습니다.", { count: setup.data.required - setup.data.required_done }), href: "/admin/?section=setup" });
+  if (owner && update?.error) attention.push({ key: "update-error", tone: "warn", text: t("업데이트를 확인하지 못했습니다: {error}", { error: update.error }), href: "/admin/?section=setup" });
+
+  const dockerState: HealthState = !s ? "unknown" : s.docker === "ok" ? "ok" : "bad";
+  const proxyState: HealthState = !s ? "unknown" : s.proxy === "ok" ? "ok" : "bad";
+  const localDisk = s ? diskLevel(s.disk_free_bytes) : "ok";
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-3xl space-y-6">
       <Card title={t("전체 현황")} description={t("계정, 작업 공간과 서버 상태를 한눈에 확인하세요.")}><Refresh query={query} /></Card>
       <ErrorBox error={query.error} />
+
+      <Card title={t("서버 상태")} description={s ? t("aven-server {version} · {node}", { version: s.version, node: s.node }) : undefined}>
+        {sys.error ? <ErrorBox error={sys.error} /> : (
+          <ul className="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("서버 상태")}>
+            <HealthItem label="Docker" state={dockerState} detail={!s ? t("확인 중") : s.docker === "ok" ? t("정상") : t("응답 없음 ({status})", { status: s.docker })} href="/admin/?section=system" />
+            <HealthItem label={t("프록시")} state={proxyState} detail={!s ? t("확인 중") : s.proxy === "ok" ? t("정상") : t("응답 없음 ({status})", { status: s.proxy })} href="/admin/?section=system" />
+            <HealthItem
+              label={t("노드")}
+              state={!nodes.data ? "unknown" : offlineNodes.length ? "bad" : "ok"}
+              detail={!nodes.data ? t("확인 중") : offlineNodes.length ? t("{online}/{total} 연결됨 · 끊김 {offline}개", { online: nodeList.length - offlineNodes.length, total: nodeList.length, offline: offlineNodes.length }) : t("{total}개 모두 연결됨", { total: nodeList.length })}
+              href="/admin/?section=nodes"
+            />
+            <HealthItem
+              label={t("디스크 여유")}
+              state={!s ? "unknown" : localDisk === "danger" ? "bad" : localDisk === "warn" ? "warn" : "ok"}
+              detail={s ? t("이 서버 {free} 남음", { free: fmtBytes(s.disk_free_bytes) }) : t("확인 중")}
+              href="/admin/?section=system"
+            />
+          </ul>
+        )}
+      </Card>
+
+      {data && (
+        <Card
+          title={t("확인이 필요한 항목")}
+          flush
+          footerNote={problems.truncated ? t("최근 오류는 프로젝트 {count}개까지만 확인합니다.", { count: 20 }) : t("최근 오류는 지난 24시간, 내가 열 수 있는 프로젝트 기준입니다.")}
+        >
+          {attention.length === 0 && problems.events.length === 0 ? (
+            <p className="flex items-center gap-2 px-5 py-4 text-sm text-gray-600">
+              <CheckCircle2 className="size-4 text-success" aria-hidden />
+              {problems.loading ? t("최근 오류를 확인하는 중입니다.") : t("지금 확인할 문제가 없습니다.")}
+            </p>
+          ) : (
+            <>
+              {attention.length > 0 && (
+                <ul className="divide-y divide-gray-100" aria-label={t("확인이 필요한 항목")}>
+                  {attention.map((a) => (
+                    <li key={a.key}>
+                      <Link href={a.href} className="flex items-center gap-3 px-5 py-2.5 text-sm hover:bg-gray-50 focus-visible:outline-2 focus-visible:outline-pink-500">
+                        <CircleAlert className={cx("size-4 shrink-0", a.tone === "bad" ? "text-danger" : "text-warn")} aria-hidden />
+                        <span className="min-w-0 flex-1">{a.text}</span>
+                        <ArrowUpRight className="size-3.5 shrink-0 text-gray-400" aria-hidden />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {problems.events.length > 0 && (
+                <div className={cx(attention.length > 0 && "border-t border-gray-200")}>
+                  <div className="px-5 pt-3 text-xs font-semibold text-gray-600">
+                    {t("최근 오류 {count}건", { count: problems.total })}
+                  </div>
+                  <ProblemEventList events={problems.events} />
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+      )}
+
       {!data && query.isPending ? <Spinner /> : data && <>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {[
@@ -51,24 +143,54 @@ export function AdminOverview() {
             </Link>
           ))}
         </div>
-        <Card title={t("서버 연결 상태")} description={t("오프라인 노드는 서버 노드 메뉴에서 확인하세요.")}>
-          {data.nodes.length === 0 ? <p className="text-sm text-gray-500">{t("등록된 노드가 없습니다.")}</p> : (
-            <ul className="divide-y divide-gray-200" aria-label={t("서버 연결 상태")}>
-              {data.nodes.map((n) => (
-                <li key={n.id} className="flex flex-wrap items-center gap-3 py-3 text-sm">
-                  <Server className="size-4 shrink-0 text-gray-500" />
-                  <span className="min-w-0 flex-1 truncate">{n.name}{n.is_local && <span className="ml-2 text-xs text-gray-500">{t("현재 서버")}</span>}</span>
-                  {!n.schedulable && <span className="text-xs text-gray-500">{t("새 배포 중지")}</span>}
-                  <span className={cx("text-xs font-medium", n.status === "offline" ? "text-danger" : n.status === "draining" ? "text-warn" : "text-success")}>
-                    {n.status === "offline" ? t("연결 끊김") : n.status === "draining" ? t("비우는 중") : t("연결됨")}
-                  </span>
-                </li>
-              ))}
+        <Card
+          title={t("노드 사용량")}
+          description={t("최근 1시간 지표의 마지막 값입니다. 75% 이상은 노란색, 90% 이상은 빨간색으로 표시합니다.")}
+          action={<Link href="/admin/?section=nodes" className="text-sm text-pink-600 hover:underline">{t("서버 노드")}</Link>}
+          flush
+        >
+          {nodes.error ? <ErrorBox error={nodes.error} className="m-4" /> : !nodes.data ? <div className="p-5"><Spinner /></div> : nodeList.length === 0 ? <p className="px-5 py-4 text-sm text-gray-500">{t("등록된 노드가 없습니다.")}</p> : (
+            <ul className="divide-y divide-gray-100" aria-label={t("노드 사용량")}>
+              {nodeList.map((n) => <NodeHealthRow key={n.id} n={n} />)}
             </ul>
           )}
         </Card>
       </>}
+      {owner && self.data && <SelfUpdateSummary data={self.data} />}
     </div>
+  );
+}
+
+/** Owner-only: running version and the result of the last update check (Aven on Aven). */
+function SelfUpdateSummary({ data }: { data: SelfServiceStatus }) {
+  const u = data.update;
+  const href = data.enabled && data.service_id
+    ? canvasHref({ svc: data.service_id }, { project: data.project_id, env: data.environment_id, ws: data.workspace_id })
+    : "/admin/?section=setup";
+  const checked = u?.checked_at && !u.checked_at.startsWith("0001") ? fmtRelative(u.checked_at) : null;
+  return (
+    <Card title={t("Aven 업데이트")} description={t("지금 버전 {version}", { version: data.server.version || t("개발 빌드") })}>
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        {!data.enabled ? (
+          <span className="text-gray-600">{t("캔버스에서 Aven을 관리하면 새 버전을 확인하고 대시보드에서 업데이트할 수 있습니다.")}</span>
+        ) : !u ? (
+          <span className="text-gray-600">{t("아직 업데이트를 확인하지 않았습니다")}</span>
+        ) : u.available ? (
+          <span className="flex items-center gap-2 font-medium">
+            <span className="size-2 rounded-full bg-pink-500" aria-hidden />
+            {u.behind ? t("새 버전이 있습니다 · 커밋 {count}개", { count: u.behind }) : t("새 버전이 있습니다")}
+          </span>
+        ) : u.error ? (
+          <span className="text-danger">{t("업데이트를 확인하지 못했습니다: {error}", { error: u.error })}</span>
+        ) : (
+          <span className="flex items-center gap-2"><CheckCircle2 className="size-4 text-success" aria-hidden />{t("최신 버전입니다")}</span>
+        )}
+        {checked && <span className="text-xs text-gray-500">{t("{when} 확인", { when: checked })}</span>}
+        <Link href={href} className="ml-auto text-sm text-pink-600 hover:underline">
+          {data.enabled ? t("캔버스에서 열기") : t("초기 설정 열기")}
+        </Link>
+      </div>
+    </Card>
   );
 }
 
@@ -350,7 +472,7 @@ export function HoldControl({ scope, id, name, hold, onHold, onChanged }: { scop
       >
         <Play className="size-3.5" />{t("재개")}
       </button>
-      {error ? <span className="text-xs text-danger">{t("재개 실패")}</span> : null}
+      {error ? <span className="text-xs text-danger" role="alert" title={errorMessage(error)}>{t("재개 실패: {error}", { error: errorMessage(error) })}</span> : null}
     </span>
   );
 }

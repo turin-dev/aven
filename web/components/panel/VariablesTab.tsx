@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Braces, CornerDownRight, Network, Plus } from "lucide-react";
+import { AlertTriangle, Braces, CornerDownRight, Eye, EyeOff, Network, Plus, Search, X } from "lucide-react";
 import { api, INJECTED_VARS, SEALED_VALUE, type CanvasService, type Environment } from "@/lib/api";
 import { qk, useCanvas, useCaps, useResolvedVariables, useSharedVariables } from "@/lib/queries";
 import { lock, NO_PERM } from "../Perm";
@@ -17,22 +17,20 @@ import { EditVariableRow, KEY_RE, VariableRow, type Row } from "./variables/Vari
 import { NewVariableForm, type RefOption } from "./variables/NewVariableForm";
 import { SharedVariablesPanel, sharedRef } from "./variables/SharedVariablesPanel";
 import { ProvidedVariables } from "./variables/ProvidedVariables";
+import { useRefScope } from "./variables/RefCheck";
+import { BulkPasteDialog } from "./variables/BulkPasteDialog";
+import type { DotenvError } from "@/lib/dotenv";
+import { refProblems, resolvePreview } from "@/lib/refs";
+import { marshalEnv } from "@/lib/dotenv";
 import { t, tr } from "@/lib/i18n";
 
 // Kept here for existing importers (settings page).
 export { RawEditor, CodeEditor } from "./variables/RawEditor";
 export { RefValue } from "./variables/VariableRow";
 
-function quote(v: string): string {
-  if (v === "" || /^[^\s#"'\\]+$/.test(v)) return v;
-  return `"${v.replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
-}
-
+/** Shared-variables RAW editor text: same quoting as the server's .env writer, so `parseEnv` reads it back unchanged. */
 export function toDotenv(env: Record<string, string>): string {
-  return Object.entries(env)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([k, v]) => `${k}=${quote(v)}`)
-    .join("\n");
+  return marshalEnv(env);
 }
 
 /** RAW editor check: the dashboard only creates POSIX-style names. */
@@ -78,6 +76,8 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
   const [adding, setAdding] = useState(false);
   const [raw, setRaw] = useState(false);
   const [sharedOpen, setSharedOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [bulk, setBulk] = useState<{ pairs: [string, string][]; errors: DotenvError[] } | null>(null);
   const newBtn = useRef<HTMLButtonElement>(null);
   const qc = useQueryClient();
   const { confirm, node: confirmNode } = useConfirm();
@@ -129,7 +129,25 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
         return { key: k, value: st === undefined || st === null ? (server[k] ?? "") : st, server: server[k], deleted, sealed: sealedKeys.has(k) && k in server };
       });
   }, [server, staged.vars, sealedKeys]);
+  const q = filter.trim().toLowerCase();
+  // The row being edited stays visible even when it no longer matches.
+  const shownRows = q ? rows.filter((r) => r.key.toLowerCase().includes(q) || r.key === editing) : rows;
+  const revealable = rows.filter((r) => !r.deleted && !(r.sealed && r.server === r.value));
+  const allShown = revealable.length > 0 && revealable.every((r) => revealed.has(r.key));
   const draft = useMemo(() => Object.fromEntries(rows.filter((r) => !r.deleted).map((r) => [r.key, r.value])), [rows]);
+  const scope = useRefScope(svc, env, canvas.data?.services, shared.data, draft);
+  // Rows whose references point nowhere or loop: flagged in the list so a renamed or deleted service doesn't go unnoticed.
+  const broken = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      if (r.deleted || !r.value.includes("${")) continue;
+      const cycle = resolvePreview(r.value, scope, r.key).cycle;
+      const probs = refProblems(r.value, scope);
+      if (cycle) out.set(r.key, t("참조가 순환합니다: {path}", { path: cycle.join(" → ") }));
+      else if (probs.length) out.set(r.key, t("확인이 필요한 참조: {refs}", { refs: probs.map((p) => p.raw).join(", ") }));
+    }
+    return out;
+  }, [rows, scope]);
   const canEdit = useCaps(svc.project_id).canEdit;
   const why = canEdit ? undefined : NO_PERM;
   const put = (k: string, v: string | null) => canEdit && setVar(k, v, server);
@@ -261,21 +279,13 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
       {adding && (
         <NewVariableForm
           suggestions={suggestions}
+          scope={scope}
           refOptions={refOptions}
           onCancel={closeAdd}
           onAdd={(k, v) => putMany([[k, v]], closeAdd)}
-          onBulk={(pairs) => {
-            const ok = pairs.filter(([k]) => KEY_RE.test(k));
-            const bad = pairs.length - ok.length;
-            putMany(ok, () => {
-              toast(
-                bad
-                  ? t("변수 {count}개를 추가했습니다. 이름이 잘못된 {bad}개는 건너뛰었습니다", { count: ok.length, bad })
-                  : t("변수 {count}개를 추가했습니다", { count: ok.length }),
-                bad ? "error" : undefined,
-              );
-              closeAdd();
-            });
+          onBulk={(pairs, errors) => {
+            setAdding(false);
+            setBulk({ pairs, errors });
           }}
         />
       )}
@@ -296,8 +306,49 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
               </p>
             </div>
           ) : (
+            <>
+            {rows.length > 0 && (
+              <div className="mb-2 flex items-center gap-2">
+                {rows.length > 6 && (
+                  <div className="relative min-w-0 flex-1">
+                    <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-gray-400" aria-hidden />
+                    <input
+                      type="search"
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape" && filter) {
+                          e.stopPropagation();
+                          setFilter("");
+                        }
+                      }}
+                      placeholder={t("변수 이름으로 찾기")}
+                      aria-label={t("변수 이름으로 찾기")}
+                      className="h-8 w-full rounded-md border border-gray-200 bg-transparent pl-7 pr-7 text-sm outline-none placeholder-gray-500 hover:border-gray-400 focus:border-pink-400 [&::-webkit-search-cancel-button]:hidden"
+                    />
+                    {filter && (
+                      <button type="button" onClick={() => setFilter("")} aria-label={t("필터 지우기")} className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded text-gray-500 hover:text-foreground">
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                {revealable.length > 1 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="ml-auto text-gray-600"
+                    aria-pressed={allShown}
+                    onClick={() => setRevealed(allShown ? new Set() : new Set(revealable.map((r) => r.key)))}
+                  >
+                    {allShown ? <EyeOff /> : <Eye />} {allShown ? t("모두 숨기기") : t("모두 보기")}
+                  </Button>
+                )}
+              </div>
+            )}
+            {q && shownRows.length === 0 && <p className="py-6 text-center text-sm text-gray-500">{t("‘{query}’와 일치하는 변수가 없습니다", { query: filter.trim() })}</p>}
             <ul className="relative w-full" aria-label={t("서비스 변수")}>
-              {rows.map((r) =>
+              {shownRows.map((r) =>
                 editing === r.key ? (
                   <EditVariableRow
                     key={r.key}
@@ -305,6 +356,7 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
                     initialValue={r.sealed && r.value === SEALED_VALUE ? "" : r.value}
                     existing={draft}
                     suggestions={suggestions}
+                    scope={scope}
                     onCommit={(k, v) => commitEdit(r, k, v)}
                     onCancel={() => endEdit(r.key)}
                   />
@@ -314,6 +366,7 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
                     r={r}
                     resolved={resolved.data?.[r.key]}
                     resolvedPending={resolved.isPending}
+                    refWarning={broken.get(r.key)}
                     savedNotDeployed={!!svc.instance.pending_changes?.includes(`variables.${r.key}`)}
                     shown={revealed.has(r.key)}
                     onToggleReveal={() => toggleReveal(r.key)}
@@ -328,6 +381,7 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
                 ),
               )}
             </ul>
+            </>
           )}
         </div>
 
@@ -346,6 +400,23 @@ export function VariablesTab({ svc, env }: { svc: CanvasService; env: Environmen
             for (const k of Object.keys(draft)) if (!(k in next) && !sealedKeys.has(k)) put(k, null);
             for (const [k, v] of Object.entries(next)) if (!(sealedKeys.has(k) && v === SEALED_VALUE)) put(k, v);
             setRaw(false);
+          }}
+        />
+      )}
+      {bulk && (
+        <BulkPasteDialog
+          pairs={bulk.pairs}
+          errors={bulk.errors}
+          existing={draft}
+          onClose={() => {
+            setBulk(null);
+            requestAnimationFrame(() => newBtn.current?.focus());
+          }}
+          onAdd={(pairs) => {
+            for (const [k, v] of pairs) put(k, v);
+            toast(t("변수 {count}개를 추가했습니다", { count: pairs.length }));
+            setBulk(null);
+            requestAnimationFrame(() => newBtn.current?.focus());
           }}
         />
       )}

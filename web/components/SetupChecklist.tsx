@@ -6,11 +6,11 @@ import { usePathname } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, CheckCircle2, Circle, RefreshCw, Rocket } from "lucide-react";
 import { api, type Me, type SetupItemID, type SetupStatus } from "@/lib/api";
-import { qk } from "@/lib/queries";
+import { qk, useSystem } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { GitHubOnboarding } from "./GitHubOnboarding";
 import { SelfServiceSetupAction } from "./SelfService";
-import { Button, Card, CenterSpinner, CopyField, Dialog, ErrorBox, Toggle, cx } from "./ui";
+import { Button, Card, CenterSpinner, CopyButton, CopyField, Dialog, ErrorBox, Toggle, cx } from "./ui";
 import { t, tr } from "@/lib/i18n";
 import { readSession, writeSession } from "@/lib/legacyStorage";
 
@@ -25,6 +25,41 @@ const Go = ({ href, children }: { href: string; children: ReactNode }) => (
   <Link href={href}><Button size="sm">{children}</Button></Link>
 );
 
+/** A/AAAA records to create for a host, pointing at this server's public addresses (GET /system). */
+function DnsRecords({ host }: { host: string }) {
+  const sys = useSystem();
+  const d = sys.data;
+  if (!d) return null;
+  const rows = [
+    d.public_ipv4 ? { type: "A", value: d.public_ipv4 } : null,
+    d.public_ipv6 ? { type: "AAAA", value: d.public_ipv6 } : null,
+  ].filter((r): r is { type: string; value: string } => !!r);
+  if (rows.length === 0) return <p className="text-xs text-gray-500">{t("이 서버의 공개 IP를 알 수 없습니다. DNS 레코드는 서버의 공인 IPv4/IPv6로 만드세요.")}</p>;
+  return (
+    <div className="max-w-xl overflow-hidden rounded-md border border-gray-200 text-xs">
+      <div className="grid grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)_32px] gap-3 border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-gray-500">
+        <span>{t("유형")}</span><span>{t("이름")}</span><span>{t("값")}</span><span />
+      </div>
+      {rows.map((r) => (
+        <div key={r.type} className="grid grid-cols-[56px_minmax(0,1fr)_minmax(0,1fr)_32px] items-center gap-3 border-b border-gray-100 px-3 py-1 font-mono last:border-0">
+          <span>{r.type}</span>
+          <span className="truncate" title={host}>{host}</span>
+          <span className="truncate" title={r.value}>{r.value}</span>
+          <CopyButton value={r.value} label={t("{type} 레코드 값 복사", { type: r.type })} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+};
+
 const COPY: Record<SetupItemID, ItemCopy> = {
   public_url: {
     title: t("공개 URL"),
@@ -32,7 +67,12 @@ const COPY: Record<SetupItemID, ItemCopy> = {
       file: <Env>/etc/aven/aven.env</Env>,
       env: <Env>AVEN_PUBLIC_URL</Env>,
     }),
-    action: (s) => s.server.public_url ? <span className="font-mono text-xs text-gray-500">{s.server.public_url}</span> : null,
+    action: (s) => s.server.public_url ? (
+      <div className="space-y-2">
+        <span className="font-mono text-xs text-gray-500">{s.server.public_url}</span>
+        {hostOf(s.server.public_url) && <DnsRecords host={hostOf(s.server.public_url)} />}
+      </div>
+    ) : null,
   },
   base_domain: {
     title: t("기본 도메인"),
@@ -41,7 +81,7 @@ const COPY: Record<SetupItemID, ItemCopy> = {
       baseEnv: <Env>AVEN_BASE_DOMAIN</Env>,
       wildcard: <Env>{t("*.기본도메인")}</Env>,
     }),
-    action: (s) => s.server.base_domain ? <span className="font-mono text-xs text-gray-500">*.{s.server.base_domain}</span> : null,
+    action: (s) => s.server.base_domain ? <DnsRecords host={`*.${s.server.base_domain}`} /> : null,
   },
   owner_account: {
     title: t("개인 owner 계정"),
@@ -68,7 +108,12 @@ const COPY: Record<SetupItemID, ItemCopy> = {
       clientSecret: <Env>AVEN_GITHUB_CLIENT_SECRET</Env>,
       webhookSecret: <Env>AVEN_GITHUB_WEBHOOK_SECRET</Env>,
     }),
-    action: (s) => s.server.public_url ? <CopyField value={s.server.github_callback_url} className="w-full max-w-md" /> : null,
+    action: (s) => s.server.public_url ? (
+      <div className="grid max-w-xl gap-2">
+        <div><div className="mb-1 text-xs text-gray-500">OAuth callback URL</div><CopyField value={s.server.github_callback_url} className="w-full" /></div>
+        {s.server.github_webhook_url && <div><div className="mb-1 text-xs text-gray-500">{t("웹훅 URL")}</div><CopyField value={s.server.github_webhook_url} className="w-full" /></div>}
+      </div>
+    ) : null,
   },
   smtp: {
     title: t("메일 발송(SMTP)"),
@@ -79,6 +124,7 @@ const COPY: Record<SetupItemID, ItemCopy> = {
       password: <Env>AVEN_SMTP_PASSWORD</Env>,
       from: <Env>AVEN_SMTP_FROM</Env>,
     }),
+    action: () => <Go href="/admin/?section=notifications">{t("메일 발송 확인")}</Go>,
   },
   backup_destination: {
     title: t("백업 저장소"),
@@ -132,17 +178,25 @@ export function SetupChecklist() {
   const query = useSetupStatus();
   const dismiss = useDismiss();
   const s = query.data;
+  const next = s?.items.find((i) => !i.optional && !i.done) ?? s?.items.find((i) => !i.done);
+  const total = s?.items.length ?? 0;
+  const doneAll = s?.items.filter((i) => i.done).length ?? 0;
   const section = (title: string, items: SetupStatus["items"]) => (
     <Card title={title} flush>
       <ul className="divide-y divide-gray-100">
         {items.map((it) => {
           const c = COPY[it.id];
           const action = c.action?.(s!);
+          const isNext = next?.id === it.id;
           return (
-            <li key={it.id} className="flex gap-3 px-5 py-4">
+            <li key={it.id} id={`setup-${it.id}`} className={cx("flex gap-3 px-5 py-4", isNext && "bg-pink-50/60 dark:bg-pink-950/20")} aria-current={isNext ? "step" : undefined}>
               <div className="pt-0.5"><Check done={it.done} /></div>
               <div className="min-w-0 flex-1 space-y-2">
-                <div className={cx("text-sm font-medium", it.done && "text-gray-500")}>{c.title}</div>
+                <div className={cx("flex flex-wrap items-center gap-2 text-sm font-medium", it.done && "text-gray-500")}>
+                  {c.title}
+                  {isNext && <span className="rounded bg-pink-100 px-1.5 py-0.5 text-xs font-medium text-pink-600">{t("다음 단계")}</span>}
+                  {it.done && <span className="text-xs font-normal text-success">{t("완료")}</span>}
+                </div>
                 <p className="text-sm text-gray-600">{c.body}</p>
                 {action && <div>{action}</div>}
               </div>
@@ -158,9 +212,25 @@ export function SetupChecklist() {
         title={<span className="flex items-center gap-2"><Rocket className="size-4 text-pink-500" />{t("초기 설정")}</span>}
         description={t("새로 설치한 Aven 서버를 운영할 준비가 됐는지 확인합니다. 항목은 서버 설정을 읽어 자동으로 체크됩니다. 환경 변수를 바꾼 항목은 aven-server를 재시작해야 반영됩니다.")}
         action={<Button size="sm" loading={query.isFetching} onClick={() => void query.refetch()}><RefreshCw className="size-3.5" />{t("새로고침")}</Button>}
-        footerNote={s ? (s.complete ? t("필수 항목을 모두 마쳤습니다.") : t("필수 항목 {total}개 중 {done}개 완료", { total: s.required, done: s.required_done })) : undefined}
+        footerNote={s?.complete ? t("필수 항목을 모두 마쳤습니다.") : undefined}
         footer={<a href={SETUP_GUIDE_URL} target="_blank" rel="noreferrer"><Button size="sm"><BookOpen className="size-3.5" />{t("설치 가이드")}</Button></a>}
       >
+        {s && (
+          <div className="mb-5 space-y-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+              <span className="font-medium tabular-nums">{t("필수 {done}/{total}", { done: s.required_done, total: s.required })}</span>
+              <span className="text-xs tabular-nums text-gray-500">{t("전체 {done}/{total} 완료", { done: doneAll, total })}</span>
+            </div>
+            <div role="progressbar" aria-label={t("필수 항목 진행률")} aria-valuemin={0} aria-valuemax={s.required} aria-valuenow={s.required_done} className="h-2 overflow-hidden rounded-full bg-gray-100">
+              <div className={cx("h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none", s.complete ? "bg-green-500" : "bg-pink-500")} style={{ width: `${s.required ? (s.required_done / s.required) * 100 : 100}%` }} />
+            </div>
+            {next && (
+              <a href={`#setup-${next.id}`} className="inline-block text-sm text-pink-600 hover:underline">
+                {t("다음 단계: {title}", { title: COPY[next.id].title })}
+              </a>
+            )}
+          </div>
+        )}
         {s && (
           <label className="flex items-center justify-between gap-4 text-sm">
             <span>{t("로그인할 때 초기 설정 안내 띄우기")}<span className="block text-xs text-gray-500">{t("필수 항목이 남아 있는 동안 서버 owner에게 한 번씩 보여 줍니다.")}</span></span>

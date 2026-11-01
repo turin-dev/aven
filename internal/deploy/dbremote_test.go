@@ -24,6 +24,7 @@ type dbAgentDocker struct {
 	stdin  []byte
 	spec   node.RunSpec
 	sizes  map[string]int64
+	code   int // helper 종료 코드
 }
 
 func (d *dbAgentDocker) InspectMany(_ context.Context, names []string) (map[string]*node.ContainerState, error) {
@@ -44,7 +45,7 @@ func (d *dbAgentDocker) RunStream(_ context.Context, s node.RunSpec, stdin io.Re
 	if stdout != nil {
 		stdout.Write(d.out)
 	}
-	return 0, nil
+	return d.code, nil
 }
 
 func (d *dbAgentDocker) VolumeSizes(context.Context) (map[string]int64, error) { return d.sizes, nil }

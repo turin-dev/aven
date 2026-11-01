@@ -2,19 +2,17 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
-	"time"
-
-	"github.com/turin-dev/aven/internal/deploy"
 )
 
 const (
@@ -41,6 +39,7 @@ type mcpMessage struct {
 
 type mcpTool struct {
 	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
 	Annotations map[string]any `json:"annotations,omitempty"`
@@ -48,6 +47,10 @@ type mcpTool struct {
 
 func mcpString(description string) map[string]any {
 	return map[string]any{"type": "string", "description": description}
+}
+
+func mcpInteger(description string, minimum, maximum int) map[string]any {
+	return map[string]any{"type": "integer", "description": description, "minimum": minimum, "maximum": maximum}
 }
 
 func mcpObject(properties map[string]any, required ...string) map[string]any {
@@ -58,73 +61,159 @@ func mcpObject(properties map[string]any, required ...string) map[string]any {
 	return schema
 }
 
-func mcpReadTool(name, description string, properties map[string]any, required ...string) mcpTool {
-	return mcpTool{Name: name, Description: description, InputSchema: mcpObject(properties, required...), Annotations: map[string]any{
-		"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false,
+func mcpReadTool(name, title, description string, properties map[string]any, required ...string) mcpTool {
+	return mcpTool{Name: name, Title: title, Description: description, InputSchema: mcpObject(properties, required...), Annotations: map[string]any{
+		"title": title, "readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false,
 	}}
 }
 
 // mcpWriteTool marks a state-changing tool. destructive=true makes clients that honor hints ask for confirmation
-// (deploys, rollbacks, variable changes); additive tools (create service, add domain) are not destructive.
-func mcpWriteTool(name, description string, destructive bool, properties map[string]any, required ...string) mcpTool {
-	return mcpTool{Name: name, Description: description, InputSchema: mcpObject(properties, required...), Annotations: map[string]any{
-		"readOnlyHint": false, "destructiveHint": destructive, "idempotentHint": false, "openWorldHint": false,
+// (deploys, rollbacks, stops, variable changes); additive tools (create service, add domain) are not destructive.
+func mcpWriteTool(name, title, description string, destructive bool, properties map[string]any, required ...string) mcpTool {
+	return mcpTool{Name: name, Title: title, Description: description, InputSchema: mcpObject(properties, required...), Annotations: map[string]any{
+		"title": title, "readOnlyHint": false, "destructiveHint": destructive, "idempotentHint": false, "openWorldHint": false,
 	}}
 }
 
+var (
+	mcpProjectID     = mcpString("Project ID (prj_…), from list_projects")
+	mcpServiceID     = mcpString("Service ID (svc_…), from inspect_project or list_services")
+	mcpEnvironmentID = mcpString("Environment ID (env_…), from inspect_project or list_environments")
+	mcpDeploymentID  = mcpString("Deployment ID (dep_…), from list_deployments")
+)
+
 var mcpTools = []mcpTool{
-	mcpReadTool("whoami", "Show the authenticated user, role, and API token scope.", map[string]any{}),
-	mcpReadTool("list_projects", "List projects visible to the authenticated API token.", map[string]any{}),
-	mcpReadTool("inspect_project", "Inspect a project, including its environments and services.", map[string]any{"project_id": mcpString("Project ID")}, "project_id"),
-	mcpReadTool("list_services", "List services in a project.", map[string]any{"project_id": mcpString("Project ID")}, "project_id"),
-	mcpReadTool("inspect_service", "Inspect a service instance and its configuration in one environment. Sealed variables are redacted.", map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
+	mcpReadTool("whoami", "Who am I", "Show the authenticated user, role, and API token scope.", map[string]any{}),
+	mcpReadTool("list_projects", "List projects", "List projects visible to the authenticated API token. Start here to find project IDs.", map[string]any{}),
+	mcpReadTool("inspect_project", "Inspect project", "Inspect a project, including its environments and services (with their IDs).", map[string]any{"project_id": mcpProjectID}, "project_id"),
+	mcpReadTool("list_services", "List services", "List services in a project.", map[string]any{"project_id": mcpProjectID}, "project_id"),
+	mcpReadTool("inspect_service", "Inspect service", "Inspect a service instance in one environment: source, settings, domains, status, pending (staged) changes and variables. Sealed variables are redacted; viewers see masked values.", map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
 	}, "service_id", "environment_id"),
-	mcpReadTool("list_environments", "List environments in a project.", map[string]any{"project_id": mcpString("Project ID")}, "project_id"),
-	mcpReadTool("inspect_environment", "Inspect an environment and the services deployed in it. Sealed variables are redacted.", map[string]any{"environment_id": mcpString("Environment ID")}, "environment_id"),
-	mcpReadTool("list_templates", "List templates available to the authenticated user.", map[string]any{}),
-	mcpReadTool("list_deployments", "List recent deployments for a service in an environment.", map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
-		"limit": map[string]any{"type": "integer", "description": "Maximum number of deployments (1–500, default 50)"},
+	mcpReadTool("list_environments", "List environments", "List environments in a project.", map[string]any{"project_id": mcpProjectID}, "project_id"),
+	mcpReadTool("inspect_environment", "Inspect environment", "Inspect an environment and the services deployed in it. Sealed variables are redacted.", map[string]any{"environment_id": mcpEnvironmentID}, "environment_id"),
+	mcpReadTool("list_templates", "List templates", "List templates available to the authenticated user (keys for create_service_from_template).", map[string]any{}),
+	mcpReadTool("list_deployments", "List deployments", "List recent deployments for a service in an environment, newest first.", map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
+		"limit": mcpInteger("Maximum number of deployments (default 50)", 1, 500),
 	}, "service_id", "environment_id"),
-	mcpReadTool("inspect_deployment", "Inspect a deployment and its current status.", map[string]any{"deployment_id": mcpString("Deployment ID")}, "deployment_id"),
-	mcpReadTool("get_logs", "Read a bounded snapshot of build or runtime logs for a deployment.", map[string]any{
-		"deployment_id": mcpString("Deployment ID"),
+	mcpReadTool("inspect_deployment", "Inspect deployment", "Inspect a deployment: status, image, commit, error and replicas.", map[string]any{"deployment_id": mcpDeploymentID}, "deployment_id"),
+	mcpReadTool("get_logs", "Get logs", "Read a bounded snapshot of build or runtime logs for a deployment (the newest matching lines).", map[string]any{
+		"deployment_id": mcpDeploymentID,
 		"type":          map[string]any{"type": "string", "enum": []string{"runtime", "build"}, "description": "Log stream to read (default runtime)"},
-		"tail":          map[string]any{"type": "integer", "description": "Maximum number of log lines (1–1000, default 200)"},
-		"filter":        mcpString("Optional runtime log filter using the dashboard search syntax (for example: error -healthcheck)"),
+		"tail":          mcpInteger("Maximum number of log lines to return (default 200)", 1, 1000),
+		"filter":        mcpString("Optional filter using the dashboard search syntax: words must all match, -word excludes, \"quoted phrase\" (for example: error -healthcheck)"),
 	}, "deployment_id"),
-	mcpReadTool("get_variables", "Read resolved service variables. Sealed values and values derived from sealed variables are redacted by the API.", map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
+	mcpReadTool("get_variables", "Get variables", "Read resolved service variables (references expanded). Sealed values and values derived from sealed variables are redacted by the API.", map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
 	}, "service_id", "environment_id"),
-	mcpWriteTool("set_variables", "Upsert service variables (a null value deletes the variable). Other variables are kept; sealed values stay sealed. Changes are staged unless deploy is true.", true, map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
-		"variables": map[string]any{"type": "object", "description": "Variable names mapped to string values, or null to delete", "additionalProperties": map[string]any{"type": []string{"string", "null"}}},
+	mcpWriteTool("set_variables", "Set variables", "Upsert service variables (a null value deletes the variable). Other variables are kept; sealed values stay sealed. Changes are staged until the next deploy unless deploy is true.", true, map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
+		"variables": map[string]any{"type": "object", "description": "Variable names mapped to string values, or null to delete. References like ${{ db.DATABASE_URL }} are kept as written.", "additionalProperties": map[string]any{"type": []string{"string", "null"}}, "minProperties": 1},
 		"deploy":    map[string]any{"type": "boolean", "description": "Deploy the service after saving (default false)"},
 	}, "service_id", "environment_id", "variables"),
-	mcpWriteTool("deploy", "Deploy the service's current source and staged configuration in an environment.", true, map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
+	mcpWriteTool("deploy", "Deploy service", "Deploy the service's current source and staged configuration in an environment (builds repo services).", true, map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
 	}, "service_id", "environment_id"),
-	mcpWriteTool("redeploy", "Redeploy an existing deployment image.", true, map[string]any{"deployment_id": mcpString("Deployment ID")}, "deployment_id"),
-	mcpWriteTool("restart_service", "Restart a service in an environment.", true, map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
+	mcpWriteTool("redeploy", "Redeploy", "Redeploy an existing deployment's image with its settings (no rebuild).", true, map[string]any{"deployment_id": mcpDeploymentID}, "deployment_id"),
+	mcpWriteTool("restart_service", "Restart service", "Restart the running replicas of a service in an environment (no rebuild, no config change).", true, map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
 	}, "service_id", "environment_id"),
-	mcpWriteTool("rollback", "Roll back to a successful deployment, including its variable snapshot.", true, map[string]any{"deployment_id": mcpString("Deployment ID")}, "deployment_id"),
-	mcpWriteTool("create_service_from_image", "Create an image-based service in a project and environment.", false, map[string]any{
-		"project_id": mcpString("Project ID"), "environment_id": mcpString("Environment ID"),
-		"image": mcpString("Container image, for example nginx:alpine"),
-		"name":  mcpString("Optional service name"),
+	mcpWriteTool("stop_service", "Stop service", "Stop a service in an environment. It stays stopped until the next deploy or restart.", true, map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
+	}, "service_id", "environment_id"),
+	mcpWriteTool("rollback", "Roll back", "Roll back to a deployment that went live, restoring its image, settings and variable snapshot.", true, map[string]any{"deployment_id": mcpDeploymentID}, "deployment_id"),
+	mcpWriteTool("cancel_deployment", "Cancel deployment", "Cancel a deployment that is queued or still building or deploying.", true, map[string]any{"deployment_id": mcpDeploymentID}, "deployment_id"),
+	mcpWriteTool("create_service_from_image", "Create image service", "Create an image-based service in a project (an instance is created in every environment; configure and deploy it in environment_id).", false, map[string]any{
+		"project_id": mcpProjectID, "environment_id": mcpEnvironmentID,
+		"image": mcpString("Container image, for example nginx:alpine or ghcr.io/acme/api:1.2"),
+		"name":  mcpString("Optional service name (lowercase letters, digits and '-'); derived from the image when omitted"),
 	}, "project_id", "environment_id", "image"),
-	mcpWriteTool("create_service_from_template", "Create and deploy services from a Aven template.", false, map[string]any{
-		"project_id": mcpString("Project ID"), "environment_id": mcpString("Environment ID"),
-		"template_key": mcpString("Template key"),
+	mcpWriteTool("create_service_from_template", "Create from template", "Create and deploy services from an Aven template (see list_templates).", false, map[string]any{
+		"project_id": mcpProjectID, "environment_id": mcpEnvironmentID,
+		"template_key": mcpString("Template key from list_templates"),
 		"inputs":       map[string]any{"type": "object", "description": "Template input values", "additionalProperties": map[string]any{"type": "string"}},
 	}, "project_id", "environment_id", "template_key"),
-	mcpWriteTool("add_domain", "Add a generated or custom domain to a service instance.", false, map[string]any{
-		"service_id": mcpString("Service ID"), "environment_id": mcpString("Environment ID"),
-		"host":        mcpString("Custom hostname; omit or use an empty string to generate a Aven domain"),
-		"target_port": map[string]any{"type": "integer", "description": "Optional container port to route to"},
+	mcpWriteTool("add_domain", "Add domain", "Add a generated or custom domain to a service instance. For a custom domain the result lists the DNS records to create.", false, map[string]any{
+		"service_id": mcpServiceID, "environment_id": mcpEnvironmentID,
+		"host":        mcpString("Custom hostname; omit or use an empty string to generate an Aven domain"),
+		"target_port": mcpInteger("Optional container port to route to", 1, 65535),
 	}, "service_id", "environment_id"),
+}
+
+func mcpToolByName(name string) (mcpTool, bool) {
+	for _, t := range mcpTools {
+		if t.Name == name {
+			return t, true
+		}
+	}
+	return mcpTool{}, false
+}
+
+// mcpValidateArgs checks arguments against the tool's input schema (unknown keys, required keys, JSON types and integer
+// ranges) so a model gets one clear message instead of a REST error about a missing field it misspelled.
+func mcpValidateArgs(tool mcpTool, args map[string]json.RawMessage) error {
+	props, _ := tool.InputSchema["properties"].(map[string]any)
+	for key := range args {
+		if _, ok := props[key]; !ok {
+			allowed := slices.Sorted(maps.Keys(props))
+			if len(allowed) == 0 {
+				return fmt.Errorf("%s takes no arguments (got %q)", tool.Name, key)
+			}
+			return fmt.Errorf("unknown argument %q for %s; allowed: %s", key, tool.Name, strings.Join(allowed, ", "))
+		}
+	}
+	required, _ := tool.InputSchema["required"].([]string)
+	for _, key := range required {
+		raw, ok := args[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("%s is required", key)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(args)) {
+		schema, _ := props[key].(map[string]any)
+		raw := bytes.TrimSpace(args[key])
+		if bytes.Equal(raw, []byte("null")) {
+			continue // optional argument left empty
+		}
+		var v any
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
+			return fmt.Errorf("%s is not valid JSON", key)
+		}
+		switch schema["type"] {
+		case "string":
+			str, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("%s must be a string", key)
+			}
+			if enum, ok := schema["enum"].([]string); ok && !slices.Contains(enum, str) {
+				return fmt.Errorf("%s must be one of: %s", key, strings.Join(enum, ", "))
+			}
+		case "integer":
+			n, ok := v.(json.Number)
+			i, err := n.Int64()
+			if !ok || err != nil {
+				return fmt.Errorf("%s must be an integer", key)
+			}
+			if lo, ok := schema["minimum"].(int); ok && i < int64(lo) {
+				return fmt.Errorf("%s must be between %d and %d", key, lo, schema["maximum"])
+			}
+			if hi, ok := schema["maximum"].(int); ok && i > int64(hi) {
+				return fmt.Errorf("%s must be between %d and %d", key, schema["minimum"], hi)
+			}
+		case "boolean":
+			if _, ok := v.(bool); !ok {
+				return fmt.Errorf("%s must be true or false", key)
+			}
+		case "object":
+			if _, ok := v.(map[string]any); !ok {
+				return fmt.Errorf("%s must be an object", key)
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) mcpHandler(mux *http.ServeMux) http.Handler {
@@ -245,6 +334,16 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request, mux *http.Serv
 		}
 		if arguments == nil {
 			arguments = map[string]json.RawMessage{}
+		}
+		// MCP: an unknown tool is a protocol error (-32602), not a tool result.
+		tool, ok := mcpToolByName(name)
+		if !ok {
+			writeMCPError(w, id, http.StatusOK, -32602, "unknown tool: "+name+" (call tools/list for the available tools)", nil)
+			return
+		}
+		if err := mcpValidateArgs(tool, arguments); err != nil {
+			result = mcpToolResult("Invalid arguments for "+name+": "+err.Error(), true, modern)
+			break
 		}
 		value, err := s.runMCPTool(mux, r, name, arguments)
 		if err != nil {
@@ -392,6 +491,15 @@ func mcpParamString(params map[string]json.RawMessage, key string, required bool
 	return value, nil
 }
 
+// mcpArg returns an argument that was given with a non-null value (null means "not set" for optional arguments).
+func mcpArg(args map[string]json.RawMessage, key string) (json.RawMessage, bool) {
+	raw := bytes.TrimSpace(args[key])
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, false
+	}
+	return raw, true
+}
+
 func mcpArgString(args map[string]json.RawMessage, key string, required bool) (string, error) {
 	return mcpParamString(args, key, required)
 }
@@ -439,7 +547,7 @@ func (s *Server) mcpAPI(mux *http.ServeMux, parent *http.Request, method, path s
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
 		}
-		return nil, fmt.Errorf("Aven API (%d): %s", resp.StatusCode, message)
+		return nil, mcpAPIError(resp.StatusCode, message)
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
 		return map[string]any{"ok": true}, nil
@@ -449,6 +557,25 @@ func (s *Server) mcpAPI(mux *http.ServeMux, parent *http.Request, method, path s
 		return nil, fmt.Errorf("invalid response from Aven API: %w", err)
 	}
 	return result, nil
+}
+
+// mcpAPIError turns a REST error into a tool error with a hint about what to do next. The status code stays in the
+// text so models (and tests) can tell a missing resource from a permission problem.
+func mcpAPIError(status int, message string) error {
+	hint := ""
+	switch status {
+	case http.StatusUnauthorized:
+		hint = " The token is missing, expired or revoked; create a new API token."
+	case http.StatusForbidden:
+		hint = " Your role or API token scope does not allow this action; read-only tools still work."
+	case http.StatusNotFound:
+		hint = " Check the ID (list_projects and inspect_project show valid IDs). Resources outside your token scope also look missing."
+	case http.StatusConflict:
+		hint = " The resource is busy or in a conflicting state; inspect it and retry."
+	case http.StatusTooManyRequests:
+		hint = " Rate limited; wait before retrying."
+	}
+	return fmt.Errorf("Aven API (%d): %s.%s", status, strings.TrimSuffix(message, "."), hint)
 }
 
 func mcpField(value any, key string) (any, error) {
@@ -523,7 +650,7 @@ func (s *Server) runMCPTool(mux *http.ServeMux, r *http.Request, name string, ar
 			return nil, err
 		}
 		limit := 50
-		if raw := args["limit"]; len(raw) > 0 {
+		if raw, ok := mcpArg(args, "limit"); ok {
 			if err := json.Unmarshal(raw, &limit); err != nil {
 				return nil, errors.New("limit must be an integer")
 			}
@@ -547,12 +674,25 @@ func (s *Server) runMCPTool(mux *http.ServeMux, r *http.Request, name string, ar
 			action = "rollback"
 		}
 		return api(http.MethodPost, path+"/"+action, map[string]any{})
-	case "restart_service":
+	case "restart_service", "stop_service":
 		sid, eid, err := serviceAndEnv()
 		if err != nil {
 			return nil, err
 		}
-		return api(http.MethodPost, "/api/services/"+url.PathEscape(sid)+"/instances/"+url.PathEscape(eid)+"/restart", map[string]any{})
+		action := "restart"
+		if name == "stop_service" {
+			action = "stop"
+		}
+		return api(http.MethodPost, "/api/services/"+url.PathEscape(sid)+"/instances/"+url.PathEscape(eid)+"/"+action, map[string]any{})
+	case "cancel_deployment":
+		did, err := get("deployment_id", true)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := api(http.MethodPost, "/api/deployments/"+url.PathEscape(did)+"/cancel", map[string]any{}); err != nil {
+			return nil, err
+		}
+		return map[string]any{"deployment_id": did, "cancelled": true}, nil
 	case "get_logs":
 		return s.mcpLogs(mux, r, args)
 	case "set_variables":
@@ -565,7 +705,7 @@ func (s *Server) runMCPTool(mux *http.ServeMux, r *http.Request, name string, ar
 			return nil, errors.New("variables must be a non-empty object of string (or null to delete) values")
 		}
 		deployNow := false
-		if raw := args["deploy"]; len(raw) > 0 {
+		if raw, ok := mcpArg(args, "deploy"); ok {
 			if err := json.Unmarshal(raw, &deployNow); err != nil {
 				return nil, errors.New("deploy must be a boolean")
 			}
@@ -612,7 +752,7 @@ func (s *Server) runMCPTool(mux *http.ServeMux, r *http.Request, name string, ar
 			return nil, err
 		}
 		inputs := map[string]string{}
-		if raw := args["inputs"]; len(raw) > 0 {
+		if raw, ok := mcpArg(args, "inputs"); ok {
 			if err := json.Unmarshal(raw, &inputs); err != nil || inputs == nil {
 				return nil, errors.New("inputs must be an object of string values")
 			}
@@ -631,7 +771,7 @@ func (s *Server) runMCPTool(mux *http.ServeMux, r *http.Request, name string, ar
 		if host != "" {
 			body["host"] = host
 		}
-		if raw := args["target_port"]; len(raw) > 0 {
+		if raw, ok := mcpArg(args, "target_port"); ok {
 			var port int
 			if err := json.Unmarshal(raw, &port); err != nil {
 				return nil, errors.New("target_port must be an integer")
@@ -660,13 +800,17 @@ func (s *Server) mcpLogs(mux *http.ServeMux, r *http.Request, args map[string]js
 		return nil, errors.New("type must be runtime or build")
 	}
 	tail := 200
-	if raw := args["tail"]; len(raw) > 0 {
+	if raw, ok := mcpArg(args, "tail"); ok {
 		if err := json.Unmarshal(raw, &tail); err != nil {
 			return nil, errors.New("tail must be an integer")
 		}
 	}
 	if tail < 1 || tail > 1000 {
 		return nil, errors.New("tail must be between 1 and 1000")
+	}
+	filter, err := mcpArgString(args, "filter", false)
+	if err != nil {
+		return nil, err
 	}
 	// Authorize through the existing deployment endpoint before accessing either log store.
 	if _, err := s.mcpAPI(mux, r, http.MethodGet, "/api/deployments/"+url.PathEscape(did), nil); err != nil {
@@ -677,32 +821,15 @@ func (s *Server) mcpLogs(mux *http.ServeMux, r *http.Request, args map[string]js
 	}
 	d, err := s.Store.GetDeployment(r.Context(), did)
 	if err != nil {
-		return nil, err
+		return nil, mcpAPIError(http.StatusNotFound, "not found")
 	}
+	// The filter is applied before the tail is cut, so matching lines further back are still found.
+	q := logQuery{Limit: tail, Filter: strings.TrimSpace(filter)}
 	if kind == "build" {
-		if s.Deploy.Logs == nil {
-			return map[string]any{"deployment_id": did, "type": kind, "logs": []string{}}, nil
-		}
-		past, _, cancel := s.Deploy.Logs.Subscribe(did)
-		cancel()
-		if len(past) > tail {
-			past = past[len(past)-tail:]
-		}
-		return map[string]any{"deployment_id": did, "type": kind, "logs": past}, nil
+		return map[string]any{"deployment_id": did, "type": kind, "logs": s.buildLogSnapshot(d, q)}, nil
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	filter, err := mcpArgString(args, "filter", false)
+	logs, err := s.runtimeLogSnapshot(r.Context(), d, q)
 	if err != nil {
-		return nil, err
-	}
-	q := deploy.ParseFilter(filter)
-	logs := make([]deploy.LogEntry, 0, tail)
-	if err := s.Deploy.StreamDeployLogs(ctx, d, tail, false, func(line deploy.LogEntry) {
-		if filter == "" || q.Match(line.Msg) {
-			logs = append(logs, line)
-		}
-	}); err != nil {
 		return nil, err
 	}
 	return map[string]any{"deployment_id": did, "type": kind, "logs": logs}, nil

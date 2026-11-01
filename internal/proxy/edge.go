@@ -52,6 +52,8 @@ func EdgePolicies(routes []Route) map[string]edge.Policy {
 }
 
 // edgeForward는 요청을 엣지 엔진으로 보내는 handler다. 클라이언트 IP와 scheme은 Caddy가 덮어써서 위조할 수 없다.
+// 클라이언트 IP는 {http.request.client_ip}다: 믿는 앞단 proxy(trusted_proxies)를 거친 요청이면 X-Forwarded-For에서 읽은
+// 실제 클라이언트, 아니면 TCP peer다. 그래야 Cloudflare 뒤 호스트의 IP 규칙과 요청 제한이 Cloudflare 엣지 주소 하나로 뭉치지 않는다.
 func (h *hostCfg) edgeForward() map[string]any {
 	proto := "{http.request.scheme}"
 	if h.trustProto {
@@ -63,7 +65,7 @@ func (h *hostCfg) edgeForward() map[string]any {
 		"flush_interval":     -1,
 		"stream_close_delay": StreamCloseDelay,
 		"headers": map[string]any{"request": map[string]any{
-			"set": map[string][]string{edge.HeaderClientIP: {"{http.request.remote.host}"}, edge.HeaderClientProto: {proto}},
+			"set": map[string][]string{edge.HeaderClientIP: {"{http.request.client_ip}"}, edge.HeaderClientProto: {proto}},
 		}},
 	}
 }

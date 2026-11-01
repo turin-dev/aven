@@ -44,17 +44,20 @@ func SealHash(owner, key, value string) string {
 // SealVariables는 vars의 keys를 지금 값으로 봉인한다. vars에 없는 키는 건너뛴다.
 func (s *Store) SealVariables(ctx context.Context, owner string, vars map[string]string, keys []string) error {
 	now := ts(time.Now().UTC())
-	for _, k := range keys {
-		v, ok := vars[k]
-		if !ok {
-			continue
+	// 한 트랜잭션으로 쓴다: 중간에 실패해도 일부 키만 봉인된 채로 남지 않는다.
+	return s.Tx(ctx, func(tx *Store) error {
+		for _, k := range keys {
+			v, ok := vars[k]
+			if !ok {
+				continue
+			}
+			if _, err := tx.q.ExecContext(ctx, `INSERT INTO sealed_variables (owner, key, value_hash, created_at) VALUES (?,?,?,?)
+				ON CONFLICT(owner, key, value_hash) DO NOTHING`, owner, k, SealHash(owner, k, v), now); err != nil {
+				return err
+			}
 		}
-		if _, err := s.q.ExecContext(ctx, `INSERT INTO sealed_variables (owner, key, value_hash, created_at) VALUES (?,?,?,?)
-			ON CONFLICT(owner, key, value_hash) DO NOTHING`, owner, k, SealHash(owner, k, v), now); err != nil {
-			return err
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SealRecords는 소유자별 키 → 봉인된 값 해시 집합이다.

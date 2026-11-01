@@ -199,3 +199,69 @@ func TestCheckThresholdsEmitsEvents(t *testing.T) {
 		t.Errorf("usage_alert round trip: %+v", got.UsageAlert)
 	}
 }
+
+// 시간 경계를 넘는 점은 두 시간에 나눠 들어가고, 범위를 시간 단위로 나눠 집계해도 합이 같다.
+func TestAggregateSplitsAcrossHourBoundary(t *testing.T) {
+	h := int64(1_700_000_000) - int64(1_700_000_000)%Hour
+	disk := int64(1e9)
+	// 10초 점이 경계 5초 전에 찍혔다: 5초는 h, 5초는 h+Hour
+	rows := []store.MetricRow{
+		{T: h + Hour - 5, CPU: 100, Mem: 1e9, Disk: &disk, Resolution: 10},
+		{T: h + Hour + 5, CPU: 100, Mem: 1e9, Disk: &disk, Resolution: 10},
+	}
+	all := Aggregate(rows, h, h+2*Hour)
+	if !near(all[h].CPUCoreSeconds, 5) || !near(all[h+Hour].CPUCoreSeconds, 15) {
+		t.Fatalf("split: h=%+v h+1=%+v", all[h], all[h+Hour])
+	}
+	if !near(all[h].DiskGBHours+all[h+Hour].DiskGBHours, 20.0/3600) {
+		t.Errorf("disk: %v + %v", all[h].DiskGBHours, all[h+Hour].DiskGBHours)
+	}
+	// 시간별로 따로 집계(RollRange가 시간마다 하는 것과 같다)해도 같은 값
+	first, second := Aggregate(rows, h, h+Hour), Aggregate(rows, h+Hour, h+2*Hour)
+	if !near(first[h].CPUCoreSeconds, 5) || !near(second[h+Hour].CPUCoreSeconds, 15) {
+		t.Fatalf("separate ranges: %+v %+v", first[h], second[h+Hour])
+	}
+}
+
+// 지표 점을 고르게 찍었을 때 집계 합은 범위를 어떻게 나눠도 실제 시간과 같다(경계에서 빠지는 초가 없다).
+func TestAggregateConservesTime(t *testing.T) {
+	h := int64(1_700_000_000) - int64(1_700_000_000)%Hour
+	var rows []store.MetricRow
+	for ts := h + 7; ts < h+3*Hour; ts += 10 { // 시간 경계와 어긋난 10초 간격
+		rows = append(rows, store.MetricRow{T: ts, CPU: 100, Resolution: 10})
+	}
+	total := func(parts ...[2]int64) float64 {
+		var s float64
+		for _, p := range parts {
+			for _, u := range Aggregate(rows, p[0], p[1]) {
+				s += u.CPUCoreSeconds
+			}
+		}
+		return s
+	}
+	want := float64(3*Hour - 7)
+	if got := total([2]int64{h, h + 3*Hour}); !near(got, want) {
+		t.Errorf("one range: %v want %v", got, want)
+	}
+	if got := total([2]int64{h, h + Hour}, [2]int64{h + Hour, h + 2*Hour}, [2]int64{h + 2*Hour, h + 3*Hour}); !near(got, want) {
+		t.Errorf("hourly ranges: %v want %v", got, want)
+	}
+	// 시간 중간에서 끊는 부분 시간(MonthToDate)도 같다
+	if got := total([2]int64{h, h + Hour + 1234}, [2]int64{h + Hour + 1234, h + 3*Hour}); !near(got, want) {
+		t.Errorf("partial ranges: %v want %v", got, want)
+	}
+}
+
+// 달이 바뀌는 순간에 걸친 점은 지난달과 이번 달에 나뉜다(이번 달 합계에 지난달 사용량이 들어가지 않는다).
+func TestPartialTotalsAtMonthStart(t *testing.T) {
+	ms := MonthStart(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)).Unix()
+	rows := []store.MetricRow{
+		{T: ms - 300, CPU: 100, Resolution: 300}, // 전부 지난달
+		{T: ms - 4, CPU: 100, Resolution: 10},    // 6초만 이번 달
+		{T: ms + 6, CPU: 100, Resolution: 10},
+	}
+	got := PartialTotals(rows, ms, ms+Hour)
+	if !near(got.CPUCoreHours*float64(Hour), 16) {
+		t.Fatalf("month-to-date cpu seconds: %v", got.CPUCoreHours*float64(Hour))
+	}
+}

@@ -297,11 +297,11 @@ func (m *Manager) syncEgressAsync() {
 	if m.Store == nil {
 		return
 	}
-	go func() {
+	m.egressKick.Trigger(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		_ = m.SyncEgress(ctx) // 오류는 syncEgressNode가 기록한다
-	}()
+	})
 }
 
 // EgressLoop는 every마다 차단 규칙을 맞춘다(컨테이너 재시작이나 재부팅으로 주소가 바뀐 경우를 잡는다).

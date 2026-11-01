@@ -1,7 +1,7 @@
 // Package watch는 gitignore 스타일 watch_paths로 변경 파일을 판정한다.
 //
-//   - 앞의 "/"는 저장소 루트 기준(있어도 없어도 루트 기준)
-//   - "/"가 없는 패턴(예: "*.md")은 모든 깊이의 파일 이름에 맞춘다
+//   - 중간에 "/"가 있는 패턴은 저장소 루트 기준이다(앞의 "/"는 있어도 없어도 같다)
+//   - "/"가 없는 패턴(예: "*.md")은 모든 깊이의 파일 이름에 맞춘다. 앞에 "/"를 붙이면("/Dockerfile") 루트에만 맞춘다
 //   - "**"는 0개 이상의 디렉터리, "*"와 "?"는 한 경로 조각 안에서만
 //   - "dir/" 또는 "dir"은 그 아래 모든 파일
 //   - "!패턴"은 제외. 나중 패턴이 이긴다
@@ -44,6 +44,9 @@ func MatchService(patterns []string, rootDir string, changed []string) bool {
 
 func MatchFile(patterns []string, file string) bool {
 	file = strings.TrimPrefix(path.Clean("/"+file), "/")
+	if file == "" {
+		return false // 빈 경로는 파일이 아니다("*"가 빈 조각에 맞지 않게)
+	}
 	matched := false
 	for _, p := range patterns {
 		p = strings.TrimSpace(p)
@@ -62,12 +65,13 @@ func MatchFile(patterns []string, file string) bool {
 }
 
 func matchPattern(p, file string) bool {
+	anchored := strings.HasPrefix(p, "/") // "/Dockerfile"은 루트의 Dockerfile만(gitignore와 같다)
 	dirOnly := strings.HasSuffix(p, "/")
 	p = strings.Trim(p, "/")
 	if p == "" {
 		return false
 	}
-	if !strings.Contains(p, "/") && !dirOnly {
+	if !anchored && !strings.Contains(p, "/") && !dirOnly {
 		// 이름 패턴: 어떤 조각이든 맞으면(디렉터리 이름이면 그 아래 전부)
 		for _, seg := range strings.Split(file, "/") {
 			if ok, _ := path.Match(p, seg); ok {
@@ -79,11 +83,17 @@ func matchPattern(p, file string) bool {
 	ps := strings.Split(p, "/")
 	fs := strings.Split(file, "/")
 	// 디렉터리 패턴이나 마지막이 **가 아닌 패턴도 그 아래 파일까지 포함한다.
-	return segs(ps, fs, true)
+	return segs(ps, fs, true, map[[2]int]bool{})
 }
 
 // segs는 패턴 조각과 파일 조각을 맞춘다. prefixOK면 패턴이 파일의 상위 디렉터리에 맞아도 된다.
-func segs(ps, fs []string, prefixOK bool) bool {
+// failed는 이미 맞지 않는다고 확인한 (남은 패턴 수, 남은 파일 조각 수)다. "**"가 여러 개인 패턴이
+// 깊은 경로에서 지수적으로 되짚지 않게 한다.
+func segs(ps, fs []string, prefixOK bool, failed map[[2]int]bool) bool {
+	k := [2]int{len(ps), len(fs)}
+	if failed[k] {
+		return false
+	}
 	for len(ps) > 0 {
 		if ps[0] == "**" {
 			rest := ps[1:]
@@ -91,16 +101,19 @@ func segs(ps, fs []string, prefixOK bool) bool {
 				return len(fs) > 0
 			}
 			for i := 0; i <= len(fs); i++ {
-				if segs(rest, fs[i:], prefixOK) {
+				if segs(rest, fs[i:], prefixOK, failed) {
 					return true
 				}
 			}
+			failed[k] = true
 			return false
 		}
 		if len(fs) == 0 {
+			failed[k] = true
 			return false
 		}
 		if ok, _ := path.Match(ps[0], fs[0]); !ok {
+			failed[k] = true
 			return false
 		}
 		ps, fs = ps[1:], fs[1:]

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Check, ChevronDown, Columns3, Download, Layers } from "lucide-react";
 import { sse, type EnvLogLine, type NetworkCaptureStatus } from "@/lib/api";
@@ -15,6 +15,18 @@ import { t } from "@/lib/i18n";
 import { Button, ErrorBox, Menu, Segmented, Spinner, cx } from "@/components/ui";
 
 type Cols = { time: boolean; service: boolean; replica: boolean };
+const DEFAULT_COLS: Cols = { time: true, service: true, replica: true };
+const COLS_KEY = "aven.logs.columns";
+
+function loadCols(): Cols {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(COLS_KEY) ?? "null") as Partial<Cols> | null;
+    if (!v || typeof v !== "object") return DEFAULT_COLS;
+    return { time: v.time !== false, service: v.service !== false, replica: v.replica !== false };
+  } catch {
+    return DEFAULT_COLS;
+  }
+}
 type Kind = "deploy" | "dns" | "network";
 const KINDS: [Kind, string][] = [
   ["deploy", t("배포")],
@@ -50,22 +62,48 @@ function LogsInner() {
   const router = useRouter();
   const href = useCtxHref();
   const list = useMemo(() => [...(canvas.data?.services ?? [])].sort((a, b) => a.name.localeCompare(b.name)), [canvas.data]);
-  const selected = useMemo(() => (params.get("services") ?? "").split(",").filter(Boolean), [params]);
+  const rawSelected = useMemo(() => (params.get("services") ?? "").split(",").filter(Boolean), [params]);
+  // Ignore ids of services deleted since the link was made (once the canvas has loaded); a stale id alone would
+  // otherwise filter the stream down to nothing.
+  const selected = useMemo(() => (canvas.data ? rawSelected.filter((id) => list.some((s) => s.id === id)) : rawSelected), [canvas.data, rawSelected, list]);
   const typeParam = params.get("type");
   const kind: Kind = typeParam === "dns" || typeParam === "network" ? typeParam : "deploy";
   const [q, setQ] = useState(params.get("q") ?? "");
   const [query, setQuery] = useState(q);
-  const [cols, setCols] = useState<Cols>({ time: true, service: true, replica: true });
+  const [cols, setColsState] = useState<Cols>(DEFAULT_COLS);
+  // Column choice is a per-browser preference.
+  useEffect(() => setColsState(loadCols()), []);
+  const setCols = (f: (c: Cols) => Cols) =>
+    setColsState((c) => {
+      const next = f(c);
+      try {
+        window.localStorage.setItem(COLS_KEY, JSON.stringify(next));
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
 
   // The filter runs on the server; debounce reconnects while typing.
   useEffect(() => {
-    const t = setTimeout(() => setQuery(q), 400);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setQuery(q), 400);
+    return () => clearTimeout(timer);
   }, [q]);
+
+  // Back/forward or a link changed ?q=: follow it instead of writing the old filter back.
+  const urlQ = params.get("q") ?? "";
+  const lastUrlQ = useRef(urlQ);
+  useEffect(() => {
+    if (urlQ === lastUrlQ.current) return;
+    lastUrlQ.current = urlQ;
+    setQ(urlQ);
+    setQuery(urlQ);
+  }, [urlQ]);
 
   useEffect(() => {
     const cur = params.get("q") ?? "";
     if (cur === query) return;
+    lastUrlQ.current = query;
     router.replace(href("/logs/", { services: selected.join(",") || null, q: query || null, type: kind === "deploy" ? null : kind }), { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query]);

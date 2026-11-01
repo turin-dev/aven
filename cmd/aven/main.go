@@ -9,26 +9,20 @@
 package main
 
 import (
-	"archive/tar"
-	"bufio"
 	"bytes"
-	"compress/gzip"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"io/fs"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
-	"time"
 )
 
 type link struct {
@@ -47,293 +41,143 @@ type config struct {
 	URL    string           `json:"url"`
 	Cookie string           `json:"cookie,omitempty"`
 	Links  map[string]*link `json:"links"`
+
+	envURL  string // KEEL_URL as applied by loadCfg
+	fileURL string // the URL stored in the file, kept when only KEEL_URL changed c.URL
 }
 
-func cfgPath() string {
+// cfgDir is the per-OS CLI config directory: KEEL_CONFIG_DIR if set, else <user config dir>/aven
+// (~/.config/aven on Linux, ~/Library/Application Support/aven on macOS, %AppData%\aven on Windows).
+func cfgDir() string {
+	if d := compat.Env("CONFIG_DIR"); d != "" {
+		return d
+	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
-		dir = filepath.Join(os.Getenv("HOME"), ".config")
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "aven", "config.json")
+	return filepath.Join(dir, "aven")
+}
+
+func cfgPath() string { return filepath.Join(cfgDir(), "config.json") }
+
+// legacyCfgPath is where the keel CLI kept its config (only used when KEEL_CONFIG_DIR is not set).
+func legacyCfgPath() string {
+	if compat.Env("CONFIG_DIR") != "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(cfgDir()), "keel", "config.json")
 }
 
 func loadCfg() *config {
-	c := &config{Links: map[string]*link{}}
-	if b, err := os.ReadFile(cfgPath()); err == nil {
-		json.Unmarshal(b, c)
-	} else if b, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(cfgPath())), "keel", "config.json")); err == nil {
-		// Logins made by the keel CLI keep working until the next save writes the aven path.
-		compat.WarnOnce("cli-config", "config %s is in use; %s is the new path (the old path still works)", filepath.Join(filepath.Dir(filepath.Dir(cfgPath())), "keel", "config.json"), cfgPath())
-		json.Unmarshal(b, c)
+	c, warn := readCfg(cfgPath(), legacyCfgPath())
+	if warn != "" {
+		warnf("%s", warn)
 	}
-	if c.Links == nil {
-		c.Links = map[string]*link{}
-	}
+	c.fileURL = c.URL
 	if u := compat.Env("URL"); u != "" {
-		c.URL = u
+		c.URL, c.envURL = u, u
 	}
 	return c
 }
 
-func (c *config) save() error {
-	os.MkdirAll(filepath.Dir(cfgPath()), 0o700)
-	b, _ := json.MarshalIndent(c, "", "  ")
-	return os.WriteFile(cfgPath(), b, 0o600)
+// readCfg reads the config file (or the legacy keel one). A damaged file is reported instead of silently
+// looking like a logged-out CLI.
+func readCfg(path, legacy string) (*config, string) {
+	c := &config{Links: map[string]*link{}}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) && legacy != "" {
+		// Logins made by the keel CLI keep working until the next save writes the aven path.
+		compat.WarnOnce("cli-config", "config %s is in use; %s is the new path (the old path still works)", legacy, path)
+		path = legacy
+		b, err = os.ReadFile(legacy)
+	}
+	warn := ""
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+	case err != nil:
+		warn = fmt.Sprintf("cannot read %s: %v", path, err)
+	default:
+		if err := json.Unmarshal(b, c); err != nil {
+			c = &config{}
+			warn = fmt.Sprintf("%s is damaged (%v); ignoring it, the next login rewrites it", path, err)
+		}
+	}
+	if c.Links == nil {
+		c.Links = map[string]*link{}
+	}
+	return c, warn
 }
 
-func die(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "aven: "+format+"\n", a...)
-	os.Exit(1)
+// save writes the config. A KEEL_URL override is not persisted: `KEEL_URL=x aven link` must not
+// repoint every later command (only aven login changes the stored URL).
+func (c *config) save() error {
+	stored := *c
+	if c.envURL != "" && c.URL == c.envURL {
+		stored.URL = c.fileURL
+	}
+	return writeFileAtomic(cfgPath(), &stored)
+}
+
+// writeFileAtomic writes v as indented JSON with mode 0600 through a temporary file and a rename, so a
+// crash or a concurrent aven process never leaves a half-written file, and an existing file that was
+// readable by others (older CLIs, manual edits) ends up private again.
+func writeFileAtomic(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil && runtime.GOOS != "windows" {
+		tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	args := os.Args[1:]
+	if len(args) == 0 {
 		usage()
 	}
-	c := loadCfg()
-	args := os.Args[2:]
-	switch os.Args[1] {
-	case "login":
-		cmdLogin(c, args)
-	case "link":
-		cmdLink(c, args)
-	case "up":
-		cmdUp(c, args)
-	case "logs":
-		cmdLogs(c, args)
-	case "api":
-		cmdAPI(c, args)
-	case "vars":
-		cmdVars(c, args, false)
-	case "variables", "variable":
-		cmdVars(c, args, true)
-	case "config":
-		cmdConfig(c, args)
-	case "import":
-		cmdImport(c, args)
-	case "github", "gh":
-		cmdGitHub(c, args)
-	case "status":
-		cmdStatus(c, args)
-	case "init":
-		cmdInit(c, args)
-	case "environment", "env":
-		cmdEnvironment(c, args)
-	case "service":
-		cmdService(c, args)
-	case "add":
-		cmdAdd(c, args)
-	case "run":
-		cmdRun(c, args)
-	case "dev", "develop":
-		cmdDev(c, args)
-	case "shell":
-		cmdShell(c, args)
-	case "ssh":
-		cmdSSH(c, args)
-	case "connect":
-		cmdConnect(c, args)
-	case "netdiag":
-		cmdNetDiag(c, args)
-	case "redeploy":
-		cmdRedeploy(c, args)
-	case "down":
-		cmdDown(c, args)
-	case "restart":
-		cmdRestart(c, args)
-	case "scale":
-		cmdScale(c, args)
-	case "flag", "flags":
-		cmdFlag(c, args)
-	case "pitr":
-		cmdPITR(c, args)
-	case "mysql":
-		if len(args) == 0 || args[0] != "pitr" {
-			die("usage: aven mysql pitr [status|enable|disable|base|restore|delete-archive]")
-		}
-		cmdPITR(c, args[1:])
-	case "cdn":
-		cmdCDN(c, args)
-	case "waf":
-		cmdWAF(c, args)
-	case "edge":
-		cmdEdge(c, args)
-	case "ha":
-		cmdHA(c, args)
-	case "domain", "domains":
-		cmdDomain(c, args)
-	case "tcp-proxy", "tcpproxy":
-		cmdTCPProxy(c, args)
-	case "networking", "net":
-		cmdNetworking(c, args)
-	case "postgres", "pg":
-		if len(args) > 0 && args[0] == "pitr" {
-			cmdPITR(c, args[1:])
-			return
-		}
-		cmdPostgres(c, args)
-	case "open":
-		cmdOpen(c, args)
-	case "whoami":
-		cmdWhoami(c, args)
-	case "tokens", "token":
-		cmdTokens(c, args)
-	case "usage":
-		cmdUsage(c, args)
-	case "trace", "traces", "tracing":
-		cmdTrace(c, args)
-	case "templates", "template":
-		cmdTemplates(c, args)
-	case "mcp":
-		cmdMCP(c, args)
-	case "agent":
-		cmdAgent(c, args)
-	case "sandbox", "sandboxes", "sbx":
-		cmdSandboxes(c, args)
-	case "logout":
-		cmdLogout(c, args)
-	case "version", "--version", "-v":
-		cmdVersion(c, args)
+	name, rest := args[0], args[1:]
+	switch name {
 	case "help", "--help", "-h":
-		fmt.Print(helpText)
-	default:
-		usage()
+		cmdHelp(rest)
+		return
+	case "--version", "-v":
+		name = "version"
 	}
-}
-
-const helpText = `aven: command line for aven-server (see docs/cli.md)
-
-  login [--email you@x] <url>      log in (AVEN_PASSWORD or prompt, AVEN_TOTP for 2FA; no email = built-in admin;
-                                   AVEN_TOKEN uses Bearer: AVEN_API_TOKEN or an aven_ API token; KEEL_* still works)
-  logout                           end the saved session
-  whoami                           show the logged-in user, role and server
-  tokens [list]                    list your API tokens
-  tokens create --name n [--workspace id | --instance | --project p [--environment e]] [--role member] [--expires-days n]
-                                   create a scoped API token (printed once)
-  tokens revoke <id>               revoke an API token
-  init <name> [--workspace id]     create a project and link this directory to it
-  link [-p project] [-e env] [-s service]
-                                   link this directory (also --project/--environment/--service)
-  config import [--file path] [--format ts|json|yaml] [--include-variables] [--force] [--json] [-e env]
-                                   write the linked environment to .aven/aven.ts (alias: pull; .keel still works)
-  config plan [--file path] [-e env] [--json] [--show-values] [--detailed-exit-code] [--out plan.json]
-                                   diff .aven/aven.ts|json|yaml against the environment (alias: preview; .keel still works)
-  config apply [--file path] [-e env] [-y] [--confirm-destructive] [--deploy] [--json] [--plan plan.json]
-                                   apply the plan as staged changes (--deploy: also deploy them)
-  import dokploy scan|plan|apply|verify [--node srv=node] [--skip proj/name] [--move proj/name=proj]
-                 [--local-addr ip] [--project p] [--keep-standby] [--keep-names] [--out plan.json] [--json] [-y]
-                                   move a Dokploy install into aven (DOKPLOY_URL, DOKPLOY_API_KEY; Dokploy is only read)
-  github status|connect|disconnect|repos [q]|webhook <repo>...
-                                   GitHub connection (OAuth) used for private clones, commit statuses and repo webhooks
-  import dokploy export-compose --dir DIR [proj/name ...]   write stacks that stay outside aven as plain compose
-  config partials [list] | release <partial> | transfer <from> <to> [--resource addr]... [--dry-run] [-y]
-                                   inspect or change named partial ownership
-  status                           linked project/environment/service, instance status, latest deployment
-  environment [list]               list environments (alias: env)
-  environment new <name> [--copy-from env]
-  environment use <name>           switch the linked environment
-  environment delete <name> [-y]
-  environment sync [target] --from <env> [--deploy] [-y]
-                                   show what differs from <env> and apply it to the linked (or target) environment
-  service [list]                   list services
-  service use <name>               switch the linked service
-  add --database postgres|mysql|redis|mongo | --image <img> | --repo <url> [--branch b] [--name n]
-  up [-d]                          upload this directory and deploy it
-  redeploy [-y] [--force-build]    redeploy the latest deployment or force-build the latest commit
-  restart                          restart the running containers
-  scale [<n>]                      show or change the replica count now (no redeploy)
-  scale --auto --max n [--min n] [--cpu %] [--memory %] [--rps n] | --off
-                                   horizontal autoscaling
-  flag list [--full]               feature flags (project from AVEN_TOKEN or link; -e env, --scope project:<id>, --json)
-  flag set <name> <value> [--when expr] [--rule-id id] [--type bool|string|number|json] [--force]
-                                   set the default, or add/replace a targeting rule with --when
-  flag unset <name> --rule-id id   remove a targeting rule
-  flag delete <name>               delete a flag in every environment (alias: rm)
-  cdn [status|enable|disable]      CDN caching of the service (also: --json)
-  cdn update [--html-caching auto|force|never] [--default-ttl 2h] [--swr|--no-swr] [--purge-on-deploy off|html|all]
-  cdn purge html|all               purge cached HTML or everything
-  waf [status]                     WAF settings and Under Attack Mode status
-  waf update [--allow-ip ip]... [--deny-ip ip]... [--clear-allow] [--clear-deny] [--rate-limit 100/60s|off] [--managed-rules on|off]
-  waf under-attack status|enable [--duration 1h|3h|12h|24h]|disable
-  edge rules [get] | edge rules set <file.json|->
-                                   print or replace the edge rules (Railway-compatible JSON)
-  ha [status]                      database high availability: cluster members, roles and health
-  ha convert [--replicas n] [--edge n] [--no-auto-failover] [--skip-backup] [-y]
-                                   convert the linked database to an HA cluster
-  ha scale --replicas n | switchover --to <member> | auto-failover on|off | revert [-y]
-  down [-y]                        stop the service (containers are removed until the next deploy)
-  logs [--build] [--deployment id] [--filter q] [-n lines]
-  api [-F key=value]... [--variables JSON|@file] [--raw] <query | @file>
-                                   send a request to the GraphQL API at /graphql/v2 (stdin when query is omitted)
-  logs --dns [--domain d] [--qname n] [--qtype A] [--rcode NXDOMAIN] [--zone internal|external] [--status ok|failed]
-  logs --network [--protocol tcp|udp] [--direction ingress|egress] [--peer p] [--peer-kind k] [--port n] [--status s]
-                                   DNS query / network flow logs (also --src --dst --host --dropped --since --until --json)
-  variables [--set K=V]... [--unset K]... [--import .env]... [--seal K]... [--kv | --env] [--deploy]   (alias: vars)
-  run <cmd...>                     run a local command with the service's variables
-  dev [up|down|clean|configure] [-e env] [--dry-run] [-v]   (alias: develop)
-                                   run project services locally (code + Docker images/databases)
-  shell                            open a local subshell with the service's variables
-  ssh [--replica r] [-- cmd...]    open a shell inside a running replica
-  sandbox create|fork|list|exec|ssh|file|checkpoint|destroy
-                                   ephemeral isolated containers in the linked environment
-  connect [service] [--enable-proxy]
-                                   open psql/mysql/redis-cli/mongosh against a database service
-  pitr [status]                    point-in-time recovery status and restore window (alias: postgres pitr, mysql pitr)
-  pitr enable [--retention-days 7] [--destination id] | pitr disable [-y]
-                                   continuous WAL/binlog archiving to the backup storage
-  pitr base                        take a base backup now
-  pitr restore --at <time> [--new-service-name n | --in-place] [-y] [--no-wait]
-                                   restore to a moment (RFC3339, local "YYYY-MM-DD HH:MM[:SS]", or 30m/2h/1d/1w ago)
-  pitr delete-archive [-y]         delete the archive of a database with PITR off
-  netdiag <host> [port] [-r replica]
-                                   resolve a name and test a TCP connection from inside a running replica
-  domain [host] [--port n]         add a generated (no host) or custom domain and print DNS records
-  domain list [--json]             domains of the service with status, port and proxy
-  domain status <host> [--json]    verification, proxy, DNS records (status, current value), certificate, warnings
-  domain port <host> <n|auto>      change the target port (auto: follow the service port)
-  domain verify <host>             re-check DNS and verification now
-  domain rename <old> <new>        rename a generated domain (<new> may be just the first label)
-  domain rm <host> [-y]            remove a domain
-  tcp-proxy [status] [--json]      TCP proxy host:port and the container port behind it
-  tcp-proxy enable [--port n] | port <n> | disable [-y]
-                                   open, retarget or close the TCP proxy (not on Cloudflare tunnel nodes)
-  networking [--json]              ports (detected/effective), domains, TCP proxy, private name and outbound IPv6 (alias: net)
-  postgres pooling [status]        PgBouncer connection pooling of a postgres service (alias: pg, pgbouncer)
-  postgres pooling enable|configure [--pool-mode transaction|session|statement] [--default-pool-size n]
-                                   [--max-client-conn n] [--max-prepared-statements n]
-  postgres pooling disable [-y]    remove PgBouncer; DATABASE_URL connects directly again
-  postgres upgrade [status]        PostgreSQL major version and the last upgrade
-  postgres upgrade check [--to n]  run the read-only preflight report
-  postgres upgrade start [--to n] [-y]
-                                   back up, then upgrade in place with pg_upgrade (database stops meanwhile)
-  postgres upgrade revert [-y]     restore the pre-upgrade backup and previous major
-  open                             open the dashboard for the linked service
-  usage [--from D] [--to D] [--group service|environment|day] [--all]
-                                   resource usage of the linked project (--all: per project, workspace admin)
-  trace on|off|status|list|get [TRACE_ID] [-s service] [-e env] [-p project]
-                                   enable per-service tracing or inspect traces (--all, --filter, --json)
-  templates [list] [--q text] [--category c] [--tag t] [--sort popular|new]
-  templates show <key>             services, inputs and readme of a template
-  templates deploy <key> [--input K=V]... [-e env]
-                                   deploy a template into the linked project/environment
-  templates publish <file.json> [--workspace id] [--visibility private|workspace|public] [--key k]
-  templates export <key>           print a template definition (JSON)
-  templates export-env [--secrets generate|inputs] [-e env] > file.json
-                                   generate a template definition from the linked environment
-  mcp                              serve the hosted MCP endpoint over stdio (AVEN_TOKEN or the aven login session)
-  mcp install [--agent claude-code|cursor|vscode]...
-                                   add the aven MCP server to the MCP client config in this directory
-  agent [-p prompt] [--json] [-y]  chat with Aven Agent (interactive without -p; -y approves actions)
-  agent --list | --thread-id <id>  list previous agent threads / continue one
-  version                          print CLI and server versions
-  help                             this help
-
-Most service commands accept -s/--service and -e/--environment to target something other than the link.
-`
-
-func usage() {
-	fmt.Fprint(os.Stderr, helpText)
-	os.Exit(2)
+	cmd := lookupCommand(name)
+	if cmd == nil {
+		unknownCommand(name)
+	}
+	// `aven <command> -h|--help` prints that command's help (only as the first argument, so
+	// `aven run -- npm --help` and `aven ssh -- ls --help` still reach the child).
+	if len(rest) > 0 && (rest[0] == "-h" || rest[0] == "--help") {
+		printCommandHelp(os.Stdout, cmd.names[0])
+		return
+	}
+	cmd.run(loadCfg(), rest)
 }
 
 // ---- HTTP ----
@@ -349,18 +193,32 @@ func (c *config) req(method, path string, body io.Reader, ctype string) (*http.R
 	if ctype != "" {
 		r.Header.Set("Content-Type", ctype)
 	}
+	r.Header.Set("User-Agent", userAgent())
+	c.authorize(r)
+	resp, err := http.DefaultClient.Do(r)
+	return resp, netHint(c.URL, err)
+}
+
+// authorize adds KEEL_TOKEN as a Bearer token, or the stored session cookie.
+func (c *config) authorize(r *http.Request) {
 	if t := compat.Env("TOKEN"); t != "" {
 		r.Header.Set("Authorization", "Bearer "+t)
 	} else if c.Cookie != "" {
 		r.AddCookie(&http.Cookie{Name: "aven_session", Value: c.Cookie})
 	}
-	return http.DefaultClient.Do(r)
+}
+
+func userAgent() string {
+	return "aven-cli/" + version + " (" + runtime.GOOS + "/" + runtime.GOARCH + ")"
 }
 
 func (c *config) call(method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
-		b, _ := json.Marshal(in)
+		b, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
 		body = bytes.NewReader(b)
 	}
 	resp, err := c.req(method, path, body, "application/json")
@@ -369,49 +227,36 @@ func (c *config) call(method, path string, in, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		var e struct {
-			Error string `json:"error"`
-		}
-		json.NewDecoder(resp.Body).Decode(&e)
-		if resp.StatusCode == 401 {
-			return errors.New("unauthorized (run: aven login <url>)")
-		}
-		if resp.StatusCode == 403 && e.Error == "mfa_setup_required" {
-			return errors.New("this workspace requires two-factor authentication: set up an authenticator app or passkey in the dashboard (Account → Security), then retry")
-		}
-		return fmt.Errorf("%s %s: %d %s", method, path, resp.StatusCode, e.Error)
+		return responseError(method, path, resp)
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s %s: unexpected response: %w", method, path, err)
+		}
 	}
 	return nil
 }
 
-// sse는 SSE 스트림을 읽어 (event, data)를 넘긴다. f가 false를 돌려주면 멈춘다.
-func (c *config) sse(path string, f func(event, data string) bool) error {
-	resp, err := c.req("GET", path, nil, "")
-	if err != nil {
-		return err
+// responseError turns a non-2xx response into an error with a next step. It reads at most 64 KiB.
+func responseError(method, path string, resp *http.Response) error {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	var e struct {
+		Error string `json:"error"`
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("GET %s: %d", path, resp.StatusCode)
-	}
-	sc := bufio.NewScanner(resp.Body)
-	sc.Buffer(make([]byte, 64*1024), 1024*1024)
-	event := ""
-	for sc.Scan() {
-		l := sc.Text()
-		switch {
-		case strings.HasPrefix(l, "event: "):
-			event = l[7:]
-		case strings.HasPrefix(l, "data: "):
-			if !f(event, l[6:]) {
-				return nil
-			}
+	if json.Unmarshal(b, &e) != nil || e.Error == "" {
+		// A proxy in front of the server may answer with HTML or plain text: show its first line only.
+		e.Error = firstLine(string(b))
+		if strings.HasPrefix(e.Error, "<") || len(e.Error) > 200 {
+			e.Error = http.StatusText(resp.StatusCode)
 		}
 	}
-	return sc.Err()
+	switch {
+	case resp.StatusCode == 401:
+		return errors.New("unauthorized: the session expired or the token is invalid\nhint: run aven login <url>, or check KEEL_TOKEN")
+	case resp.StatusCode == 403 && e.Error == "mfa_setup_required":
+		return errors.New("this workspace requires two-factor authentication: set up an authenticator app or passkey in the dashboard (Account → Security), then retry")
+	}
+	return &apiError{Method: method, Path: path, Status: resp.StatusCode, Msg: e.Error}
 }
 
 // ---- commands ----
@@ -449,16 +294,25 @@ func cmdLogin(c *config, args []string) {
 		die("%v\nusage: aven login [--email you@example.com] <url>", err)
 	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		die("url must start with http:// or https://")
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		die("url must start with http:// or https:// and name a host, e.g. https://aven.example.com")
+	}
+	if u.User != nil {
+		die("the url must not contain credentials (they would be stored and printed); use --email and KEEL_PASSWORD or the prompt")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		die("the url must not have a query or fragment: use the dashboard address, e.g. %s://%s", u.Scheme, u.Host)
 	}
 	c.URL = strings.TrimRight(raw, "/")
+	c.envURL = "" // an explicit login replaces the stored URL
 	if compat.Env("TOKEN") != "" {
 		if err := c.call("GET", "/auth/me", nil, nil); err != nil {
 			die("%v", err)
 		}
-		c.save()
-		fmt.Println("logged in with " + tokenEnvName())
+		if err := c.save(); err != nil {
+			die("%v", err)
+		}
+		fmt.Printf("saved %s; requests authenticate with "+tokenEnvName()+" while it is set (the token itself is not stored)\n", c.URL)
 		return
 	}
 	if email == "" {
@@ -477,9 +331,12 @@ func cmdLogin(c *config, args []string) {
 	var methods []string
 	post := func() (*http.Response, string) {
 		b, _ := json.Marshal(body)
-		resp, err := http.Post(c.URL+"/api/auth/login", "application/json", bytes.NewReader(b))
+		r, _ := http.NewRequest("POST", c.URL+"/api/auth/login", bytes.NewReader(b))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("User-Agent", userAgent())
+		resp, err := http.DefaultClient.Do(r)
 		if err != nil {
-			die("%v", err)
+			die("%v", netHint(c.URL, err))
 		}
 		var e struct {
 			Error   string   `json:"error"`
@@ -528,7 +385,7 @@ func cmdLogin(c *config, args []string) {
 	var me struct {
 		MFASetupRequired bool `json:"mfa_setup_required"`
 	}
-	if c.call("GET", "/api/auth/me", nil, &me) == nil && me.MFASetupRequired {
+	if c.call("GET", "/auth/me", nil, &me) == nil && me.MFASetupRequired {
 		fmt.Fprintln(os.Stderr, "warning: this workspace requires two-factor authentication; set it up in the dashboard (Account → Security) before using the CLI")
 	}
 }
@@ -544,21 +401,6 @@ func secondFactorPrompt(methods []string) string {
 		return "recovery code (passkeys only work in the dashboard): "
 	}
 	return "2FA code (or recovery code): "
-}
-
-func readSecret() string {
-	if st, err := os.Stdin.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
-		off := exec.Command("stty", "-echo")
-		off.Stdin = os.Stdin
-		off.Run()
-		defer func() {
-			on := exec.Command("stty", "echo")
-			on.Stdin = os.Stdin
-			on.Run()
-		}()
-	}
-	s, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	return strings.TrimRight(s, "\r\n")
 }
 
 type project struct {
@@ -583,33 +425,28 @@ type svcRef struct {
 }
 
 func cmdLink(c *config, args []string) {
-	fl := flag.NewFlagSet("link", flag.ExitOnError)
+	fl := newFlagSet("link")
 	pf := fl.String("p", "", "project name or id")
 	ef := fl.String("e", "", "environment name or id (default: project default)")
 	sf := fl.String("s", "", "service name or id")
 	fl.StringVar(pf, "project", "", "project name or id")
 	fl.StringVar(ef, "environment", "", "environment name or id")
 	fl.StringVar(sf, "service", "", "service name or id")
+	asJSON := fl.Bool("json", false, "print the link as JSON")
 	fl.Parse(args)
+	if fl.NArg() > 0 {
+		die("unexpected argument %q\nusage: aven link [-p project] [-e env] [-s service]", fl.Arg(0))
+	}
 	var ps []project
 	if err := c.call("GET", "/projects", nil, &ps); err != nil {
 		die("%v", err)
 	}
-	var p *project
-	for i := range ps {
-		if *pf == "" && len(ps) == 1 || ps[i].ID == *pf || ps[i].Name == *pf {
-			p = &ps[i]
-		}
-	}
-	if p == nil {
-		names := []string{}
-		for _, x := range ps {
-			names = append(names, x.Name)
-		}
-		die("choose a project with -p (%s)", strings.Join(names, ", "))
+	p, err := chooseProject(ps, *pf, interactive())
+	if err != nil {
+		die("%v", err)
 	}
 	var full project
-	if err := c.call("GET", "/projects/"+p.ID, nil, &full); err != nil {
+	if err := c.call("GET", "/projects/"+url.PathEscape(p.ID), nil, &full); err != nil {
 		die("%v", err)
 	}
 	l := &link{ProjectID: full.ID, Project: full.Name}
@@ -618,31 +455,116 @@ func cmdLink(c *config, args []string) {
 			l.EnvironmentID, l.Environment = e.ID, e.Name
 		}
 	}
+	if l.EnvironmentID == "" && *ef == "" && len(full.Environments) > 0 {
+		l.EnvironmentID, l.Environment = full.Environments[0].ID, full.Environments[0].Name
+	}
 	if l.EnvironmentID == "" {
-		die("environment %q not found", *ef)
+		die("environment %q not found (%s)", *ef, names(full.Environments, func(e envRef) string { return e.Name }))
 	}
-	for _, s := range full.Services {
-		if (*sf == "" && len(full.Services) == 1) || s.ID == *sf || s.Name == *sf {
-			l.ServiceID, l.Service = s.ID, s.Name
-		}
+	s, err := chooseService(full.Services, *sf, interactive())
+	if err != nil {
+		die("%v", err)
 	}
-	if l.ServiceID == "" && *sf != "" {
-		names := []string{}
-		for _, s := range full.Services {
-			names = append(names, s.Name)
-		}
-		die("service %q not found (%s)", *sf, strings.Join(names, ", "))
+	if s != nil {
+		l.ServiceID, l.Service = s.ID, s.Name
 	}
 	dir, _ := os.Getwd()
 	c.Links[dir] = l
 	if err := c.save(); err != nil {
 		die("%v", err)
 	}
-	if l.ServiceID == "" {
-		fmt.Printf("linked %s → %s / %s (no service; run: aven service use <name>)\n", dir, full.Name, l.Environment)
+	if *asJSON {
+		printJSON(map[string]any{"directory": dir, "link": l})
 		return
 	}
-	fmt.Printf("linked %s → %s / %s / %s\n", dir, full.Name, l.Environment, l.Service)
+	if l.ServiceID == "" {
+		fmt.Printf("linked %s → %s / %s (no service; run: aven service use <name>)\n", dir, out(styleBold, full.Name), l.Environment)
+		return
+	}
+	fmt.Printf("linked %s → %s / %s / %s\n", dir, out(styleBold, full.Name), l.Environment, out(styleBold, l.Service))
+}
+
+// chooseProject picks the project for aven link: by id or (unique) name, the only one, or by asking.
+func chooseProject(ps []project, want string, ask bool) (*project, error) {
+	if len(ps) == 0 {
+		return nil, errors.New("no projects yet (create one: aven init <name>)")
+	}
+	if want != "" {
+		var match *project
+		for i := range ps {
+			if ps[i].ID == want {
+				return &ps[i], nil
+			}
+			if ps[i].Name == want {
+				if match != nil {
+					return nil, fmt.Errorf("project name %q exists in several workspaces; pass its ID with -p", want)
+				}
+				match = &ps[i]
+			}
+		}
+		if match == nil {
+			return nil, fmt.Errorf("project %q not found (%s)", want, names(ps, func(p project) string { return p.Name }))
+		}
+		return match, nil
+	}
+	if len(ps) == 1 {
+		return &ps[0], nil
+	}
+	if !ask {
+		return nil, fmt.Errorf("choose a project with -p (%s)", names(ps, func(p project) string { return p.Name }))
+	}
+	i, err := pick("Select a project:", projectLabels(ps), false)
+	if err != nil {
+		return nil, err
+	}
+	return &ps[i], nil
+}
+
+// projectLabels shows names, adding the ID where a name is used twice.
+func projectLabels(ps []project) []string {
+	count := map[string]int{}
+	for _, p := range ps {
+		count[p.Name]++
+	}
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Name
+		if count[p.Name] > 1 {
+			out[i] += " (" + p.ID + ")"
+		}
+	}
+	return out
+}
+
+// chooseService picks the linked service: -s, the only one, by asking (or none), else none.
+func chooseService(ss []svcRef, want string, ask bool) (*svcRef, error) {
+	if want != "" {
+		for i := range ss {
+			if ss[i].ID == want || ss[i].Name == want {
+				return &ss[i], nil
+			}
+		}
+		return nil, fmt.Errorf("service %q not found (%s)", want, names(ss, func(s svcRef) string { return s.Name }))
+	}
+	switch {
+	case len(ss) == 1:
+		return &ss[0], nil
+	case len(ss) == 0 || !ask:
+		return nil, nil
+	}
+	i, err := pick("Select a service (0 links only the environment):", names2(ss), true)
+	if err != nil || i < 0 {
+		return nil, err
+	}
+	return &ss[i], nil
+}
+
+func names2(ss []svcRef) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.Name
+	}
+	return out
 }
 
 func (c *config) linked() *link {
@@ -655,195 +577,8 @@ func (c *config) linked() *link {
 			break
 		}
 	}
-	die("this directory is not linked (run: aven link)")
+	die("this directory is not linked to a project\nhint: run aven link (or aven init <name> for a new project)")
 	return nil
-}
-
-var skipDirs = map[string]bool{".git": true, "node_modules": true, ".next": true, "__pycache__": true, ".venv": true}
-
-// tarDir은 dir을 tar.gz로 묶는다(.git, node_modules 등 제외).
-func tarDir(dir string, w io.Writer) (int, error) {
-	gz := gzip.NewWriter(w)
-	tw := tar.NewWriter(gz)
-	n := 0
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(dir, p)
-		if rel == "." {
-			return nil
-		}
-		if d.IsDir() && skipDirs[d.Name()] {
-			return filepath.SkipDir
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		link := ""
-		if info.Mode()&os.ModeSymlink != 0 {
-			link, _ = os.Readlink(p)
-		} else if !info.Mode().IsRegular() && !info.IsDir() {
-			return nil
-		}
-		h, err := tar.FileInfoHeader(info, link)
-		if err != nil {
-			return err
-		}
-		h.Name = filepath.ToSlash(rel)
-		if err := tw.WriteHeader(h); err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			f, err := os.Open(p)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(tw, f)
-			f.Close()
-			n++
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return n, err
-	}
-	if err := tw.Close(); err != nil {
-		return n, err
-	}
-	return n, gz.Close()
-}
-
-type deployment struct {
-	ID     string  `json:"id"`
-	Status string  `json:"status"`
-	Error  *string `json:"error"`
-}
-
-func cmdUp(c *config, args []string) {
-	fl := flag.NewFlagSet("up", flag.ExitOnError)
-	detach := fl.Bool("d", false, "don't follow build logs")
-	tf := addTargetFlags(fl)
-	fl.Parse(args)
-	l := tf.service(c)
-	dir, _ := os.Getwd()
-	var src bytes.Buffer
-	n, err := tarDir(dir, &src)
-	if err != nil {
-		die("pack: %v", err)
-	}
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-	fw, _ := mw.CreateFormFile("source", "source.tar.gz")
-	fw.Write(src.Bytes())
-	mw.Close()
-	fmt.Printf("uploading %d files (%d KiB) to %s/%s...\n", n, src.Len()/1024, l.Environment, l.Service)
-	resp, err := c.req("POST", "/services/"+l.ServiceID+"/instances/"+l.EnvironmentID+"/upload", &body, mw.FormDataContentType())
-	if err != nil {
-		die("%v", err)
-	}
-	defer resp.Body.Close()
-	var d deployment
-	if resp.StatusCode != 202 {
-		b, _ := io.ReadAll(resp.Body)
-		die("upload failed: %s %s", resp.Status, strings.TrimSpace(string(b)))
-	}
-	json.NewDecoder(resp.Body).Decode(&d)
-	fmt.Println("deployment", d.ID)
-	if *detach {
-		return
-	}
-	final := ""
-	c.sse("/deployments/"+d.ID+"/build-logs", func(ev, data string) bool {
-		switch ev {
-		case "log":
-			fmt.Println(data)
-		case "done":
-			final = data
-			return false
-		}
-		return true
-	})
-	if final == "" {
-		var cur deployment
-		c.call("GET", "/deployments/"+d.ID, nil, &cur)
-		final = cur.Status
-	}
-	fmt.Println("status:", final)
-	if final != "live" {
-		os.Exit(1)
-	}
-}
-
-func cmdLogs(c *config, args []string) {
-	if kind := netLogKind(args); kind != "" {
-		cmdNetLogs(c, kind, args) // --dns / --network: networklogs.go
-		return
-	}
-	fl := flag.NewFlagSet("logs", flag.ExitOnError)
-	build := fl.Bool("b", false, "build logs of the latest deployment")
-	fl.BoolVar(build, "build", false, "build logs of the latest deployment")
-	n := fl.Int("n", 200, "lines of history")
-	fl.IntVar(n, "lines", 200, "lines of history")
-	depID := fl.String("deployment", "", "deployment id (default: current / latest)")
-	filter := fl.String("filter", "", `filter: words, "phrase", -exclude`)
-	tf := addTargetFlags(fl)
-	fl.Parse(args)
-	l := tf.service(c)
-	base := "/services/" + l.ServiceID + "/instances/" + l.EnvironmentID
-	if *build {
-		id := *depID
-		if id == "" {
-			var deps []deployment
-			c.call("GET", base+"/deployments?limit=1", nil, &deps)
-			if len(deps) == 0 {
-				die("no deployments")
-			}
-			id = deps[0].ID
-		}
-		match := buildFilter(*filter)
-		err := c.sse("/deployments/"+url.PathEscape(id)+"/build-logs", func(ev, data string) bool {
-			if ev == "log" && match(data) {
-				fmt.Println(data)
-			}
-			return ev != "done"
-		})
-		if err != nil {
-			die("%v", err)
-		}
-		return
-	}
-	id := *depID
-	if id == "" {
-		var inst struct {
-			CurrentDeploymentID *string `json:"current_deployment_id"`
-		}
-		if err := c.call("GET", base, nil, &inst); err != nil {
-			die("%v", err)
-		}
-		if inst.CurrentDeploymentID == nil {
-			die("no live deployment")
-		}
-		id = *inst.CurrentDeploymentID
-	}
-	q := url.Values{"tail": {fmt.Sprint(*n)}}
-	if *filter != "" {
-		q.Set("q", *filter)
-	}
-	err := c.sse("/deployments/"+url.PathEscape(id)+"/deploy-logs?"+q.Encode(), func(ev, data string) bool {
-		if ev == "log" {
-			var e struct{ T, Replica, Stream, Msg string }
-			json.Unmarshal([]byte(data), &e)
-			t, _ := time.Parse(time.RFC3339Nano, e.T)
-			fmt.Printf("%s %s %s\n", t.Local().Format("15:04:05"), e.Replica, e.Msg)
-		}
-		return ev != "done"
-	})
-	if err != nil {
-		die("%v", err)
-	}
 }
 
 // buildFilter는 빌드 로그용 클라이언트 쪽 필터다(서버의 q와 같은 문법: 단어, "구절", -제외; 대소문자 무시).
@@ -900,6 +635,7 @@ type varsOpts struct {
 	patch   map[string]*string
 	deploy  bool
 	kv      bool
+	json    bool
 	service string
 	env     string
 	seal    []string // --seal KEY: 봉인(값을 다시 볼 수 없다)
@@ -941,6 +677,8 @@ func parseVarsArgs(args []string) (*varsOpts, error) {
 			o.deploy = true
 		case "--kv", "-kv":
 			o.kv = true
+		case "--json", "-json":
+			o.json = true
 		case "--env", "-env":
 			o.dotenv = true
 		case "--seal", "-seal":
@@ -1004,7 +742,10 @@ func parseVarsArgs(args []string) (*varsOpts, error) {
 func cmdVars(c *config, args []string, table bool) {
 	o, err := parseVarsArgs(args)
 	if err != nil {
-		die("%v\nusage: aven variables [--set KEY=VALUE]... [--unset KEY]... [--import FILE]... [--seal KEY]... [--kv | --env] [--deploy] [-s service] [-e env]", err)
+		die("%v\nusage: aven variables [--set KEY=VALUE]... [--unset KEY]... [--import FILE]... [--seal KEY]... [--kv | --env | --json] [--deploy] [-s service] [-e env]", err)
+	}
+	if o.json && (o.kv || o.dotenv) {
+		die("--json cannot be combined with --kv or --env\nusage: aven variables [--json]")
 	}
 	// --import: 파일의 변수를 먼저 넣고 --set/--unset이 덮는다.
 	if len(o.imports) > 0 {
@@ -1066,28 +807,60 @@ func cmdVars(c *config, args []string, table bool) {
 		}
 		return
 	}
+	if o.json {
+		printJSON(map[string]any{"variables": nonNilMap(inst.Variables), "sealed": nonNil(inst.SealedVariables),
+			"pending_changes": nonNil(inst.PendingChanges)})
+		return
+	}
+	fmt.Print(formatVars(inst.Variables, inst.SealedVariables, table && !o.kv))
+	if len(inst.PendingChanges) > 0 && !o.deploy {
+		fmt.Fprintf(os.Stderr, "pending changes (apply with --deploy): %s\n", strings.Join(inst.PendingChanges, ", "))
+	}
+}
+
+// formatVars prints variables sorted by name, as an aligned table or KEY=VALUE lines. Sealed values can
+// never be read; they are shown as <sealed> (a comment in KEY=VALUE output, so it stays a valid .env).
+func formatVars(vars map[string]string, sealedKeys []string, table bool) string {
 	sealed := map[string]bool{}
-	for _, k := range inst.SealedVariables {
+	for _, k := range sealedKeys {
 		sealed[k] = true
 	}
-	keys := make([]string, 0, len(inst.Variables))
+	keys := make([]string, 0, len(vars))
 	width := 0
-	for k := range inst.Variables {
+	for k := range vars {
 		keys = append(keys, k)
 		width = max(width, len(k))
 	}
 	sort.Strings(keys)
+	var b strings.Builder
 	for _, k := range keys {
 		switch {
-		case table && !o.kv:
-			fmt.Printf("%-*s  %s\n", width, k, inst.Variables[k])
+		case table && sealed[k]:
+			fmt.Fprintf(&b, "%s  %s\n", pad(out(styleBold, k), k, width), out(styleDim, "<sealed>"))
+		case table:
+			fmt.Fprintf(&b, "%s  %s\n", pad(out(styleBold, k), k, width), vars[k])
 		case sealed[k]:
-			fmt.Printf("# %s=<sealed>\n", k) // 봉인 값은 읽을 수 없다
+			fmt.Fprintf(&b, "# %s=<sealed>\n", k) // 봉인 값은 읽을 수 없다
 		default:
-			fmt.Printf("%s=%s\n", k, inst.Variables[k])
+			fmt.Fprintf(&b, "%s=%s\n", k, vars[k])
 		}
 	}
-	if len(inst.PendingChanges) > 0 && !o.deploy {
-		fmt.Fprintf(os.Stderr, "pending changes (apply with --deploy): %s\n", strings.Join(inst.PendingChanges, ", "))
+	if table && len(keys) == 0 {
+		b.WriteString("no variables (add one: aven variables --set KEY=VALUE)\n")
 	}
+	return b.String()
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+func nonNilMap(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
 }

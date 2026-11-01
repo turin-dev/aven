@@ -95,7 +95,13 @@ func (s *Server) streamNetworkLogs(w http.ResponseWriter, r *http.Request, envID
 		// 필터는 서버에서 적용하므로 맞는 기록이 tail개 모이도록 더 많이 읽는다.
 		q.Limit = 5000
 	}
-	past, ch, cancel, err := s.Deploy.NetworkLogs.Subscribe(r.Context(), q, follow)
+	pid := ""
+	if env, err := s.Store.GetEnvironment(r.Context(), envID); err == nil {
+		pid = env.ProjectID
+	}
+	ctx, stop := s.guardStream(r, pid, envID)
+	defer stop()
+	past, ch, cancel, err := s.Deploy.NetworkLogs.Subscribe(ctx, q, follow)
 	if err != nil {
 		s.storeErr(w, err)
 		return
@@ -130,7 +136,7 @@ func (s *Server) streamNetworkLogs(w http.ResponseWriter, r *http.Request, envID
 	defer keepalive.Stop()
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-keepalive.C:
 			fmt.Fprint(w, ": ping\n\n")

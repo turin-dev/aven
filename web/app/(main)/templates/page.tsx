@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Download, Rocket, Search, Trash2, X } from "lucide-react";
@@ -13,7 +12,7 @@ import { t } from "@/lib/i18n";
 import { useWorkspace } from "@/lib/workspace";
 import { BrandIcon } from "@/components/ServiceIcon";
 import { lock } from "@/components/Perm";
-import { MarkdownLite, TemplateInputsForm, inputErrorsFrom, inputValues, validateInputs, visibilityLabel } from "@/components/TemplateParts";
+import { MarkdownLite, TemplateInputsForm, inputErrorsFrom, inputValues, templateBlueprint, validateInputs, visibilityLabel } from "@/components/TemplateParts";
 import { Button, CenterSpinner, Dialog, EmptyState, ErrorBox, Field, Input, Segmented, Select, cx, useConfirm } from "@/components/ui";
 
 type SortKey = "" | "popular" | "new";
@@ -88,6 +87,7 @@ function TemplateDetailDialog({ tkey, onClose }: { tkey: string | null; onClose:
     setError(null);
   }, [tkey]);
 
+  const blueprint = useMemo(() => templateBlueprint(tpl?.definition), [tpl?.definition]);
   const role = me?.projects?.[targetPid];
   const canDeploy = !me || role === "admin" || role === "member";
 
@@ -104,7 +104,13 @@ function TemplateDetailDialog({ tkey, onClose }: { tkey: string | null; onClose:
     setError(null);
     try {
       const svcs = await api.deployTemplate(targetPid, tpl.key, targetEid, inputValues(values));
-      await Promise.all([qc.invalidateQueries({ queryKey: qk.templates }), qc.invalidateQueries({ queryKey: qk.project(targetPid) })]);
+      // deploy_count changed (templates), new services exist (project, canvas), and a "created" event was written.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: qk.templates }),
+        qc.invalidateQueries({ queryKey: qk.project(targetPid) }),
+        qc.invalidateQueries({ queryKey: qk.canvas(targetEid) }),
+        qc.invalidateQueries({ queryKey: ["events", targetPid] }),
+      ]);
       const env = envs.find((e) => e.id === targetEid);
       toast(t("템플릿 {name}을(를) {env} 환경에 배포합니다", { name: tpl.name, env: env?.name ?? "" }));
       onClose();
@@ -206,19 +212,41 @@ function TemplateDetailDialog({ tkey, onClose }: { tkey: string | null; onClose:
               </section>
             )}
 
-            <section>
-              <h3 className="mb-1.5 text-sm font-semibold text-foreground">{t("서비스|plural")}</h3>
+            <section aria-labelledby="tpl-creates">
+              <h3 id="tpl-creates" className="mb-1.5 text-sm font-semibold text-foreground">
+                {t("배포하면 만들어지는 것")}
+              </h3>
               <ul className="divide-y divide-gray-200 rounded-md border border-gray-200">
-                {tpl.services.map((s) => (
-                  <li key={s.name} className="flex items-center gap-2.5 px-3 py-2">
-                    <BrandIcon name={s.icon || s.database_kind || (s.source_type === "repo" ? "github" : "docker")} className="size-4" />
-                    <span className="text-sm font-medium text-foreground">{s.name}</span>
-                    <span className="min-w-0 truncate font-mono text-xs text-gray-500">
-                      {s.source_type === "database" ? s.database_kind : s.source_type === "repo" ? s.repo_url : s.image}
-                    </span>
+                {(blueprint.length
+                  ? blueprint
+                  : tpl.services.map((s) => ({
+                      name: s.name,
+                      icon: s.icon || s.database_kind || (s.source_type === "repo" ? "github" : "docker"),
+                      source: (s.source_type === "database" ? s.database_kind : s.source_type === "repo" ? s.repo_url : s.image) ?? "",
+                      chips: [] as string[],
+                    }))
+                ).map((s) => (
+                  <li key={s.name} className="px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <BrandIcon name={s.icon} className="size-4 shrink-0" />
+                      <span className="shrink-0 text-sm font-medium text-foreground">{s.name}</span>
+                      <span className="min-w-0 truncate font-mono text-xs text-gray-500" title={s.source}>
+                        {s.source}
+                      </span>
+                    </div>
+                    {s.chips.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1 pl-[26px]">
+                        {s.chips.map((c) => (
+                          <span key={c} className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">
+                            {c}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
+              <p className="mt-1.5 text-xs text-gray-500">{t("서비스 사이의 변수 참조는 자동으로 연결되고, 비밀번호와 비밀 값은 배포할 때마다 새로 만듭니다.")}</p>
             </section>
 
             <section className="space-y-3">
@@ -250,6 +278,7 @@ function TemplateDetailDialog({ tkey, onClose }: { tkey: string | null; onClose:
                 </Field>
               </div>
               {!canDeploy && <p className="text-xs text-gray-500">{t("이 프로젝트에 배포하려면 member 이상 권한이 필요합니다.")}</p>}
+              {projects.data && projects.data.length === 0 && <p className="text-xs text-gray-500">{t("프로젝트를 먼저 만드세요.")}</p>}
               <TemplateInputsForm
                 inputs={tpl.inputs}
                 values={values}
@@ -295,19 +324,20 @@ function TemplateDetailDialog({ tkey, onClose }: { tkey: string | null; onClose:
 
 function TemplatesInner() {
   const href = useCtxHref();
+  const router = useRouter();
+  // ?template=KEY opens the detail dialog, so a template can be linked to and the back button closes it.
+  const open = useSearchParams().get("template");
+  const setOpen = (key: string | null) => router.replace(href("/templates/", { template: key }), { scroll: false });
   const [q, setQ] = useState("");
   const [debounced, setDebounced] = useState("");
   const [category, setCategory] = useState("");
   const [sort, setSort] = useState<SortKey>("");
-  const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(q.trim()), 200);
     return () => clearTimeout(id);
   }, [q]);
   useEffect(() => {
     document.title = `${t("템플릿")} · aven`;
-    const k = new URLSearchParams(window.location.search).get("template");
-    if (k) setOpen(k);
     return () => {
       document.title = "aven";
     };
@@ -347,13 +377,12 @@ function TemplatesInner() {
               ]}
             />
           </div>
-          <div role="radiogroup" aria-label={t("분류")} className="flex flex-wrap gap-1.5">
+          <div role="group" aria-label={t("분류")} className="flex flex-wrap gap-1.5">
             {["", ...categories].map((c) => (
               <button
                 key={c || "all"}
                 type="button"
-                role="radio"
-                aria-checked={category === c}
+                aria-pressed={category === c}
                 onClick={() => setCategory(c)}
                 className={cx(
                   "h-7 cursor-pointer rounded-full border px-3 text-xs font-medium transition-colors",
@@ -368,8 +397,30 @@ function TemplatesInner() {
           {list.isPending ? (
             <CenterSpinner />
           ) : (list.data ?? []).length === 0 ? (
-            <EmptyState icon={<Search className="size-5" />} title={t("일치하는 템플릿이 없습니다")} />
+            <EmptyState
+              icon={<Search className="size-5" />}
+              title={t("일치하는 템플릿이 없습니다")}
+              action={
+                q || category ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setQ("");
+                      setDebounced("");
+                      setCategory("");
+                    }}
+                  >
+                    <X className="size-3.5" aria-hidden="true" /> {t("필터 지우기")}
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : (
+            <>
+            <p className="text-xs tabular-nums text-gray-500" aria-live="polite">
+              {t("템플릿 {count}개", { count: list.data!.length })}
+            </p>
             <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label={t("템플릿 목록")}>
               {(list.data ?? []).map((tp) => (
                 <li key={tp.key}>
@@ -377,6 +428,7 @@ function TemplatesInner() {
                 </li>
               ))}
             </ul>
+            </>
           )}
           <p className="text-xs text-gray-500">
             {t("환경 메뉴의 ‘템플릿으로 게시…’로 지금 환경을 템플릿으로 만들 수 있습니다. 정의 형식은 docs/api-v1.md의 Templates 절에 있습니다.")}

@@ -12,3 +12,7 @@ func isTerminal(*os.File) bool           { return false }
 func makeRaw(*os.File) (func(), error)   { return nil, errors.New("not supported on this platform") }
 func termSize(*os.File) (int, int, bool) { return 0, 0, false }
 func watchResize(func()) func()          { return func() {} }
+
+func enableANSI(*os.File) bool { return true }
+
+func disableEcho(*os.File) (func(), error) { return nil, errors.New("not supported on this platform") }

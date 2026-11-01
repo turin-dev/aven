@@ -1,6 +1,7 @@
 // ${{ VAR }}            같은 서비스(인스턴스)의 변수
 // ${{ shared.VAR }}     환경의 공유 변수
 // ${{ service.VAR }}    같은 환경의 다른 서비스 변수
+// $${{ VAR }}           참조가 아니라 글자 그대로의 ${{ VAR }}(템플릿 문법을 값으로 넘길 때)
 package vars
 
 import (
@@ -10,7 +11,10 @@ import (
 	"strings"
 )
 
-var refRe = regexp.MustCompile(`\$\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}`)
+// refRe는 참조와, 앞에 $를 하나 더 붙여 이스케이프한 참조($${{ X }})를 함께 찾는다(escaped인지는 첫 두 글자로 본다).
+var refRe = regexp.MustCompile(`\$?\$\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}`)
+
+func escaped(m string) bool { return strings.HasPrefix(m, "$$") }
 
 // Scope는 한 환경의 변수 전체다. Services의 값은 주입 변수 위에 사용자 변수를 덮은 것이다.
 type Scope struct {
@@ -84,6 +88,9 @@ func (r *resolver) resolve(k key) (string, error) {
 		if firstErr != nil {
 			return ""
 		}
+		if escaped(m) {
+			return m[1:] // $${{ X }} → ${{ X }}(다시 해석하지 않는다)
+		}
 		ref := refRe.FindStringSubmatch(m)[1]
 		target := key{scope: k.scope, name: ref}
 		if scope, name, ok := strings.Cut(ref, "."); ok {
@@ -129,14 +136,24 @@ func Resolve(s *Scope, service string) (*Result, error) {
 func References(value string) []string {
 	var out []string
 	for _, m := range refRe.FindAllStringSubmatch(value, -1) {
-		out = append(out, m[1])
+		if !escaped(m[0]) {
+			out = append(out, m[1])
+		}
 	}
 	return out
+}
+
+// Escape는 해석이 끝난 값을 다시 원문(raw)으로 쓸 때 그 안의 ${{ X }}가 참조로 해석되지 않게 $${{ X }}로 바꾼다.
+func Escape(value string) string {
+	return refRe.ReplaceAllStringFunc(value, func(m string) string { return "$" + m })
 }
 
 // RenameService는 값 안의 ${{ old.X }} 참조를 ${{ new.X }}로 바꾼다(템플릿 이름 충돌, 서비스 이름 변경).
 func RenameService(value, oldName, newName string) string {
 	return refRe.ReplaceAllStringFunc(value, func(m string) string {
+		if escaped(m) {
+			return m
+		}
 		ref := refRe.FindStringSubmatch(m)[1]
 		if scope, name, ok := strings.Cut(ref, "."); ok && scope == oldName {
 			return fmt.Sprintf("${{%s.%s}}", newName, name)

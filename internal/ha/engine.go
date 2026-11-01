@@ -320,11 +320,15 @@ type MemberState struct {
 }
 
 // PickPromotion은 승격할 replica를 고른다: 상태 확인이 성공한 replica 중 WAL 위치(offset)가 가장 앞선 것.
-// 같으면 목록 순서(ordinal)를 따른다. 후보가 없으면 false.
+// 같으면 목록 순서(ordinal)를 따른다. 후보가 없거나 FailoverBlocked가 막으면 false.
+// 위치를 모르는(0) replica는 고르지 않는다: 아직 복제를 시작하지 못한 빈 노드를 승격하면 데이터를 모두 잃는다.
 func PickPromotion(states []MemberState, primaryID string) (string, bool) {
+	if FailoverBlocked(states, primaryID) != "" {
+		return "", false
+	}
 	best := -1
 	for i, s := range states {
-		if s.ServiceID == primaryID || !s.OK || s.Probe.Role != "replica" {
+		if s.ServiceID == primaryID || !s.OK || s.Probe.Role != "replica" || s.Probe.Offset == 0 {
 			continue
 		}
 		if best < 0 || s.Probe.Offset > states[best].Probe.Offset {
@@ -335,6 +339,33 @@ func PickPromotion(states []MemberState, primaryID string) (string, bool) {
 		return "", false
 	}
 	return states[best].ServiceID, true
+}
+
+// FailoverBlocked는 기록한 주 노드가 응답하지 않아도 자동 승격하면 주 노드가 둘이 되는(split brain) 경우의 이유다
+// (막을 일이 없으면 ""):
+//   - 다른 구성원이 이미 주 노드라고 답한다: 하나 더 승격하지 않는다(기록을 맞추거나 사람이 고른다).
+//   - replica가 아직 주 노드에서 WAL을 받고 있다(streaming): 주 노드는 살아 있고 제어부에서만 닿지 않는다
+//     (노드 agent가 끊긴 경우 등). 이때 승격하면 이전 주 노드가 쓰기를 계속 받는다.
+func FailoverBlocked(states []MemberState, primaryID string) string {
+	for _, s := range states {
+		if s.ServiceID == primaryID || !s.OK {
+			continue
+		}
+		switch {
+		case s.Probe.Role == "primary":
+			return fmt.Sprintf("%s가 이미 주 노드로 답해서 자동 승격을 멈췄습니다(주 노드가 둘이 되지 않게)", memberLabel(s))
+		case s.Probe.Role == "replica" && s.Probe.Streaming:
+			return fmt.Sprintf("주 노드가 제어부에 응답하지 않지만 %s가 아직 주 노드에서 복제 중이라 자동 승격하지 않습니다(네트워크 분리 의심)", memberLabel(s))
+		}
+	}
+	return ""
+}
+
+func memberLabel(s MemberState) string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.ServiceID
 }
 
 // LagBytes는 주 노드 위치에서 replica 위치를 뺀 값이다(replica가 앞서거나 알 수 없으면 0).

@@ -16,11 +16,13 @@ import {
 } from "@/lib/api";
 import { useCanvas, useCaps } from "@/lib/queries";
 import { lock } from "../Perm";
-import { cronError, describeCron } from "@/lib/cron";
+import { cronError } from "@/lib/cron";
+import { CronHint } from "./settings/CronHint";
 import { fmtBytes, fmtRelative } from "@/lib/format";
 import { t, tr } from "@/lib/i18n";
 import { Button, CopyField, ErrorBox, IconButton, Input, LABEL_CLS, Notice, Select, Spinner, Toggle, cx, useConfirm } from "../ui";
 import { FIELD } from "./settings/primitives";
+import { TypeToConfirm } from "./settings/TypeToConfirm";
 
 /* ── 도메인 고급 설정 ─────────────────────────────────────────────────── */
 
@@ -302,34 +304,29 @@ export function DbBackups({ svc, env }: { svc: CanvasService; env: Environment }
     }
   };
 
-  const restore = (b: DbBackup, targetId: string) => {
-    const target = dbPeers.find((s) => s.id === targetId) ?? svc;
-    return confirm({
-      title: t("DB 복원"),
-      message: (
-        <>
-          {tr("{target}의 현재 데이터를 백업 {file}의 내용으로 {overwrite}.", {
-            target: <span className="font-mono text-foreground">{target.name}</span>,
-            file: <span className="font-mono text-foreground">{b.file_name}</span>,
-            overwrite: <b>{t("덮어씁니다")}</b>,
-          })}
-          {svc.database_kind === "redis" && ` ${t("복원하는 동안 Redis가 잠시 멈춥니다.")}`}
-        </>
-      ),
-      confirmLabel: t("복원"),
-      danger: true,
-      run: () =>
-        run("restore", async () => {
-          await api.restoreDbBackup(b.id, target.id === svc.id ? {} : { service_id: target.id });
-          setNotice(t("복원을 시작했습니다. 이벤트에서 완료 여부를 확인하세요."));
-          for (let i = 0; i < 600; i++) {
-            await new Promise((r) => setTimeout(r, 2000));
-            const s = await api.dbRestoreStatus(b.id);
-            if (s.status === "done") return setNotice(t("{name} 복원이 끝났습니다.", { name: target.name }));
-            if (s.status === "failed") throw new Error(s.error || t("복원에 실패했습니다."));
-          }
-        }),
-    });
+  const [restoring, setRestoring] = useState<{ b: DbBackup; target: CanvasService } | null>(null);
+  const restore = (b: DbBackup, targetId: string) => setRestoring({ b, target: dbPeers.find((s) => s.id === targetId) ?? svc });
+  // Start the restore, then follow it in the background: the confirmation closes right away instead of staying busy
+  // for the whole restore (up to 20 minutes).
+  const startRestore = async (b: DbBackup, target: CanvasService) => {
+    await api.restoreDbBackup(b.id, target.id === svc.id ? {} : { service_id: target.id });
+    setNotice(t("복원을 시작했습니다. 이벤트에서 완료 여부를 확인하세요."));
+    setBusy("restore");
+    void (async () => {
+      try {
+        for (let i = 0; i < 600; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const st = await api.dbRestoreStatus(b.id);
+          if (st.status === "done") return setNotice(t("{name} 복원이 끝났습니다.", { name: target.name }));
+          if (st.status === "failed") throw new Error(st.error || t("복원에 실패했습니다."));
+        }
+      } catch (e) {
+        setNotice(null);
+        setError(e);
+      } finally {
+        setBusy(null);
+      }
+    })();
   };
 
   return (
@@ -356,7 +353,7 @@ export function DbBackups({ svc, env }: { svc: CanvasService; env: Environment }
         <label className="min-w-[180px] flex-1">
           <span className={LABEL_CLS}>{t("정기 백업 (크론)")}</span>
           <span className="flex items-center gap-3">
-            <Toggle label={t("정기 백업")} checked={!!c?.enabled} onChange={(v) => run("cfg", () => api.setDbBackupConfig(svc.id, env.id, { enabled: v, cron: cronText, retention: Number(keepText) || 7, destination_id: destId }))} />
+            <Toggle label={t("정기 백업")} checked={!!c?.enabled} disabled={!c?.enabled && (!cronText.trim() || !!cronError(cronText))} onChange={(v) => run("cfg", () => api.setDbBackupConfig(svc.id, env.id, { enabled: v, cron: cronText, retention: Number(keepText) || 7, destination_id: destId }))} />
             <Input size="sm" mono className={FIELD} invalid={!!cronText.trim() && !!cronError(cronText)} value={cronText} onChange={(e) => setCron(e.target.value)} placeholder="0 3 * * *" aria-label={t("백업 cron")} />
           </span>
         </label>
@@ -371,7 +368,7 @@ export function DbBackups({ svc, env }: { svc: CanvasService; env: Environment }
         >
           {t("설정 저장")}
         </Button>
-        <div className="basis-full text-xs leading-[18px] text-gray-600">{!cronText.trim() ? "" : cronError(cronText) ? <span className="text-red-600">{cronError(cronText)}</span> : describeCron(cronText)}</div>
+        <CronHint expr={cronText} count={2} className="basis-full" />
       </div>
 
       {backups.isPending ? (
@@ -440,6 +437,26 @@ export function DbBackups({ svc, env }: { svc: CanvasService; env: Environment }
       )}
       {notice && <Notice onDismiss={() => setNotice(null)}>{notice}</Notice>}
       {error ? <ErrorBox error={error} /> : null}
+      {restoring && (
+        <TypeToConfirm
+          title={t("DB 복원")}
+          name={restoring.target.name}
+          confirmLabel={t("복원")}
+          inputLabel={t("복원할 서비스 이름")}
+          onClose={() => setRestoring(null)}
+          run={() => startRestore(restoring.b, restoring.target)}
+          message={
+            <>
+              {tr("{target}의 현재 데이터를 백업 {file}의 내용으로 {overwrite}.", {
+                target: <span className="font-mono text-foreground">{restoring.target.name}</span>,
+                file: <span className="font-mono text-foreground">{restoring.b.file_name}</span>,
+                overwrite: <b>{t("덮어씁니다")}</b>,
+              })}
+              {svc.database_kind === "redis" && ` ${t("복원하는 동안 Redis가 잠시 멈춥니다.")}`}
+            </>
+          }
+        />
+      )}
       {node}
     </div>
   );

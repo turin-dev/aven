@@ -570,3 +570,119 @@ func TestEmailChannelDelivery(t *testing.T) {
 		t.Error("email without SMTP should fail")
 	}
 }
+
+func TestBodyEscapesChatMarkup(t *testing.T) {
+	p := &Payload{Kind: "deploy.failed", Message: "<!channel> fix & retry <https://x|y> @everyone", Project: Ref{Name: "a<b>"}}
+	var slack map[string]string
+	if err := json.Unmarshal(Body(store.ChannelSlack, p), &slack); err != nil {
+		t.Fatal(err)
+	}
+	if want := "[a&lt;b&gt;] deploy.failed: &lt;!channel&gt; fix &amp; retry &lt;https://x|y&gt; @everyone"; slack["text"] != want {
+		t.Errorf("slack text = %q", slack["text"])
+	}
+	var discord struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Parse []string `json:"parse"`
+		} `json:"allowed_mentions"`
+	}
+	raw := Body(store.ChannelDiscord, p)
+	if err := json.Unmarshal(raw, &discord); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(discord.Content, "@everyone") || discord.AllowedMentions.Parse == nil || len(discord.AllowedMentions.Parse) != 0 {
+		t.Errorf("discord body = %s", raw)
+	}
+	if !strings.Contains(string(raw), `"allowed_mentions":{"parse":[]}`) {
+		t.Errorf("discord must send an empty parse list: %s", raw)
+	}
+	// 긴 메시지는 Discord 한도(2000자) 안으로 자른다
+	p.Message = strings.Repeat("가", 3000)
+	json.Unmarshal(Body(store.ChannelDiscord, p), &discord)
+	if n := len([]rune(discord.Content)); n > 2000 {
+		t.Errorf("discord content %d runes", n)
+	}
+	// webhook 본문은 Payload JSON 그대로(이스케이프 없음)
+	var hook Payload
+	json.Unmarshal(Body(store.ChannelWebhook, p), &hook)
+	if hook.Project.Name != "a<b>" {
+		t.Errorf("webhook project = %q", hook.Project.Name)
+	}
+}
+
+func TestPostErrorDoesNotLeakURL(t *testing.T) {
+	// 닫힌 포트로 보내 네트워크 오류를 만든다. 오류에 webhook 토큰(URL 경로)이 없어야 한다.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	res := PostJSON(context.Background(), (&Guard{AllowPrivate: true}).Client(time.Second), "http://"+addr+"/services/T0/B0/SECRETTOKEN", []byte(`{}`), nil, nil)
+	if res.Err == nil || strings.Contains(res.Err.Error(), "SECRETTOKEN") {
+		t.Fatalf("err = %v", res.Err)
+	}
+	res = PostJSON(context.Background(), http.DefaultClient, "http://bad host/SECRETTOKEN", nil, nil, nil)
+	if res.Err == nil || strings.Contains(res.Err.Error(), "SECRETTOKEN") {
+		t.Fatalf("parse err = %v", res.Err)
+	}
+}
+
+func TestPostDoesNotRetryClientErrorsOrFollowRedirects(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path == "/redirect" {
+			http.Redirect(w, r, "/elsewhere", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	c := (&Guard{AllowPrivate: true}).Client(time.Second)
+	bo := []time.Duration{time.Millisecond, time.Millisecond}
+	res := PostJSON(context.Background(), c, srv.URL+"/bad", []byte(`{}`), nil, bo)
+	if res.Err == nil || res.Attempts != 1 || res.StatusCode == nil || *res.StatusCode != 400 {
+		t.Errorf("400: %+v", res)
+	}
+	hits.Store(0)
+	res = PostJSON(context.Background(), c, srv.URL+"/redirect", []byte(`{}`), nil, bo)
+	if res.Err == nil || hits.Load() != 1 || *res.StatusCode != http.StatusFound {
+		t.Errorf("redirect followed: %+v hits=%d", res, hits.Load())
+	}
+}
+
+func TestPostTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer srv.Close()
+	defer close(release)
+	start := time.Now()
+	res := PostJSON(context.Background(), (&Guard{AllowPrivate: true}).Client(100*time.Millisecond), srv.URL, []byte(`{}`), nil, nil)
+	if res.Err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("timeout not enforced: %+v", res)
+	}
+}
+
+func TestPublicAddrSpecialRanges(t *testing.T) {
+	for s, want := range map[string]bool{
+		"::7f00:1": false, "::ffff:0:a00:1": false, "100.100.100.200": false, "192.0.0.192": false,
+		"fd00:ec2::254": false, "2001:db8::1": false, "2002:a00:1::": false, "8.8.8.8": true,
+	} {
+		if got := PublicAddr(netip.MustParseAddr(s)); got != want {
+			t.Errorf("PublicAddr(%s) = %v", s, got)
+		}
+	}
+}
+
+func TestValidURL(t *testing.T) {
+	for u, ok := range map[string]bool{
+		"https://hooks.slack.com/services/x": true, "http://example.com": true,
+		"ftp://example.com": false, "https://": false, "https://user:pw@example.com": false, "file:///etc/passwd": false,
+		"javascript:alert(1)": false, "": false,
+	} {
+		if ValidURL(u) != ok {
+			t.Errorf("ValidURL(%q) != %v", u, ok)
+		}
+	}
+}

@@ -123,15 +123,42 @@ func parseCA(crtPEM, keyPEM []byte) (*CA, error) {
 	return &CA{cert: cert, key: key, pool: pool, PEM: crtPEM}, nil
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+// writeAtomic은 같은 디렉터리의 임시 파일(처음부터 0600, 이름은 매번 새로)에 쓰고 fsync한 뒤 rename하고 디렉터리도 fsync한다.
+// 예전에는 고정된 path+".tmp"에 쓰고 fsync하지 않아, 동시에 쓰면 서로 덮었고 전원이 나가면 빈 파일이 남을 수 있었다
+// (agent credentials가 그렇게 사라지면 join token은 이미 소비되어 노드가 다시 붙지 못한다).
+func writeAtomic(path string, data []byte, mode os.FileMode) (err error) {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(tmp, mode); err != nil {
+	tmp := f.Name()
+	defer func() {
+		if err != nil {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
+	if err = f.Chmod(mode); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if d, derr := os.Open(dir); derr == nil {
+		d.Sync() // rename을 디스크에 남긴다(지원하지 않는 파일 시스템이면 무시)
+		d.Close()
+	}
+	return nil
 }
 
 // WriteFileAtomic는 agent 쪽에서도 쓰는 0600 원자적 쓰기다.

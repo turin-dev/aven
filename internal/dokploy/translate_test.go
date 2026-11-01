@@ -335,3 +335,69 @@ func TestPropagate(t *testing.T) {
 		t.Errorf("sample-mail depends on a blocked DB: %s %v", s.Status, s.Reasons)
 	}
 }
+
+// 부분 데이터: nil 서버, 빈 호스트 도메인, 알 수 없는 소스/DB 종류, 깨진 compose YAML도 패닉 없이 계획을 만든다.
+func TestTranslatePartialData(t *testing.T) {
+	s := &Snapshot{
+		Servers: []*Server{nil},
+		Projects: []*Project{{Name: "p", Environments: []*Environment{{Name: "production",
+			Applications: []*Application{
+				{ID: "a", Name: "web", AppName: "web-1", Status: "done", SourceType: "docker", DockerImage: "nginx",
+					Domains: []Domain{{Host: "  "}, {Host: "ok.example.com", HTTPS: true}}},
+				{ID: "b", Name: "odd", AppName: "odd-1", Status: "done", SourceType: "weird"},
+				{ID: "c", Name: "", AppName: ""},
+			},
+			Databases: []*Database{{Kind: "mongo", ID: "m", Name: "mongo", AppName: "mongo-1"}},
+			Composes: []*Compose{
+				{ID: "y", Name: "broken", AppName: "broken-1", SourceType: "raw", ComposeFile: "services: [", Domains: []Domain{{Host: ""}}},
+				{ID: "z", Name: "empty", AppName: "empty-1", SourceType: "raw"},
+			},
+		}}}},
+	}
+	plan := Translate(s, Options{})
+	web := find(plan, "p", "web")
+	if web == nil {
+		t.Fatal("web missing")
+	}
+	if len(web.Domains) != 1 || web.Domains[0] != "ok.example.com" {
+		t.Errorf("web domains = %v", web.Domains)
+	}
+	if !strings.Contains(strings.Join(web.Warnings, "\n"), "without a host") {
+		t.Errorf("web warnings = %v", web.Warnings)
+	}
+	var doms []iacDomain
+	json.Unmarshal(web.Service.Settings["domains"], &doms)
+	for _, d := range doms {
+		if d.Host == "" {
+			t.Errorf("empty host imported: %+v", doms)
+		}
+	}
+	if m := find(plan, "p", "mongo"); m == nil || m.Status != Blocked {
+		t.Errorf("mongo = %+v", m)
+	}
+	var broken *StackPlan
+	for _, st := range plan.Projects[0].Stacks {
+		if st.Name == "broken" {
+			broken = st
+		}
+	}
+	if broken == nil || broken.Status != Blocked {
+		t.Errorf("broken stack = %+v", broken)
+	}
+}
+
+func TestStackForPrefersLongestAppName(t *testing.T) {
+	tr := &translator{stacks: map[string]*target{"mail": {name: "mail"}, "mail-stack": {name: "mail-stack"}}}
+	for i := 0; i < 20; i++ { // map 순서가 바뀌어도 같은 답
+		r := tr.stackFor("mail-stack-front-1")
+		if r == nil || r.tg.name != "mail-stack" || r.alias != "front" {
+			t.Fatalf("stackFor = %+v", r)
+		}
+	}
+	if r := tr.stackFor("mail-imap-1"); r == nil || r.tg.name != "mail" || r.alias != "imap" {
+		t.Errorf("stackFor(mail-imap-1) = %+v", r)
+	}
+	if r := tr.stackFor("other-1"); r != nil {
+		t.Errorf("unexpected %+v", r)
+	}
+}

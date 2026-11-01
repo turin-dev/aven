@@ -77,7 +77,7 @@ func TestBuildRoutesEdgeHostsThroughEngine(t *testing.T) {
 	main := cfg.Apps.HTTP.Servers["aven"]
 	mb, _ := json.Marshal(main.Routes)
 	ms := string(mb)
-	for _, want := range []string{`"dial":"unix//run/aven/edge.sock"`, `"X-Aven-Client-Ip":["{http.request.remote.host}"]`, `"X-Aven-Client-Proto":["{http.request.header.X-Forwarded-Proto}"]`, `"authentication"`, `"dial":"keel-plain-1:80"`, `"dial":"keel-off-1:80"`} {
+	for _, want := range []string{`"dial":"unix//run/aven/edge.sock"`, `"X-Aven-Client-Ip":["{http.request.client_ip}"]`, `"X-Aven-Client-Proto":["{http.request.header.X-Forwarded-Proto}"]`, `"authentication"`, `"dial":"keel-plain-1:80"`, `"dial":"keel-off-1:80"`} {
 		if !strings.Contains(ms, want) {
 			t.Errorf("main missing %s", want)
 		}

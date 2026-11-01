@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/turin-dev/aven/internal/store"
@@ -59,14 +60,21 @@ func Body(kind string, p *Payload) []byte {
 	var v any
 	switch kind {
 	case store.ChannelSlack:
-		v = map[string]string{"text": p.Text()}
+		v = map[string]string{"text": slackEscape(p.Text())}
 	case store.ChannelDiscord:
-		v = map[string]string{"content": truncate(p.Text(), 1900)}
+		// allowed_mentions를 비워 메시지 안의 @everyone, <@id> 같은 글이 실제 멘션이 되지 않게 한다.
+		v = map[string]any{"content": truncate(p.Text(), 1900), "allowed_mentions": map[string][]string{"parse": {}}}
 	default:
 		v = p
 	}
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// slackEscape는 Slack mrkdwn의 제어 문자(&, <, >)를 바꾼다. 커밋 메시지 같은 글의 <!channel>이나 <url|text>가
+// 멘션·링크로 해석되지 않게 한다(https://api.slack.com/reference/surfaces/formatting#escaping).
+func slackEscape(s string) string {
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 func truncate(s string, n int) string {
@@ -128,10 +136,20 @@ func PostJSON(ctx context.Context, client *http.Client, rawURL string, body []by
 	return res
 }
 
+// redactURL은 *url.Error에서 URL을 뺀다. Slack·Discord webhook URL은 경로에 토큰이 있어서
+// 전달 기록과 로그에 남기면 안 된다.
+func redactURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
+}
+
 func postOnce(ctx context.Context, client *http.Client, rawURL string, body []byte, headers map[string]string) (int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, redactURL(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "keel-notify/1")
@@ -143,7 +161,7 @@ func postOnce(ctx context.Context, client *http.Client, rawURL string, body []by
 		if errors.Is(err, ErrBlockedAddress) {
 			return 0, ErrBlockedAddress // 다시 해도 같다
 		}
-		return 0, errRetry{err}
+		return 0, errRetry{redactURL(err)}
 	}
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	resp.Body.Close()

@@ -219,7 +219,9 @@ func Translate(s *Snapshot, o Options) *Plan {
 	t := &translator{s: s, o: o, servers: map[string]*Server{}, plan: &Plan{DokployVersion: s.Version},
 		byKey: map[string]*ProjectPlan{}, apps: map[string]*target{}, addrs: map[string]*target{}, stacks: map[string]*target{}}
 	for _, sv := range s.Servers {
-		t.servers[sv.ID] = sv
+		if sv != nil {
+			t.servers[sv.ID] = sv
+		}
 	}
 	skip := map[string]bool{}
 	for k, v := range o.Skip {
@@ -790,6 +792,10 @@ func (t *translator) application(pp *ProjectPlan, sp *ServicePlan, a *Applicatio
 		if d.Enabled != nil && !*d.Enabled {
 			continue
 		}
+		if strings.TrimSpace(d.Host) == "" {
+			warn("a Dokploy domain row without a host was ignored")
+			continue
+		}
 		sp.pending = append(sp.pending, domainEntry{svc: sp.Name, d: d})
 	}
 	return reg
@@ -1021,7 +1027,13 @@ type stackRef struct {
 
 // stackFor는 Dokploy compose 컨테이너 이름(<appName>-<service>-<n>)을 compose 서비스 별칭으로 바꾼다.
 func (t *translator) stackFor(host string) *stackRef {
+	// appName이 다른 appName의 접두사일 수 있으므로(mail, mail-stack) 가장 긴 것을 고른다. map 순서에 기대지 않는다.
+	var best *stackRef
+	bestLen := 0
 	for app, tg := range t.stacks {
+		if app == "" || len(app) <= bestLen {
+			continue
+		}
 		for _, sep := range []string{"-", "_"} {
 			p := app + sep
 			if !strings.HasPrefix(host, p) {
@@ -1034,11 +1046,12 @@ func (t *translator) stackFor(host string) *stackRef {
 				}
 			}
 			if rest != "" {
-				return &stackRef{tg: tg, alias: rest}
+				best, bestLen = &stackRef{tg: tg, alias: rest}, len(app)
 			}
+			break
 		}
 	}
-	return nil
+	return best
 }
 
 // ---- compose ----
@@ -1145,6 +1158,10 @@ func (t *translator) compose(pp *ProjectPlan, p *Project, c *Compose, skipped bo
 	{
 		for _, d := range c.Domains {
 			if d.Enabled != nil && !*d.Enabled {
+				continue
+			}
+			if strings.TrimSpace(d.Host) == "" {
+				st.Warnings = append(st.Warnings, "a Dokploy domain row without a host was ignored")
 				continue
 			}
 			t.pendingStack = append(t.pendingStack, stackDomain{pp: pp, st: st, d: d})

@@ -4,7 +4,7 @@ import { toast } from "@/lib/uiState";
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, KeyRound, Monitor, Plug, ShieldCheck, User as UserIcon } from "lucide-react";
+import { Bell, Download, KeyRound, Monitor, Plug, ShieldCheck, User as UserIcon } from "lucide-react";
 import { api, type ProjectRole, type TokenScope } from "@/lib/api";
 import { qk, useMe, useProject, useProjects } from "@/lib/queries";
 import { useCtxHref } from "@/lib/nav";
@@ -17,6 +17,7 @@ import { AuthorizedAppsSection } from "@/components/OAuthSettings";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageSelect } from "@/components/LanguageSelect";
 import { GitHubConnectionCard } from "@/components/GitHubConnection";
+import { PasswordInput, PasswordStrengthMeter } from "@/components/AuthKit";
 import { Button, Card, CenterSpinner, CopyField, EmptyState, RowList, ErrorBox, Field, Input, LABEL_CLS, Notice, PageShell, Select, SideNavLayout, Textarea, cx, useConfirm } from "@/components/ui";
 
 type SectionId = "profile" | "security" | "notifications" | "sessions" | "tokens" | "integrations" | "authorized-apps";
@@ -90,27 +91,30 @@ function Profile() {
         <Card title={t("언어")} description={t("화면에 쓸 언어입니다. 이 브라우저에만 저장됩니다.")}>
           <LanguageSelect className="w-48" />
         </Card>
-        <PasswordForm builtin={me.builtin} />
+        <PasswordForm builtin={me.builtin} personal={[me.name, me.email]} />
     </div>
   );
 }
 
-function PasswordForm({ builtin }: { builtin: boolean }) {
+function PasswordForm({ builtin, personal }: { builtin: boolean; personal: string[] }) {
   const [cur, setCur] = useState("");
   const [next, setNext] = useState("");
   const [again, setAgain] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [done, setDone] = useState(false);
   if (builtin)
     return (
       <Card title={t("비밀번호")} description={t("기본 admin 계정의 비밀번호는 서버의 AVEN_ADMIN_PASSWORD 환경변수입니다. 바꾸면 이 계정의 세션이 모두 끊깁니다.")} />
     );
+  const mismatch = again.length > 0 && next !== again;
+  const same = !!next && next === cur;
   return (
     <form
+      method="post"
       onSubmit={async (e) => {
         e.preventDefault();
         if (next !== again) return setError(t("새 비밀번호 확인이 일치하지 않습니다."));
+        if (new TextEncoder().encode(next).length > 256) return setError(t("비밀번호가 너무 깁니다."));
         setBusy(true);
         setError(null);
         try {
@@ -118,7 +122,6 @@ function PasswordForm({ builtin }: { builtin: boolean }) {
           setCur("");
           setNext("");
           setAgain("");
-          setDone(true);
           toast(t("비밀번호를 바꿨습니다."));
         } catch (err) {
           setError(err);
@@ -131,20 +134,23 @@ function PasswordForm({ builtin }: { builtin: boolean }) {
         title={t("비밀번호 변경")}
         description={t("바꾸면 이 브라우저를 뺀 모든 세션이 끊깁니다.")}
         footer={
-          <Button type="submit" variant="primary" loading={busy} disabled={!cur || !next}>
+          <Button type="submit" variant="primary" loading={busy} disabled={!cur || !next || !again || mismatch || same}>
             {t("비밀번호 변경")}
           </Button>
         }
       >
         <div className="space-y-4">
+          {/* Lets password managers attach the new password to the right account. */}
+          <input type="text" name="username" autoComplete="username" value={personal[1] ?? ""} readOnly hidden />
           <Field label={t("현재 비밀번호")}>
-            <Input type="password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} />
+            <PasswordInput name="current-password" autoComplete="current-password" value={cur} onChange={(e) => setCur(e.target.value)} />
           </Field>
-          <Field label={t("새 비밀번호")}>
-            <Input type="password" autoComplete="new-password" value={next} onChange={(e) => (setNext(e.target.value), setDone(false))} />
+          <Field label={t("새 비밀번호")} hint={same ? <span className="text-warn">{t("현재 비밀번호와 같습니다.")}</span> : undefined}>
+            <PasswordInput name="new-password" autoComplete="new-password" maxLength={256} value={next} onChange={(e) => setNext(e.target.value)} aria-describedby="account-password-strength" />
+            <PasswordStrengthMeter id="account-password-strength" password={next} personal={personal} />
           </Field>
-          <Field label={t("새 비밀번호 확인")}>
-            <Input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
+          <Field label={t("새 비밀번호 확인")} hint={mismatch ? <span className="text-danger">{t("새 비밀번호 확인이 일치하지 않습니다.")}</span> : undefined}>
+            <PasswordInput name="confirm-password" autoComplete="new-password" maxLength={256} value={again} onChange={(e) => setAgain(e.target.value)} invalid={mismatch} aria-invalid={mismatch || undefined} />
           </Field>
           <ErrorBox error={error} />
         </div>
@@ -155,16 +161,33 @@ function PasswordForm({ builtin }: { builtin: boolean }) {
 
 /* ── 2FA ─────────────────────────────────────────────────────────────── */
 
-function RecoveryCodes({ codes }: { codes: string[] }) {
+function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+  const download = () => {
+    const text = `${t("Aven 복구 코드")} (${window.location.host})\n${new Date().toISOString().slice(0, 10)}\n\n${codes.join("\n")}\n`;
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "aven-recovery-codes.txt";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <p className="text-sm text-gray-600">{t("복구 코드는 지금 한 번만 보여 줍니다. 인증 앱이나 패스키를 잃어버렸을 때 코드 하나로 한 번 로그인할 수 있습니다.")}</p>
-      <div className="grid max-w-[360px] grid-cols-2 gap-1.5 rounded-md border border-gray-200 bg-gray-100 p-3 font-mono text-sm">
+      <ul aria-label={t("복구 코드")} className="grid max-w-[360px] grid-cols-2 gap-1.5 rounded-md border border-gray-200 bg-gray-100 p-3 font-mono text-sm">
         {codes.map((c) => (
-          <span key={c}>{c}</span>
+          <li key={c}>{c}</li>
         ))}
-      </div>
+      </ul>
       <CopyField value={codes.join("\n")} label={t("모두 복사")} className="max-w-[360px]" />
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={download}>
+          <Download aria-hidden /> {t("텍스트 파일로 저장")}
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          {t("안전한 곳에 저장했습니다")}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -189,7 +212,7 @@ function Security() {
       setBusy(false);
     }
   };
-  const totpCode = code.trim();
+  const totpCode = code.replace(/\s/g, "");
   return (
     <div className={STACK}>
       <H2 sub={t("로그인할 때 비밀번호와 함께 인증 앱(TOTP)의 6자리 코드나 패스키로 한 번 더 확인합니다.")}>{t("2단계 인증")}</H2>
@@ -200,7 +223,7 @@ function Security() {
         )}
         {codes && (
           <Card title={t("복구 코드")}>
-            <RecoveryCodes codes={codes} />
+            <RecoveryCodes codes={codes} onDone={() => setCodes(null)} />
           </Card>
         )}
         <PasskeysSettings onRecoveryCodes={setCodes} />
@@ -236,23 +259,28 @@ function Security() {
                   <CopyField value={setup.otpauth_url} secret />
                 </Field>
                 <Field label={t("인증 코드")}>
-                  <Input inputMode="numeric" autoComplete="one-time-code" value={code} onChange={(e) => setCode(e.target.value)} className="max-w-[200px] font-mono" />
+                  <Input inputMode="numeric" autoComplete="one-time-code" maxLength={8} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" className="max-w-[200px] font-mono tracking-[0.2em]" />
                 </Field>
-                <Button type="submit" variant="primary" loading={busy} disabled={totpCode.length !== 6}>
-                  {t("켜기")}
-                </Button>
+                <div className="flex gap-2">
+                  <Button type="submit" variant="primary" loading={busy} disabled={!/^\d{6}$/.test(totpCode)}>
+                    {t("켜기")}
+                  </Button>
+                  <Button variant="ghost" disabled={busy} onClick={() => (setSetup(null), setCode(""), setError(null))}>
+                    {t("취소")}
+                  </Button>
+                </div>
               </form>
             )}
             {me.totp_enabled && (
               <>
                 <Field label={t("인증 코드 또는 현재 비밀번호")} hint={t("복구 코드를 다시 만들려면 인증 앱 코드가 필요합니다. 끄려면 코드, 복구 코드 또는 현재 비밀번호를 입력하세요.")}>
                   <div className="flex max-w-[420px] gap-2">
-                    <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" className="font-mono" aria-label={t("인증 코드")} />
+                    <Input inputMode="numeric" autoComplete="one-time-code" maxLength={32} value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" className="font-mono" aria-label={t("인증 코드")} />
                     <Input type="password" autoComplete="current-password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder={t("현재 비밀번호")} aria-label={t("현재 비밀번호")} />
                   </div>
                 </Field>
                 <div className="flex gap-2">
-                  <Button loading={busy} disabled={totpCode.length !== 6} onClick={() => run(async () => setCodes((await api.totpRecoveryCodes({ code: totpCode })).recovery_codes))}>
+                  <Button loading={busy} disabled={!/^\d{6}$/.test(totpCode)} onClick={() => run(async () => setCodes((await api.totpRecoveryCodes({ code: totpCode })).recovery_codes))}>
                     {t("복구 코드 다시 만들기")}
                   </Button>
                   <Button
@@ -302,46 +330,91 @@ function Security() {
 
 /* ── sessions ────────────────────────────────────────────────────────── */
 
+/** Short, readable client name from a User-Agent ("Chrome · macOS", "aven CLI"). Falls back to the raw string. */
+function describeClient(ua: string): { label: string; cli: boolean } {
+  if (!ua) return { label: t("알 수 없는 클라이언트"), cli: false };
+  if (/^(aven|keel)(-cli)?\//i.test(ua)) return { label: "Aven CLI", cli: true };
+  if (/^(Go-http-client|curl|python-requests|node-fetch|undici|axios)/i.test(ua)) return { label: ua.split(" ")[0], cli: true };
+  const browser = /Edg\//.test(ua) ? "Edge" : /OPR\/|Opera/.test(ua) ? "Opera" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "";
+  const os = /iPhone|iPad|iPod/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /CrOS/.test(ua) ? "ChromeOS" : /Linux/.test(ua) ? "Linux" : "";
+  return { label: browser || os ? [browser, os].filter(Boolean).join(" · ") : ua, cli: false };
+}
+
 function Sessions() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: qk.sessions, queryFn: api.sessions });
   const [error, setError] = useState<unknown>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const { confirm, node } = useConfirm();
+  const list = [...(q.data ?? [])].sort((a, b) => Number(b.current) - Number(a.current) || b.last_seen.localeCompare(a.last_seen));
+  const others = list.filter((s) => !s.current);
+  const revoke = async (ids: string[], key: string) => {
+    setPending(key);
+    setError(null);
+    try {
+      // Sequential on purpose: one failure should not hide which sessions are already gone.
+      for (const id of ids) await api.deleteSession(id);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setPending(null);
+      await qc.invalidateQueries({ queryKey: qk.sessions });
+    }
+  };
   return (
     <Card
       title={t("세션")}
       description={t("로그인한 브라우저와 CLI입니다. 30일 동안 쓰지 않으면 만료됩니다.")}
-      action={q.data && <span className="text-sm tabular-nums text-gray-500">{t("{count}개", { count: q.data.length })}</span>}
+      action={
+        others.length > 0 && (
+          <Button
+            size="sm"
+            variant="danger-outline"
+            loading={pending === "all"}
+            disabled={!!pending}
+            onClick={() =>
+              confirm({
+                title: t("다른 세션 모두 끊기"),
+                message: t("이 브라우저를 뺀 {count}개 세션이 로그아웃됩니다.", { count: others.length }),
+                confirmLabel: t("모두 끊기"),
+                danger: true,
+                run: () => revoke(others.map((s) => s.id), "all"),
+              })
+            }
+          >
+            {t("다른 세션 모두 끊기")}
+          </Button>
+        )
+      }
     >
+      {node}
       <ErrorBox error={q.error ?? error} className="mb-3" />
       {q.isPending ? (
         <CenterSpinner />
       ) : (
         <RowList>
-          {(q.data ?? []).map((s) => (
-            <li key={s.id} className="flex items-center gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm">{s.user_agent || t("알 수 없는 클라이언트")}</div>
-                <div className="text-xs tabular-nums text-gray-500">
-                  <span className="font-mono">{s.ip || "-"}</span> · {t("마지막 사용 {time}", { time: fmtRelative(s.last_seen) })}{s.current && ` · ${t("지금 이 세션")}`}
+          {list.map((s) => {
+            const client = describeClient(s.user_agent);
+            return (
+              <li key={s.id} className="flex items-center gap-3 px-4 py-3">
+                <Monitor className="size-4 shrink-0 text-gray-500" aria-hidden />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="truncate" title={s.user_agent || undefined}>{client.label}</span>
+                    {s.current && <span className="shrink-0 rounded bg-success-surface px-1.5 py-px text-xs text-success">{t("지금 이 세션")}</span>}
+                  </div>
+                  <div className="text-xs tabular-nums text-gray-500">
+                    <span className="font-mono">{s.ip || "-"}</span> · {t("마지막 사용 {time}", { time: fmtRelative(s.last_seen) })}
+                  </div>
                 </div>
-              </div>
-              {!s.current && (
-                <Button
-                  size="sm"
-                  onClick={async () => {
-                    try {
-                      await api.deleteSession(s.id);
-                      await qc.invalidateQueries({ queryKey: qk.sessions });
-                    } catch (err) {
-                      setError(err);
-                    }
-                  }}
-                >
-                  {t("끊기")}
-                </Button>
-              )}
-            </li>
-          ))}
+                {!s.current && (
+                  <Button size="sm" loading={pending === s.id} disabled={!!pending} onClick={() => revoke([s.id], s.id)} aria-label={t("{name} 세션 끊기", { name: client.label })}>
+                    {t("끊기")}
+                  </Button>
+                )}
+              </li>
+            );
+          })}
         </RowList>
       )}
     </Card>
@@ -362,7 +435,8 @@ function Tokens() {
   const [eid, setEid] = useState("");
   const [role, setRole] = useState<ProjectRole>("member");
   const [days, setDays] = useState("");
-  const [created, setCreated] = useState<string | null>(null);
+  // The secret is only kept in memory and only for as long as this section is open.
+  const [created, setCreated] = useState<{ name: string; token: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { confirm, node } = useConfirm();
@@ -384,6 +458,7 @@ function Tokens() {
   }, [role, allowAdmin, allowMember]);
   const pname = (id: string | null) => projects.data?.find((p) => p.id === id)?.name ?? id ?? "";
   const usingToken = me.auth === "token";
+  const daysValid = days === "" || (/^\d+$/.test(days) && Number(days) >= 1 && Number(days) <= 3650);
   return (
     <div className={STACK}>
       {node}
@@ -391,10 +466,22 @@ function Tokens() {
         {t("API 토큰")}
       </H2>
       {created && (
-        <div className="space-y-2">
-          <Notice onDismiss={() => setCreated(null)}>{t("토큰을 만들었습니다. 지금 한 번만 보여 줍니다.")}</Notice>
-          <CopyField value={created} />
-        </div>
+        <Card
+          title={t("새 토큰: {name}", { name: created.name })}
+          description={t("토큰을 만들었습니다. 지금 한 번만 보여 줍니다.")}
+          footer={
+            <Button variant="primary" onClick={() => setCreated(null)}>
+              {t("복사했습니다")}
+            </Button>
+          }
+        >
+          <div className="space-y-3">
+            <CopyField value={created.token} secret label={t("토큰")} />
+            <p className="text-xs text-gray-600">
+              {t("이 창을 닫으면 다시 볼 수 없습니다. CI 비밀 변수나 비밀번호 관리자에 바로 넣고, 코드나 채팅에는 붙여 넣지 마세요.")}
+            </p>
+          </div>
+        </Card>
       )}
       {usingToken ? (
         <p className="text-sm text-gray-600">{t("API 토큰으로 로그인한 상태에서는 토큰을 만들 수 없습니다.")}</p>
@@ -413,7 +500,7 @@ function Tokens() {
                 environment_id: scope === "environment" ? eid : undefined,
                 expires_in_days: days ? Number(days) : null,
               });
-              setCreated(tok.token);
+              setCreated({ name: name.trim(), token: tok.token });
               setName("");
               await qc.invalidateQueries({ queryKey: qk.tokens });
             } catch (err) {
@@ -426,14 +513,14 @@ function Tokens() {
           <Card
             title={t("새 토큰")}
             footer={
-              <Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || !targetRole || ((scope === "project" || scope === "environment") && !pid) || (scope === "environment" && !eid) || (scope === "workspace" && !selectedWorkspace)}>
+              <Button type="submit" variant="primary" loading={busy} disabled={!name.trim() || !daysValid || !targetRole || ((scope === "project" || scope === "environment") && !pid) || (scope === "environment" && !eid) || (scope === "workspace" && !selectedWorkspace)}>
                 {t("토큰 만들기")}
               </Button>
             }
           >
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label={t("이름")}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="github-actions" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="github-actions" maxLength={100} autoComplete="off" />
           </Field>
           <Field label={t("범위")}>
             <Select aria-label={t("토큰 범위")} value={scope} onChange={(e) => setScope(e.target.value as TokenScope)}>
@@ -479,8 +566,8 @@ function Tokens() {
               <option value="viewer">Viewer</option>
             </Select>
           </Field>
-          <Field label={t("만료(일)")} hint={t("비우면 만료되지 않습니다.")}>
-            <Input type="number" min={1} max={3650} value={days} onChange={(e) => setDays(e.target.value)} placeholder="90" />
+          <Field label={t("만료(일)")} hint={daysValid ? t("비우면 만료되지 않습니다.") : <span className="text-danger">{t("1에서 3650 사이의 일 수를 입력하세요.")}</span>}>
+            <Input type="number" inputMode="numeric" min={1} max={3650} step={1} invalid={!daysValid} value={days} onChange={(e) => setDays(e.target.value)} placeholder="90" />
           </Field>
           <div className="sm:col-span-2">
             <ErrorBox error={error} />
@@ -640,9 +727,9 @@ function AccountInner() {
     if (raw === "oauth-apps") router.replace("/admin/?section=oauth-apps");
   }, [raw, router]);
   useEffect(() => {
-    document.title = `${t("계정")} · aven`;
+    document.title = `${t("계정")} · Aven`;
     return () => {
-      document.title = "aven";
+      document.title = "Aven";
     };
   }, []);
   return (

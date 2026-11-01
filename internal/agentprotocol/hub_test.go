@@ -259,3 +259,90 @@ func TestAgentRequestsAreRoutedToOnRequestAndRepliedTo(t *testing.T) {
 	// OnRequest가 없으면 Up 메시지는 조용히 버려진다.
 	(&Hub{}).Deliver("nod_a", Message{ID: "x", Up: true})
 }
+
+// 노드 하나가 agent 요청을 쏟아내도 동시에 처리하는 수는 MaxUpRequests를 넘지 않고, 넘친 요청은 바로 "busy"로 답을 받는다.
+func TestAgentRequestsAreBoundedPerConnection(t *testing.T) {
+	h := &Hub{}
+	release := make(chan struct{})
+	var mu sync.Mutex
+	running, peak := 0, 0
+	h.OnRequest = func(nodeID string, m Message) {
+		mu.Lock()
+		running++
+		peak = max(peak, running)
+		mu.Unlock()
+		<-release
+		mu.Lock()
+		running--
+		mu.Unlock()
+	}
+	p := connectPair(t, h, "nod_a")
+	const extra = 5
+	for i := 0; i < MaxUpRequests+extra; i++ {
+		writeMsg(t, p.agent, Message{ID: "req" + strings.Repeat("x", i+1), Operation: OpWake, Up: true})
+	}
+	busy := 0
+	for busy < extra {
+		m := readMsg(t, p.agent)
+		if !m.Reply || m.Error != "server is busy" {
+			t.Fatalf("unexpected message: %+v", m)
+		}
+		busy++
+	}
+	close(release)
+	mu.Lock()
+	defer mu.Unlock()
+	if peak > MaxUpRequests {
+		t.Fatalf("peak concurrent agent requests = %d, want <= %d", peak, MaxUpRequests)
+	}
+}
+
+// 응답 id가 비었거나 너무 길면 버린다(오래 기다리는 Call과 섞이지 않는다).
+func TestDeliverIgnoresInvalidIDs(t *testing.T) {
+	h := &Hub{}
+	called := make(chan struct{}, 2)
+	h.OnRequest = func(string, Message) { called <- struct{}{} }
+	connectPair(t, h, "nod_a")
+	h.Deliver("nod_a", Message{Up: true, Operation: OpWake})
+	h.Deliver("nod_a", Message{ID: strings.Repeat("a", MaxIDBytes+1), Up: true, Operation: OpWake})
+	select {
+	case <-called:
+		t.Fatal("OnRequest called for a message with an invalid id")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 상대가 읽지 않아 막힌 쓰기가 있어도 다른 쓰기는 자기 ctx deadline에 돌아온다.
+func TestPeerWriteHonorsContextWhileAnotherWriteIsBlocked(t *testing.T) {
+	h := &Hub{}
+	p := connectPair(t, h, "nod_a") // agent 쪽은 읽지 않는다
+	peer := p.sess.c.peer
+	big := json.RawMessage(`"` + strings.Repeat("a", 1<<20) + `"`)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if peer.Write(ctx, Message{ID: "fill", Operation: OpPing, Payload: big}) != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(500 * time.Millisecond) // 소켓 버퍼가 차서 쓰기가 막힐 때까지
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := peer.Write(ctx, Message{ID: "x", Operation: OpPing})
+	if err == nil {
+		t.Skip("socket buffers did not fill up; cannot observe a blocked write")
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("write waited %v behind a blocked write, want about its own 200ms deadline", d)
+	}
+}

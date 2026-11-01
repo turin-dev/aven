@@ -1,6 +1,7 @@
 package featureflags
 
 import (
+	"encoding/json"
 	"math"
 	"strconv"
 	"testing"
@@ -103,4 +104,109 @@ func stringsRepeat(s string, n int) string {
 		b[i] = s[0]
 	}
 	return string(b)
+}
+
+func TestJSNumberMatchesJavaScriptString(t *testing.T) {
+	// 오른쪽은 node -e 'console.log(String(x))'의 결과다.
+	for n, want := range map[float64]string{
+		0: "0", math.Copysign(0, -1): "0", 1: "1", -42: "-42", 1.5: "1.5", 0.1: "0.1",
+		1234567: "1234567", 123456789012: "123456789012", 1e20: "100000000000000000000", 1e21: "1e+21",
+		1.5e300: "1.5e+300", 0.000001: "0.000001", 1e-7: "1e-7", 1.5e-7: "1.5e-7", -2.5e-10: "-2.5e-10",
+		9007199254740993: "9007199254740992",
+	} {
+		if got := jsNumber(n); got != want {
+			t.Errorf("jsNumber(%v) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestBucketNumericKeyMatchesStringKey(t *testing.T) {
+	// SDK는 숫자 속성을 String(value)로 해시한다. 서버도 1234567을 "1234567"로 해시해야 같은 bucket이다.
+	for _, n := range []float64{7, 1234567, 98765432101} {
+		s := jsNumber(n)
+		want := StableBucket("f", s)
+		for _, expr := range []string{"bucket(id) < " + formatFloat(want+1e-12), "bucket(id) >= " + formatFloat(want)} {
+			got, err := Evaluate(expr, "f", map[string]any{"id": n})
+			if err != nil || !got {
+				t.Errorf("%v: %s = %v %v", n, expr, got, err)
+			}
+		}
+	}
+}
+
+func TestEvaluateEdgeCases(t *testing.T) {
+	ctx := map[string]any{
+		"plan": "pro", "age": float64(30), "tags": []any{"a", "b"}, "one": []any{"a b"}, "beta": true,
+		"nested": map[string]any{"x": float64(1)}, "nul": nil, "pattern": "([", "n": json.Number("5"),
+	}
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{
+		{`tags == ["a", "b"]`, true},
+		{`tags == ["a b"]`, false}, // 예전 fmt 비교는 [a b]로 같게 보았다
+		{`one == ["a", "b"]`, false},
+		{`tags != ["a"]`, true},
+		{`age == 30`, true},
+		{`age == "30"`, false},
+		{`n == 5`, true},
+		{`n > 4.5`, true},
+		{`beta == true`, true},
+		{`beta == "true"`, false},
+		{`nul == null`, false}, // null 속성은 없는 것과 같다
+		{`!(nul == null)`, false},
+		{`plan in ["free", "pro"]`, true},
+		{`plan in []`, false},
+		{`plan in [missing, "pro"]`, false},
+		{`tags contains "b"`, true},
+		{`age contains "3"`, false},
+		{`age contains "3" || plan == "pro"`, true}, // 타입이 안 맞는 contains는 false일 뿐 규칙 전체를 깨지 않는다
+		{`age matches "3"`, false},
+		{`plan matches pattern || beta`, true}, // 속성에서 온 잘못된 정규식
+		{`plan < "zzz" && plan >= "pro"`, true},
+		{`age < "x"`, false},
+		{`missing == 1 || plan == "pro"`, true},
+		{`missing == 1 && plan == "pro"`, false},
+		{`!missing`, false},
+		{`!!beta`, true},
+		{`beta && (age >= 18 && age <= 65)`, true},
+		{`-1 < age && .5 < 1 && 1e2 == 100`, true},
+		{`"a\"b" == "a\"b"`, true},
+		{`targetingKey == "x"`, false},
+	} {
+		got, err := Evaluate(tc.expr, "flag", ctx)
+		if err != nil || got != tc.want {
+			t.Errorf("Evaluate(%q) = %v, %v; want %v", tc.expr, got, err, tc.want)
+		}
+	}
+	// 잘못된 식은 오류다
+	for _, expr := range []string{`"open`, `"bad\x"`, `a == `, `(a == 1`, `a == 1 == 2`, `bucket(1) < 1`, `a $ b`, `1-2 == 1`, `[1, 2`} {
+		if _, err := Evaluate(expr, "flag", ctx); err == nil {
+			t.Errorf("Evaluate(%q) succeeded", expr)
+		}
+	}
+}
+
+func TestValidateMore(t *testing.T) {
+	for _, expr := range []string{`a in "x"`, `a matches "("`, `a matches 1`, `plan`, `1`, `"x"`, `a && 1`} {
+		if err := Validate(expr); err == nil {
+			t.Errorf("Validate(%q) succeeded", expr)
+		}
+	}
+	for _, expr := range []string{`a matches b`, `a in []`, `true`, `(a == 1) && !(b != 2)`} {
+		if err := Validate(expr); err != nil {
+			t.Errorf("Validate(%q): %v", expr, err)
+		}
+	}
+}
+
+// FuzzEvaluate는 아무 식에도 패닉하지 않는지 본다.
+func FuzzEvaluate(f *testing.F) {
+	for _, s := range []string{`a == 1`, `bucket(k) < 0.5`, `!(a in [1, "x"])`, `a matches "^x"`, `((((`, `"\u00e9"`} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		_ = Validate(s)
+		_, _ = Evaluate(s, "f", map[string]any{"a": float64(1), "k": "u", "l": []any{"x"}})
+	})
 }

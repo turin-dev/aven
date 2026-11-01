@@ -10,10 +10,40 @@ import { Bell, Mail, Pencil, Plus, Send, Trash2, Webhook } from "lucide-react";
 import { api, type ChannelKind, type ID, type NotificationChannel, type NotificationChannelInput, type Project, type UsageAlert } from "@/lib/api";
 import { qk, useChannels, useSystem } from "@/lib/queries";
 import { fmtRelative, fmtTime } from "@/lib/format";
-import { Button, Card, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, RowList, Select, Spinner, Textarea, Toggle, cx, useConfirm } from "./ui";
+import { useUnsavedGuard } from "./SettingsGuard";
+import { Button, Card, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, RowList, Select, Spinner, Textarea, Toggle, cx, errorMessage, useConfirm } from "./ui";
 
 const KIND_LABEL: Record<ChannelKind, string> = { webhook: "Webhook", slack: "Slack", discord: "Discord", email: t("이메일") };
 const DEFAULT_EVENTS = ["deploy.failed", "deploy.crashed", "alert.*", "volume.limit_exceeded", "usage.threshold_reached"];
+
+/** Common subscriptions offered as one-click chips; the textarea still accepts any kind or pattern. */
+const EVENT_PRESETS: { value: string; label: string }[] = [
+  { value: "deploy.failed", label: t("배포 실패") },
+  { value: "deploy.crashed", label: t("크래시") },
+  { value: "deploy.live", label: t("배포 성공") },
+  { value: "alert.*", label: t("지표 알림") },
+  { value: "volume.limit_exceeded", label: t("볼륨 상한 초과") },
+  { value: "volume.near_limit", label: t("볼륨 90% 도달") },
+  { value: "backup.failed", label: t("백업 실패") },
+  { value: "cron.failed", label: t("크론 실패") },
+  { value: "usage.threshold_reached", label: t("사용량 기준 도달") },
+  { value: "usage.limit_reached", label: t("사용량 한도 도달") },
+  { value: "node.unavailable", label: t("노드 연결 끊김") },
+  { value: "*", label: t("모든 이벤트") },
+];
+
+// Same rule as the server (internal/notify ValidPattern).
+const PATTERN_RE = /^[a-z0-9_.*]{1,100}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validUrl(s: string) {
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
 
 const splitList = (s: string) =>
   s
@@ -33,10 +63,37 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
   const [enabled, setEnabled] = useState(channel?.enabled ?? true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const evList = splitList(events);
+  const badEvents = evList.filter((e) => !PATTERN_RE.test(e));
+  const rcpts = splitList(recipients);
+  const badRcpts = rcpts.filter((r) => !EMAIL_RE.test(r));
+  const urlBad = kind !== "email" && url.trim() !== "" && !validUrl(url.trim());
+  const problem =
+    !name.trim()
+      ? t("이름을 입력하세요.")
+      : kind === "email"
+        ? rcpts.length === 0
+          ? t("받는 사람을 한 명 이상 입력하세요.")
+          : rcpts.length > 20
+            ? t("받는 사람은 최대 20명입니다.")
+            : badRcpts.length
+              ? t("올바르지 않은 이메일: {list}", { list: badRcpts.slice(0, 3).join(", ") })
+              : null
+        : !url.trim()
+          ? t("URL을 입력하세요.")
+          : urlBad
+            ? t("http:// 또는 https://로 시작하는 URL을 입력하세요.")
+            : null;
+  const eventProblem = evList.length === 0 ? t("이벤트를 하나 이상 고르세요.") : badEvents.length ? t("올바르지 않은 이벤트 패턴: {list}", { list: badEvents.slice(0, 3).join(", ") }) : null;
+  const toggleEvent = (v: string) => setEvents((cur) => {
+    const list = splitList(cur);
+    return (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]).join("\n");
+  });
   const save = async () => {
+    if (problem || eventProblem) return setError(problem ?? eventProblem);
     setBusy(true);
     setError(null);
-    const input: NotificationChannelInput = { name: name.trim(), events: splitList(events), enabled };
+    const input: NotificationChannelInput = { name: name.trim(), events: evList, enabled };
     if (kind === "email") input.recipients = splitList(recipients);
     else {
       input.url = url.trim();
@@ -46,6 +103,7 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
       if (channel) await api.updateChannel(pid, channel.id, input);
       else await api.createChannel(pid, { ...input, kind });
       await qc.invalidateQueries({ queryKey: qk.channels(pid) });
+      toast(channel ? t("{name} 채널을 저장했습니다.", { name: name.trim() }) : t("{name} 채널을 추가했습니다. 테스트 전송으로 확인해 보세요.", { name: name.trim() }));
       onClose();
     } catch (e) {
       setError(e);
@@ -63,13 +121,19 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t("취소")}
           </Button>
-          <Button variant="primary" loading={busy} disabled={!name.trim()} onClick={save}>
+          <Button variant="primary" loading={busy} disabled={!!problem || !!eventProblem} onClick={save}>
             {t("저장")}
           </Button>
         </>
       }
     >
-      <div className="space-y-4">
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
         <div className="grid grid-cols-[140px_1fr] gap-3">
           <Field label={t("종류")}>
             <Select value={kind} disabled={!!channel} onChange={(e) => setKind(e.target.value as ChannelKind)}>
@@ -81,7 +145,7 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
             </Select>
           </Field>
           <Field label={t("이름")}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ops" maxLength={100} />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ops" maxLength={100} autoFocus={!channel} />
           </Field>
         </div>
         {kind === "email" ? (
@@ -92,14 +156,16 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
           <Field
             label="URL"
             hint={
-              kind === "webhook"
+              urlBad ? (
+                <span className="text-danger">{t("http:// 또는 https://로 시작하는 URL을 입력하세요.")}</span>
+              ) : kind === "webhook"
                 ? t("JSON payload를 POST합니다. 사설·루프백 주소는 AVEN_NOTIFY_ALLOW_PRIVATE=1일 때만 허용됩니다.")
                 : kind === "slack"
                   ? "Slack Incoming Webhook URL"
                   : t("Discord 채널 webhook URL")
             }
           >
-            <Input mono value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://" />
+            <Input mono value={url} invalid={urlBad} onChange={(e) => setUrl(e.target.value)} placeholder="https://" autoComplete="off" />
           </Field>
         )}
         {kind === "webhook" && (
@@ -123,15 +189,40 @@ function ChannelDialog({ pid, channel, onClose }: { pid: ID | null; channel: Not
             )}
           </Field>
         )}
-        <Field label={t("이벤트")} hint={t("한 줄에 하나씩. 정확한 kind 또는 패턴(deploy.*, *.failed, *).")}>
-          <Textarea rows={4} mono className="w-full" value={events} onChange={(e) => setEvents(e.target.value)} />
-        </Field>
+        <fieldset>
+          <legend className="mb-2 block text-xs font-semibold leading-[18px] text-gray-600">{t("이벤트")}</legend>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {EVENT_PRESETS.map((p) => {
+              const on = evList.includes(p.value);
+              return (
+                <button
+                  key={p.value}
+                  type="button"
+                  aria-pressed={on}
+                  title={p.value}
+                  onClick={() => toggleEvent(p.value)}
+                  className={cx(
+                    "cursor-pointer rounded-md border px-2 py-1 text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500",
+                    on ? "border-pink-500 bg-pink-500/10 text-foreground" : "border-gray-200 text-gray-600 hover:border-gray-300 hover:text-foreground",
+                  )}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          <Textarea rows={4} mono className="w-full" aria-label={t("이벤트 패턴")} value={events} onChange={(e) => setEvents(e.target.value)} />
+          <span className="mt-2 block text-xs leading-[18px] text-gray-600">{t("한 줄에 하나씩. 정확한 kind 또는 패턴(deploy.*, *.failed, *).")}</span>
+          {eventProblem && evList.length > 0 && <span className="mt-1 block text-xs text-danger">{eventProblem}</span>}
+        </fieldset>
         <div className="flex items-center gap-3">
           <Toggle checked={enabled} onChange={setEnabled} label={t("사용")} />
           <span className="text-sm text-gray-600">{t("사용")}</span>
         </div>
+        {problem && (name.trim() || url.trim() || recipients.trim()) && <p className="text-xs text-gray-500" role="status">{problem}</p>}
         <ErrorBox error={error} />
-      </div>
+        <button type="submit" className="hidden" aria-hidden tabIndex={-1} />
+      </form>
     </Dialog>
   );
 }
@@ -169,7 +260,19 @@ export function NotificationChannels({ pid, canEdit, title }: { pid: ID | null; 
   const [open, setOpen] = useState<ID | null>(null);
   const [tested, setTested] = useState<{ id: ID; ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState<ID | null>(null);
+  const [toggling, setToggling] = useState<ID | null>(null);
   const { confirm, node } = useConfirm();
+  const setEnabled = async (c: NotificationChannel, enabled: boolean) => {
+    setToggling(c.id);
+    try {
+      await api.updateChannel(pid, c.id, { enabled });
+      await qc.invalidateQueries({ queryKey: qk.channels(pid) });
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    } finally {
+      setToggling(null);
+    }
+  };
   const test = async (c: NotificationChannel) => {
     setTesting(c.id);
     try {
@@ -177,7 +280,7 @@ export function NotificationChannels({ pid, canEdit, title }: { pid: ID | null; 
       setTested({ id: c.id, ok: r.ok, msg: r.ok ? t("보냈습니다 ({code}, {ms}ms)", { code: r.status_code ?? "ok", ms: r.duration_ms }) : (r.error ?? t("실패")) });
       qc.invalidateQueries({ queryKey: qk.deliveries(pid, c.id) });
     } catch (e) {
-      setTested({ id: c.id, ok: false, msg: e instanceof Error ? e.message : String(e) });
+      setTested({ id: c.id, ok: false, msg: errorMessage(e) });
     } finally {
       setTesting(null);
     }
@@ -218,7 +321,8 @@ export function NotificationChannels({ pid, canEdit, title }: { pid: ID | null; 
                   </div>
                 </button>
                 {canEdit && (
-                  <span className="flex shrink-0">
+                  <span className="flex shrink-0 items-center gap-1">
+                    <Toggle checked={c.enabled} disabled={toggling === c.id} onChange={(v) => setEnabled(c, v)} label={t("{name} 사용", { name: c.name })} />
                     <IconButton label={t("테스트 전송")} size="sm" disabled={testing === c.id} onClick={() => test(c)}>
                       {testing === c.id ? <Spinner className="size-3.5" /> : <Send className="size-3.5" />}
                     </IconButton>
@@ -235,8 +339,14 @@ export function NotificationChannels({ pid, canEdit, title }: { pid: ID | null; 
                           confirmLabel: t("삭제"),
                           danger: true,
                           run: async () => {
-                            await api.deleteChannel(pid, c.id);
-                            await qc.invalidateQueries({ queryKey: qk.channels(pid) });
+                            try {
+                              await api.deleteChannel(pid, c.id);
+                              toast(t("{name} 채널을 삭제했습니다.", { name: c.name }));
+                            } catch (e) {
+                              toast(errorMessage(e), "error");
+                            } finally {
+                              await qc.invalidateQueries({ queryKey: qk.channels(pid) });
+                            }
                           },
                         })
                       }
@@ -327,11 +437,17 @@ export function UsageAlertSettings({ project, canEdit }: { project: Project; can
   const parse = (s: string) => (s.trim() === "" ? undefined : Number(s));
   const vals = [parse(cpu), parse(mem), parse(egress)];
   const valid = vals.every((v) => v === undefined || (Number.isFinite(v) && v > 0));
-  const field = (label: string, unit: string, v: string, set: (s: string) => void) => (
-    <Field label={label} hint={unit}>
-      <Input type="number" min={0} step="any" value={v} disabled={!canEdit} onChange={(e) => (set(e.target.value), setSaved(false))} placeholder={t("없음")} />
-    </Field>
-  );
+  const dirty = vals[0] !== (cur.cpu_core_hours ?? undefined) || vals[1] !== (cur.memory_gb_hours ?? undefined) || vals[2] !== (cur.egress_gb ?? undefined);
+  useUnsavedGuard(dirty && canEdit);
+  const field = (label: string, unit: string, v: string, set: (s: string) => void) => {
+    const n = parse(v);
+    const bad = n !== undefined && !(Number.isFinite(n) && n > 0);
+    return (
+      <Field label={label} hint={bad ? <span className="text-danger">{t("0보다 큰 값을 입력하거나 비워 두세요.")}</span> : unit}>
+        <Input type="number" min={0} step="any" value={v} invalid={bad} disabled={!canEdit} onChange={(e) => (set(e.target.value), setSaved(false))} placeholder={t("없음")} />
+      </Field>
+    );
+  };
   return (
     <form
       onSubmit={async (e) => {
@@ -365,7 +481,7 @@ export function UsageAlertSettings({ project, canEdit }: { project: Project; can
         })}
         footer={
           canEdit ? (
-            <Button type="submit" variant="primary" loading={busy} disabled={!valid}>
+            <Button type="submit" variant="primary" loading={busy} disabled={!valid || !dirty}>
               {t("저장")}
             </Button>
           ) : undefined

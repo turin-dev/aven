@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"strconv"
 	"strings"
@@ -57,7 +56,7 @@ type networkingOverview struct {
 }
 
 func cmdTCPProxy(c *config, args []string) {
-	fl := flag.NewFlagSet("tcp-proxy", flag.ExitOnError)
+	fl := newFlagSet("tcp-proxy")
 	port := fl.Int("port", 0, "container port behind the proxy (enable; default: the service port)")
 	fl.IntVar(port, "p", 0, "container port behind the proxy")
 	yes := fl.Bool("y", false, "don't ask for confirmation")
@@ -155,7 +154,7 @@ func formatTCPProxy(svc, env string, v *tcpProxyStatus) string {
 }
 
 func cmdNetworking(c *config, args []string) {
-	fl := flag.NewFlagSet("networking", flag.ExitOnError)
+	fl := newFlagSet("networking")
 	jsonOut := fl.Bool("json", false, "print the response as JSON")
 	tf := addTargetFlags(fl)
 	fl.Parse(reorderFlags(args))

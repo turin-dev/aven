@@ -4,9 +4,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
 import { getLocale } from "@/lib/i18n";
+import { AvenMark } from "./ui";
 
 // Dev-only fake backend. Both checks are inlined at build time, so production builds drop the import.
 const MOCK = process.env.NODE_ENV === "development" && (process.env.NEXT_PUBLIC_AVEN_MOCK === "1" || process.env.NEXT_PUBLIC_KEEL_MOCK === "1");
+
+/**
+ * Shown until the client mounts (and in the static HTML). It has no text, so it is the same in every
+ * locale, and it fills the viewport with the themed background, so the first paint is the logo on the
+ * right theme instead of a blank page followed by a jump.
+ */
+export function BootSplash() {
+  return (
+    <div className="flex h-dvh items-center justify-center bg-background" aria-busy="true">
+      <AvenMark className="!size-8 opacity-80 motion-safe:animate-pulse" />
+    </div>
+  );
+}
 
 function MockGate({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!MOCK);
@@ -19,7 +33,7 @@ function MockGate({ children }: { children: ReactNode }) {
       });
     }
   }, []);
-  return ready ? children : null;
+  return ready ? children : <BootSplash />;
 }
 
 // 미리 렌더된 HTML은 한국어라, 언어가 다르면 hydration이 어긋난다. 화면은 브라우저에서 마운트한 뒤에 그린다
@@ -30,7 +44,7 @@ function LocaleGate({ children }: { children: ReactNode }) {
     document.documentElement.lang = getLocale();
     setMounted(true);
   }, []);
-  return mounted ? children : null;
+  return mounted ? children : <BootSplash />;
 }
 
 export function Providers({ children }: { children: ReactNode }) {

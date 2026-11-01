@@ -14,12 +14,13 @@ import {
   type ServiceInstance,
   type Volume,
 } from "@/lib/api";
-import { qk, useBackupSchedule, useBackups, useCaps, useEnvVolumes, useNodes, useRegistries } from "@/lib/queries";
+import { qk, useBackupSchedule, useBackups, useCanvas, useCaps, useEnvVolumes, useNodes, useRegistries } from "@/lib/queries";
+import { refsIn } from "@/lib/refs";
 import { t, tr } from "@/lib/i18n";
 import { PermFieldset } from "../Perm";
 import { imageHost } from "../nodes/RegistriesView";
 import { NODE_STATUS } from "../nodes/NodesView";
-import { cronError, describeCron, nextRuns } from "@/lib/cron";
+import { cronError, describeCron } from "@/lib/cron";
 import { fmtBytes, fmtRelative, fmtTime } from "@/lib/format";
 import { useStaged, type SettingsPatch } from "@/lib/staged";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
@@ -36,6 +37,8 @@ import { ServerConfigSettings } from "./settings/ServerConfig";
 import { ReplicaLimits } from "./settings/ReplicaLimits";
 import { ImageSourceCard, RepoSourceCard, BranchCard, SourceRow } from "./settings/SourceCard";
 import { DangerZone } from "./settings/DangerZone";
+import { CronHint } from "./settings/CronHint";
+import { TypeToConfirm } from "./settings/TypeToConfirm";
 import { useScrollSpy, useSettingsFilter } from "./settings/nav";
 import { Button, ErrorBox, IconButton, Input, LABEL_CLS, Menu, MenuItem, Select, Spinner, Textarea, Toggle, cx, useConfirm } from "../ui";
 
@@ -99,15 +102,26 @@ function ServiceName({ svc, env }: { svc: CanvasService; env: Environment }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   useEffect(() => setName(svc.name), [svc.name]);
+  const canvas = useCanvas(env.id);
   const dirty = name.trim() !== svc.name;
-  const invalid = !!name.trim() && !/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/.test(name.trim());
+  // Same rule as the server (nameRe, and "shared" is the shared-variables scope).
+  const reserved = name.trim() === "shared";
+  const invalid = !!name.trim() && (reserved || !/^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/.test(name.trim()));
+  const taken = dirty && (canvas.data?.services ?? []).some((s) => s.id !== svc.id && s.name === name.trim());
+  // References the server rewrites on rename (in this environment; other environments are rewritten too).
+  const refCount = useMemo(() => {
+    let n = 0;
+    for (const s of canvas.data?.services ?? [])
+      if (s.id !== svc.id) for (const v of Object.values(s.instance.variables)) n += refsIn(v).filter((r) => r.ns === svc.name).length;
+    return n;
+  }, [canvas.data, svc.id, svc.name]);
   return (
     <Item
       label={t("서비스 이름")}
       keywords="name service rename"
       description={
         <>
-          {tr("모든 환경에 적용됩니다. 비공개 도메인과 다른 서비스의 {ref} 참조도 바뀌니 함께 고치세요.", {
+          {tr("모든 환경에 적용되고 비공개 도메인도 바뀝니다. 다른 서비스에 저장된 {ref} 참조는 새 이름으로 자동으로 고쳐지지만, 아직 적용하지 않은 변경과 코드 속 주소는 직접 고치세요.", {
             ref: <span className="font-mono">{"${{"}{t("이름.변수")}{"}}"}</span>,
           })}
         </>
@@ -117,7 +131,7 @@ function ServiceName({ svc, env }: { svc: CanvasService; env: Environment }) {
         className="flex gap-2"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (!dirty || invalid || !name.trim()) return;
+          if (!dirty || invalid || taken || !name.trim()) return;
           setBusy(true);
           setError(null);
           try {
@@ -132,11 +146,15 @@ function ServiceName({ svc, env }: { svc: CanvasService; env: Environment }) {
         }}
       >
         <Input size="sm" mono className={FIELD} invalid={invalid} value={name} onChange={(e) => setName(e.target.value.toLowerCase())} aria-label={t("서비스 이름")} />
-        <Button type="submit" disabled={!dirty || invalid || !name.trim()} loading={busy}>
+        <Button type="submit" disabled={!dirty || invalid || taken || !name.trim()} loading={busy}>
           {t("저장")}
         </Button>
       </form>
-      {invalid && <Hint tone="danger">{t("소문자, 숫자, 하이픈(-)으로 40자까지 쓸 수 있고, 하이픈으로 시작하거나 끝날 수 없습니다.")}</Hint>}
+      {invalid && (
+        <Hint tone="danger">{reserved ? t("shared는 공유 변수 참조에 쓰는 이름이라 쓸 수 없습니다.") : t("소문자, 숫자, 하이픈(-)으로 40자까지 쓸 수 있고, 하이픈으로 시작하거나 끝날 수 없습니다.")}</Hint>
+      )}
+      {taken && <Hint tone="danger">{t("{name} 서비스가 이미 있습니다.", { name: name.trim() })}</Hint>}
+      {dirty && !invalid && !taken && refCount > 0 && <Hint>{t("이 환경의 다른 서비스에서 참조 {count}개가 새 이름으로 바뀝니다.", { count: refCount })}</Hint>}
       {error ? <ErrorBox className="mt-2" error={error} /> : null}
     </Item>
   );
@@ -316,9 +334,7 @@ function Backups({ vol, bare }: { vol: Volume; bare?: boolean }) {
         <Button type="submit" loading={busy === "sched"} disabled={!!cronErr || saved}>
           {saved ? <><Check /> {t("저장됨")}</> : t("일정 저장")}
         </Button>
-        <Hint tone={cronErr ? "danger" : undefined} className="!mt-0 basis-full">
-          {cronErr ?? (cron.trim() ? describeCron(cron) : t("자동 백업이 꺼져 있습니다."))}
-        </Hint>
+        <CronHint expr={cron} empty={t("자동 백업이 꺼져 있습니다.")} count={2} className="basis-full" />
       </form>
       {error ? <ErrorBox className="mt-2" error={error} /> : null}
       {node}
@@ -449,7 +465,7 @@ function VolumeCard({ vol, env }: { vol: Volume; env: Environment }) {
 function DetachedVolumes({ svc, env }: { svc: CanvasService; env: Environment }) {
   const qc = useQueryClient();
   const vols = useEnvVolumes(env.id);
-  const { confirm, node } = useConfirm();
+  const [deleting, setDeleting] = useState<Volume | null>(null);
   const [error, setError] = useState<unknown>(null);
   const detached = (vols.data ?? []).filter((v) => !v.service_instance_id);
   if (!detached.length) return null;
@@ -479,9 +495,7 @@ function DetachedVolumes({ svc, env }: { svc: CanvasService; env: Environment })
             <IconButton
               size="sm"
               label={t("{name} 삭제", { name: v.name })}
-              onClick={() =>
-                confirm({ title: t("볼륨 삭제"), message: t("{name}의 데이터와 백업 목록이 지워집니다.", { name: v.name }), confirmLabel: t("삭제"), danger: true, run: () => run(() => api.deleteVolume(v.id)) })
-              }
+              onClick={() => setDeleting(v)}
             >
               <Trash2 className="size-3.5" />
             </IconButton>
@@ -489,7 +503,21 @@ function DetachedVolumes({ svc, env }: { svc: CanvasService; env: Environment })
         ))}
       </ul>
       {error ? <ErrorBox className="mt-2" error={error} /> : null}
-      {node}
+      {deleting && (
+        <TypeToConfirm
+          title={t("볼륨 삭제")}
+          name={deleting.name}
+          confirmLabel={t("볼륨 삭제")}
+          inputLabel={t("삭제할 볼륨 이름")}
+          message={t("{name}의 데이터와 백업 목록이 지워집니다.", { name: deleting.name })}
+          onClose={() => setDeleting(null)}
+          run={async () => {
+            await api.deleteVolume(deleting.id);
+            await qc.invalidateQueries({ queryKey: qk.envVolumes(env.id) });
+            await qc.invalidateQueries({ queryKey: qk.canvas(env.id) });
+          }}
+        />
+      )}
     </Item>
   );
 }
@@ -611,6 +639,20 @@ function Scaling({ svc, env, inst, draft, stage }: { svc: CanvasService; env: En
   const autoOn = !!inst.autoscale?.enabled;
   const autoDirty = JSON.stringify(form) !== JSON.stringify(autoscaleForm(inst));
   const autoMinMaxErr = !!form.min && !!form.max && Number(form.min) > Number(form.max);
+  // The rest of the server's validateAutoscale rules, so "save" doesn't bounce off a 400.
+  const autoErr = (() => {
+    const n = (v: string) => (v.trim() === "" ? null : Number(v));
+    const [min, max, cpu, mem, rps, up, down] = [form.min, form.max, form.cpu, form.memory, form.rps, form.up, form.down].map(n);
+    if ([min, max, cpu, mem, rps, up, down].some((v) => v !== null && !Number.isFinite(v))) return t("숫자만 입력하세요.");
+    if ((min !== null && (min < 1 || min > 10 || !Number.isInteger(min))) || (max !== null && (max < 1 || max > 10 || !Number.isInteger(max))))
+      return t("레플리카 수는 1부터 10 사이의 정수여야 합니다.");
+    if (cpu !== null && (cpu <= 0 || cpu > 1000)) return t("CPU 목표는 0보다 크고 1000% 이하여야 합니다.");
+    if (mem !== null && (mem <= 0 || mem > 100)) return t("메모리 목표는 0보다 크고 100% 이하여야 합니다.");
+    if (rps !== null && rps <= 0) return t("RPS 목표는 0보다 커야 합니다.");
+    if ((up !== null && up > 86400) || (down !== null && down > 86400)) return t("대기 시간은 86400초(하루) 이하여야 합니다.");
+    if (cpu === null && mem === null && rps === null) return t("CPU, 메모리, RPS 목표 중 하나 이상을 정하세요.");
+    return null;
+  })();
   const live = inst.status === "online" && !!inst.current_deployment_id;
   const current = inst.current_replicas ?? 0;
   const placement = draft.placement ?? [];
@@ -878,8 +920,9 @@ function Scaling({ svc, env, inst, draft, stage }: { svc: CanvasService; env: En
           <>
             <Hint>{t("CPU는 코어 1개(또는 CPU 제한) 대비, 메모리는 메모리 상한 대비입니다.")}</Hint>
             {autoMinMaxErr && <Hint tone="danger">{t("최소 레플리카가 최대보다 클 수 없습니다.")}</Hint>}
+            {!autoMinMaxErr && autoErr && <Hint tone="danger">{autoErr}</Hint>}
             <div className="mt-3 flex items-center gap-2">
-              <Button variant="primary" loading={busy === "auto"} disabled={!!autoMinMaxErr || (autoOn && !autoDirty)} onClick={() => saveAutoscale(true)}>
+              <Button variant="primary" loading={busy === "auto"} disabled={!!autoMinMaxErr || !!autoErr || (autoOn && !autoDirty)} onClick={() => saveAutoscale(true)}>
                 {autoOn ? t("저장") : t("자동 확장 켜기")}
               </Button>
               {autoOn && autoDirty && (
@@ -926,11 +969,17 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
   const self = !!inst.self;
   const sections = SECTIONS.filter((s) => ((s.id !== "build" && s.id !== "flags") || isRepo) && (self ? s.id === "server" || s.id === "source" || s.id === "build" : s.id !== "server"));
   const { isVisible, empty } = useSettingsFilter(body, q);
-  const { jump } = useScrollSpy(body, sections.map((s) => s.id));
+  const { active, jump } = useScrollSpy(body, sections.map((s) => s.id));
   const cronErr = draft.cron_schedule ? cronError(draft.cron_schedule) : null;
-  const runs = draft.cron_schedule && !cronErr ? nextRuns(draft.cron_schedule, 3) : [];
   const running = ["online", "crashed", "failed", "sleeping", "scheduled"].includes(inst.status);
+  // Same limits as the server's validateSpec (internal/api/services.go), shown before the deploy fails on them.
   const hcTimeoutErr = draft.healthcheck_type !== "none" && (draft.healthcheck_timeout_s < 1 || draft.healthcheck_timeout_s > 3600);
+  const hcPathErr = draft.healthcheck_type === "http" && !!draft.healthcheck_path && !draft.healthcheck_path.startsWith("/");
+  const retriesErr = draft.restart_max_retries < 0 || draft.restart_max_retries > 100;
+  const sleepAfter = draft.sleep_after_s ?? 600;
+  const sleepErr = draft.sleep_when_idle && (sleepAfter < 10 || sleepAfter > 604800);
+  const rootDirErr = (draft.root_dir ?? "").includes("..");
+  const dockerfileErr = (draft.dockerfile_path ?? "").includes("..");
   const teardownOn = (draft.overlap_seconds ?? 0) > 0 || draft.draining_seconds != null;
   const [teardownOpen, setTeardownOpen] = useState(false);
   const restart = RESTART[draft.restart_policy] ?? RESTART.on_failure;
@@ -1001,8 +1050,9 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                   )}
                   <Item label={t("루트 디렉터리")} keywords="root directory monorepo 모노레포" badge={<Changed on={stage.changed("root_dir")} />} description={t("빌드와 배포 명령을 실행할 디렉터리입니다. 모노레포라면 이 서비스의 하위 폴더를 지정하세요.")}>
                     <Reveal has={!!draft.root_dir && draft.root_dir !== "/"} label={t("루트 디렉터리 추가")}>
-                      {(focus) => <Input autoFocus={focus} mono value={draft.root_dir} onChange={(e) => stage.set("root_dir", e.target.value || "/")} placeholder="/" aria-label={t("루트 디렉터리")} />}
+                      {(focus) => <Input autoFocus={focus} mono invalid={rootDirErr} value={draft.root_dir} onChange={(e) => stage.set("root_dir", e.target.value || "/")} placeholder="/" aria-label={t("루트 디렉터리")} />}
                     </Reveal>
+                    {rootDirErr && <Hint tone="danger">{t("경로에 ..을 쓸 수 없습니다.")}</Hint>}
                   </Item>
                   <Item label={t("{env}에 연결된 브랜치", { env: env.name })} keywords="branch git auto deploy push webhook 자동 배포 웹훅" badge={<Changed on={stage.changed("branch") || stage.changed("auto_deploy")} />}>
                     <BranchCard branch={draft.branch} autoDeploy={draft.auto_deploy} onBranch={(v) => stage.set("branch", v)} onAutoDeploy={(v) => stage.set("auto_deploy", v)} />
@@ -1066,7 +1116,8 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                 )}
                 {draft.builder !== "railpack" && (
                   <Item label={t("Dockerfile 경로")} keywords="dockerfile path" badge={<Changed on={stage.changed("dockerfile_path")} />} description={t("루트 디렉터리 기준 경로입니다.")}>
-                    <Input mono value={draft.dockerfile_path} onChange={(e) => stage.set("dockerfile_path", e.target.value)} placeholder="Dockerfile" aria-label={t("Dockerfile 경로")} />
+                    <Input mono invalid={dockerfileErr} value={draft.dockerfile_path} onChange={(e) => stage.set("dockerfile_path", e.target.value)} placeholder="Dockerfile" aria-label={t("Dockerfile 경로")} />
+                    {dockerfileErr && <Hint tone="danger">{t("경로에 ..을 쓸 수 없습니다.")}</Hint>}
                   </Item>
                 )}
                 {!self && (
@@ -1230,15 +1281,7 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                               </button>
                             ))}
                           </div>
-                          {draft.cron_schedule &&
-                            (cronErr ? (
-                              <Hint tone="danger">{cronErr}</Hint>
-                            ) : (
-                              <div className={cx(CARD, "mt-3 text-sm")}>
-                                <div className="font-medium text-foreground">{describeCron(draft.cron_schedule)}</div>
-                                <div className="mt-0.5 text-xs tabular-nums text-gray-600">{t("다음 실행: {times} (현지 시각)", { times: runs.map((d) => fmtTime(d.toISOString())).join(", ") })}</div>
-                              </div>
-                            ))}
+                          {draft.cron_schedule && <CronHint expr={draft.cron_schedule} className={cx(!cronErr && CARD, "mt-3")} />}
                         </>
                       )}
                     </Reveal>
@@ -1259,7 +1302,7 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                             <option value="tcp">TCP</option>
                           </Select>
                           {draft.healthcheck_type === "http" ? (
-                            <Input mono value={draft.healthcheck_path} onChange={(e) => stage.set("healthcheck_path", e.target.value)} placeholder="/healthz" aria-label={t("헬스체크 경로")} className="min-w-0 flex-1" />
+                            <Input mono value={draft.healthcheck_path} invalid={hcPathErr} onChange={(e) => stage.set("healthcheck_path", e.target.value)} placeholder="/healthz" aria-label={t("헬스체크 경로")} className="min-w-0 flex-1" />
                           ) : (
                             <span className="min-w-0 flex-1 text-sm text-gray-600">{t("앱 포트로 TCP 연결이 열리면 통과합니다.")}</span>
                           )}
@@ -1281,7 +1324,8 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                           />
                           {t("초")}
                         </label>
-                        {hcTimeoutErr && <Hint tone="danger">{t("제한 시간은 1초 이상이어야 합니다.")}</Hint>}
+                        {hcPathErr && <Hint tone="danger">{t("경로는 /로 시작해야 합니다 (예: /healthz).")}</Hint>}
+                        {hcTimeoutErr && <Hint tone="danger">{t("제한 시간은 1초에서 3600초 사이여야 합니다.")}</Hint>}
                       </>
                     )}
                   </Item>
@@ -1301,12 +1345,14 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                           value={String(draft.sleep_after_s ?? 600)}
                           onChange={(e) => stage.set("sleep_after_s", Number(e.target.value.replace(/[^0-9]/g, "").slice(0, 6)))}
                           aria-label={t("슬립까지 대기 시간(초)")}
+                          invalid={sleepErr}
                           className={cx(FIELD, "w-[96px] tabular-nums")}
                         />
                         {t("초 동안 요청이 없으면 슬립")}
                         <span className="tabular-nums text-gray-500">({fmtSec(draft.sleep_after_s ?? 600)})</span>
                       </label>
                     )}
+                    {sleepErr && <Hint tone="danger">{t("대기 시간은 10초에서 604800초(7일) 사이여야 합니다.")}</Hint>}
                     {draft.sleep_when_idle && svc.instance.domains.length === 0 && <Hint tone="warn">{t("공개 도메인이 없으면 깨울 요청이 들어오지 않습니다.")}</Hint>}
                   </Item>
                   <Item label={t("재시작 정책")} keywords="restart policy retries crash" badge={<Changed on={stage.changed("restart_policy") || stage.changed("restart_max_retries")} />} description={t("프로세스가 종료됐을 때 어떻게 할지 정합니다.")}>
@@ -1348,10 +1394,12 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                           mono
                           inputMode="numeric"
                           className="tabular-nums"
+                          invalid={retriesErr}
                           value={String(draft.restart_max_retries)}
                           onChange={(e) => stage.set("restart_max_retries", Number(e.target.value.replace(/[^0-9]/g, "").slice(0, 3)))}
                           aria-label={t("최대 재시작 횟수")}
                         />
+                        {retriesErr && <Hint tone="danger">{t("재시작 횟수는 0부터 100 사이여야 합니다.")}</Hint>}
                       </div>
                     )}
                   </Item>
@@ -1417,7 +1465,12 @@ export function SettingsTab({ svc, env, actions }: { svc: CanvasService; env: En
                       if (on) jump(s.id);
                     }}
                     aria-disabled={!on || undefined}
-                    className={cx("focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700", on ? "hover:text-pink-600" : "cursor-default")}
+                    aria-current={on && active === s.id ? "location" : undefined}
+                    className={cx(
+                      "focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700 motion-safe:transition-colors",
+                      on ? "hover:text-pink-600" : "cursor-default",
+                      on && active === s.id && "font-medium text-foreground",
+                    )}
                   >
                     {s.title}
                   </a>

@@ -126,6 +126,10 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := t.Instance
+	if s.blockSuspended(w, r, in) { // 배포할 수 없으면 변수도 되돌리지 않는다
+		return
+	}
+	prevVars := copyMap(in.Variables)
 	in.Variables = copyMap(target.VarsRaw)
 	if err := s.Store.UpdateInstanceConfig(ctx, in); err != nil {
 		s.storeErr(w, err)
@@ -134,6 +138,11 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 	d, err := s.Deploy.Enqueue(ctx, in, deploy.EnqueueOpts{Trigger: "rollback", Image: target.Image, Spec: &target.Spec, ReqSpec: &target.ReqSpec,
 		VarsRaw: target.VarsRaw, Commit: deploy.CommitOf(target), Branch: target.Branch, BuilderUsed: target.BuilderUsed})
 	if err != nil {
+		// 롤백 배포가 큐에 들어가지 못했다(정지, 보류, 출처 정책 등). 변수만 옛 값으로 남지 않게 되돌린다.
+		in.Variables = prevVars
+		if rerr := s.Store.UpdateInstanceConfig(context.WithoutCancel(ctx), in); rerr != nil {
+			s.Log.Warn("rollback: restore variables", "instance", in.ID, "err", rerr)
+		}
 		s.storeErr(w, err)
 		return
 	}
@@ -375,6 +384,8 @@ func (s *Server) buildLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ctx, stop := s.guardDeploymentStream(r, d)
+	defer stop()
 	past, ch, cancel := s.Deploy.Logs.Subscribe(d.ID)
 	defer cancel()
 	e, ok := newSSE(w)
@@ -392,10 +403,10 @@ func (s *Server) buildLogs(w http.ResponseWriter, r *http.Request) {
 			e.f.Flush()
 			return
 		}
-		s.waitQueued(r.Context(), e, d.ID)
+		s.waitQueued(ctx, e, d.ID)
 		return
 	}
-	s.pump(r.Context(), e, d.ID, ch)
+	s.pump(ctx, e, d.ID, ch)
 }
 
 func (s *Server) pump(ctx context.Context, e *sse, id string, ch chan logbookEvent) {
@@ -423,6 +434,15 @@ func (s *Server) pump(ctx context.Context, e *sse, id string, ch chan logbookEve
 			}
 		}
 	}
+}
+
+// guardDeploymentStream은 배포 로그 스트림을 배포의 프로젝트·환경 권한으로 지킨다(guardStream).
+func (s *Server) guardDeploymentStream(r *http.Request, d *store.Deployment) (context.Context, context.CancelFunc) {
+	pid := ""
+	if env, err := s.Store.GetEnvironment(r.Context(), d.EnvironmentID); err == nil {
+		pid = env.ProjectID
+	}
+	return s.guardStream(r, pid, d.EnvironmentID)
 }
 
 // waitQueued는 큐에서 대기 중인 배포가 시작되면 로그 구독으로 넘어간다.
@@ -469,11 +489,12 @@ func (s *Server) waitQueued(ctx context.Context, e *sse, id string) {
 }
 
 func (s *Server) deployLogs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	d, ok := s.loadDeployment(w, r)
 	if !ok {
 		return
 	}
+	ctx, stop := s.guardDeploymentStream(r, d)
+	defer stop()
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 	if tail <= 0 || tail > 10000 {
 		tail = 500

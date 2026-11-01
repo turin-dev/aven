@@ -422,13 +422,13 @@ func (m *Manager) syncMeshAsync() {
 	if m.Store == nil || (m.LocalMesh == nil && m.Agents == nil) {
 		return
 	}
-	go func() {
+	m.meshKick.Trigger(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if err := m.SyncMesh(ctx); err != nil && m.Log != nil {
 			m.Log.Warn("mesh sync", "err", err)
 		}
-	}()
+	})
 }
 
 // MeshStatus는 노드의 mesh 상태다(GET /api/nodes). 원격 노드는 마지막 mesh.ensure 결과(최대 30초 전)다.

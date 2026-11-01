@@ -40,6 +40,7 @@ import {
 import { useCaps, useCronRuns, useDeployments, useNodes } from "@/lib/queries";
 import { lock, NO_PERM } from "../Perm";
 import { describeCron, nextRuns } from "@/lib/cron";
+import { fmtSpan, type StageId } from "@/lib/logs";
 import { fmtDuration, fmtRelative, fmtTime, fmtUntil, shortSha } from "@/lib/format";
 import { pendingSummary, useStaged } from "@/lib/staged";
 import type { PanelTab } from "@/lib/nav";
@@ -63,26 +64,66 @@ export function stepsFor(inst: Pick<ServiceInstance, "pre_deploy_command" | "hea
   out.push({ id: "live", label: t("활성|deployment") });
   return out;
 }
-export function Stepper({ steps, status }: { steps: Step[]; status: DeploymentStatus }) {
-  const idx = status === "queued" ? -1 : steps.findIndex((s) => s.id === status);
+const FAILED_STATUSES: DeploymentStatus[] = ["failed", "crashed", "cancelled"];
+
+/**
+ * Deployment progress: one entry per stage. With `times` (stage start times parsed from the build log) each reached
+ * stage shows how long it took, and a failed / crashed / cancelled deployment marks the stage where it stopped.
+ */
+export function Stepper({
+  steps,
+  status,
+  times,
+  end,
+}: {
+  steps: Step[];
+  status: DeploymentStatus;
+  times?: Partial<Record<StageId, number>>;
+  /** finished_at of a terminal deployment, closing the last stage's duration. */
+  end?: string | null;
+}) {
+  const stopped = FAILED_STATUSES.includes(status);
+  const reached = times ? steps.reduce((n, s, i) => (times[s.id as StageId] !== undefined ? i : n), -1) : -1;
+  let idx = status === "queued" || status === "waiting" ? -1 : steps.findIndex((s) => s.id === status);
+  if (status === "removed") idx = steps.length - 1;
+  if (stopped) idx = Math.max(reached, 0);
+  const endMs = end ? Date.parse(end) : NaN;
+  const span = (i: number): string | null => {
+    const start = times?.[steps[i].id as StageId];
+    if (start === undefined || steps[i].id === "live") return null;
+    let stop: number | undefined;
+    for (let j = i + 1; j < steps.length && stop === undefined; j++) stop = times?.[steps[j].id as StageId];
+    if (stop === undefined) stop = i === idx && !stopped && !end ? Date.now() : Number.isNaN(endMs) ? undefined : endMs;
+    return stop === undefined ? null : fmtSpan(stop - start);
+  };
   return (
     <ol className="flex items-center" aria-label={t("배포 단계")}>
       {steps.map((s, i) => {
-        const done = i < idx || (s.id === "live" && idx === i);
-        const active = i === idx && s.id !== "live";
+        const failedHere = stopped && i === idx;
+        const done = !failedHere && (i < idx || (s.id === "live" && idx === i));
+        const active = !stopped && i === idx && s.id !== "live";
+        const took = span(i);
         return (
           <li key={s.id} className="flex min-w-0 flex-1 items-center last:flex-none" aria-current={active ? "step" : undefined}>
             <span className="flex items-center gap-1.5">
-              {done ? (
+              {failedHere ? (
+                <XCircle className="size-4 shrink-0 text-danger" aria-label={status === "cancelled" ? t("중단됨") : t("실패")} />
+              ) : done ? (
                 <CheckCircle2 className="size-4 shrink-0 text-success" />
               ) : active ? (
-                <Loader2 className="size-4 shrink-0 animate-spin text-blue-600" />
+                <Loader2 className="size-4 shrink-0 animate-spin text-blue-600 motion-reduce:animate-none" />
               ) : (
                 <span className="size-4 shrink-0 rounded-full border border-gray-300" />
               )}
-              <span className={cx("whitespace-nowrap text-sm", done ? "text-gray-600" : active ? "font-medium text-blue-600" : "text-gray-400")}>
+              <span
+                className={cx(
+                  "whitespace-nowrap text-sm",
+                  failedHere ? "font-medium text-danger" : done ? "text-gray-600" : active ? "font-medium text-blue-600" : "text-gray-400",
+                )}
+              >
                 {s.label}
               </span>
+              {took && <span className="whitespace-nowrap font-mono text-xs tabular-nums text-gray-400">{took}</span>}
             </span>
             {i < steps.length - 1 && <span className={cx("mx-2.5 h-px min-w-3 flex-1", i < idx ? "bg-green-300" : "bg-gray-200")} />}
           </li>
@@ -340,7 +381,15 @@ export function DeploymentMenu({
               reason={why}
               onSelect={() => {
                 close();
-                void actions.deploy();
+                confirm({
+                  title: d.builder_used === "image" ? t("이미지 다시 받아 배포") : t("최신 커밋으로 배포"),
+                  message:
+                    d.builder_used === "image"
+                      ? t("이미지를 레지스트리에서 다시 받아 새 배포를 만듭니다. 새 배포가 정상이면 현재 배포를 대체합니다.")
+                      : t("연결된 브랜치의 최신 커밋을 빌드해 새 배포를 만듭니다. 새 배포가 정상이면 현재 배포를 대체합니다."),
+                  confirmLabel: t("배포"),
+                  run: actions.deploy,
+                });
               }}
             >
               {d.builder_used === "image" ? t("이미지 다시 받아 배포") : t("최신 커밋으로 배포")}
@@ -472,6 +521,12 @@ function Meta({ d }: { d: Deployment }) {
           ),
           trigger: <span className="text-gray-500">{viaText(d)}</span>,
         })}
+        {d.started_at && d.finished_at && d.status !== "skipped" && (
+          <span className="tabular-nums" title={d.status === "live" || d.status === "removed" ? t("빌드부터 활성화까지 걸린 시간") : t("소요 시간")}>
+            {" · "}
+            {fmtDuration(d.started_at, d.finished_at)}
+          </span>
+        )}
       </p>
     </div>
   );
@@ -814,9 +869,12 @@ function CronSection({ inst, actions, canEdit }: { inst: ServiceInstance; action
           {...lock(canEdit)}
           onClick={async () => {
             setBusy(true);
-            await actions.runCron();
-            await runs.refetch();
-            setBusy(false);
+            try {
+              await actions.runCron();
+              await runs.refetch();
+            } finally {
+              setBusy(false);
+            }
           }}
         >
           <Play /> {t("지금 실행")}

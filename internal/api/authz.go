@@ -84,6 +84,9 @@ type Route struct {
 // Routes는 Handler()가 등록한 인증 라우트 목록이다.
 func (s *Server) Routes() []Route { return append([]Route(nil), s.routes...) }
 
+// PublicRoutes는 Handler()가 권한 계층(register) 밖에서 등록한 라우트 패턴이다. 핸들러가 직접 인증한다.
+func (s *Server) PublicRoutes() []string { return append([]string(nil), s.publicRoutes...) }
+
 // target은 리소스가 속한 프로젝트와 환경이다(환경이 없는 프로젝트 수준 리소스면 eid가 비어 있다).
 type target struct{ pid, eid string }
 

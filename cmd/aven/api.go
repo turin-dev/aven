@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/turin-dev/aven/internal/compat"
 	"io"
 	"net/http"
 	"os"
@@ -130,14 +129,11 @@ func runAPI(c *config, args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	r.Header.Set("Content-Type", "application/json")
-	if t := compat.Env("TOKEN"); t != "" {
-		r.Header.Set("Authorization", "Bearer "+t)
-	} else if c.Cookie != "" {
-		r.AddCookie(&http.Cookie{Name: "aven_session", Value: c.Cookie})
-	}
+	r.Header.Set("User-Agent", userAgent())
+	c.authorize(r)
 	resp, err := http.DefaultClient.Do(r)
 	if err != nil {
-		return err
+		return netHint(c.URL, err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
@@ -145,7 +141,7 @@ func runAPI(c *config, args []string, stdin io.Reader, stdout io.Writer) error {
 		return err
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
-		return errors.New("unauthorized (run: aven login <url>)")
+		return errors.New("unauthorized: the session expired or the token is invalid\nhint: run aven login <url>, or check KEEL_TOKEN")
 	}
 	out := body
 	if !*raw {

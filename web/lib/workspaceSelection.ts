@@ -21,3 +21,17 @@ export function rememberedSelection(key: "workspace" | "project"): string | null
   if (typeof window === "undefined") return null;
   return readStorage(`aven.${key}.v1`, `keel.${key}.v1`);
 }
+
+/** Persist the last explicit choice so a reload without `?ws=`/`?project=` reopens it. */
+export function rememberSelection(key: "workspace" | "project", id: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) window.localStorage.setItem(`aven.${key}.v1`, id);
+    else {
+      window.localStorage.removeItem(`aven.${key}.v1`);
+      window.localStorage.removeItem(`keel.${key}.v1`);
+    }
+  } catch {
+    /* storage unavailable (private mode): selection lasts for this page view */
+  }
+}

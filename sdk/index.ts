@@ -345,6 +345,8 @@ export class FlagClient {
   private etag: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
+  /** Bumped by init(): responses and timers from an earlier configuration are ignored. */
+  private generation = 0;
   private url = "";
   private token = "";
   private fetcher: typeof fetch = (...args) => globalThis.fetch(...args);
@@ -386,9 +388,10 @@ export class FlagClient {
     this.close();
     this.closed = false;
     this.etag = null;
+    const generation = ++this.generation;
     await this.refresh();
     const interval = o.pollIntervalMs ?? 30_000;
-    if (interval > 0) this.schedule(Math.max(1000, interval));
+    if (interval > 0 && generation === this.generation) this.schedule(Math.max(1000, interval), generation);
   }
 
   /** Stops background polling. Cached flags keep serving reads. */
@@ -405,11 +408,12 @@ export class FlagClient {
   /** The cached flag definitions. */
   list(): FlagDefinition[] { return [...this.flags.values()]; }
 
-  private schedule(interval: number) {
-    if (this.closed) return;
+  private schedule(interval: number, generation: number) {
+    if (this.closed || generation !== this.generation) return;
     this.timer = setTimeout(async () => {
       try { await this.refresh(); } catch (error) { this.onError(error); }
-      this.schedule(interval);
+      // A re-init while this refresh was in flight starts its own loop; do not run two.
+      this.schedule(interval, generation);
     }, interval);
     // Polling must not keep a Node/Bun process alive.
     (this.timer as { unref?: () => void }).unref?.();
@@ -417,12 +421,16 @@ export class FlagClient {
 
   /** Fetches the latest snapshot now (uses If-None-Match, so unchanged snapshots cost a 304). */
   async refresh(): Promise<void> {
+    const generation = this.generation;
     const headers: Record<string, string> = { Authorization: `Bearer ${this.token}`, Accept: "application/json" };
     if (this.etag) headers["If-None-Match"] = this.etag;
     const response = await this.fetcher(this.url, { headers });
     if (response.status === 304) return;
-    if (!response.ok) throw new Error(`aven flags: refresh failed (${response.status}): ${await response.text()}`);
+    if (!response.ok) throw new Error(`aven flags: refresh failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
     const snapshot = await response.json() as FlagSnapshot;
+    // init() was called again while this request was in flight: its snapshot belongs to the old scope.
+    if (generation !== this.generation) return;
+    if (!snapshot || !Array.isArray(snapshot.flags)) throw new Error("aven flags: malformed snapshot");
     this.etag = response.headers.get("ETag");
     this.projectID = snapshot.project_id;
     this.environmentID = snapshot.environment_id;

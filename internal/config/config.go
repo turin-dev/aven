@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -73,12 +74,18 @@ type File struct {
 	Build        Build               `json:"build" toml:"build"`
 	Deploy       Deploy              `json:"deploy" toml:"deploy"`
 	Environments map[string]Override `json:"environments" toml:"environments"`
+
+	shadowed []string // other config files in the same directory that Find did not use
 }
 
+// MaxFileSize bounds a config file; real ones are a few hundred bytes.
+const MaxFileSize = 1 << 20
+
 // Find는 dir에서 설정 파일을 찾는다. 없으면 ("", nil, nil).
+// 저장소 밖을 가리키는 symlink는 거부한다(빌드 서버의 파일을 설정으로 읽어 오류 메시지로 내보내지 않게).
 func Find(dir string) (string, *File, error) {
-	for _, name := range Files {
-		b, err := os.ReadFile(filepath.Join(dir, name))
+	for i, name := range Files {
+		b, err := readFile(dir, name)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
@@ -89,9 +96,59 @@ func Find(dir string) (string, *File, error) {
 			compat.WarnOnce("config-file:"+name, "%s is in use; aven.json / aven.toml is the new name (the old file still works)", name)
 		}
 		f, err := Parse(name, b)
+		if f != nil {
+			for _, other := range Files[i+1:] {
+				if _, err := os.Lstat(filepath.Join(dir, other)); err == nil {
+					f.shadowed = append(f.shadowed, other)
+				}
+			}
+		}
 		return name, f, err
 	}
 	return "", nil, nil
+}
+
+// readFile reads dir/name: a regular file (or a symlink that stays inside dir) of at most MaxFileSize.
+func readFile(dir, name string) ([]byte, error) {
+	p := filepath.Join(dir, name)
+	fi, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		target, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return nil, err // a dangling link counts as missing
+		}
+		root, err := filepath.EvalSymlinks(dir)
+		if err != nil {
+			return nil, err
+		}
+		rel, err := filepath.Rel(root, target)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return nil, fmt.Errorf("%s: symlink points outside the repository", name)
+		}
+		p = target
+		if fi, err = os.Stat(p); err != nil {
+			return nil, err
+		}
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: not a regular file", name)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, MaxFileSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if len(b) > MaxFileSize {
+		return nil, fmt.Errorf("%s: larger than %d KiB", name, MaxFileSize>>10)
+	}
+	return b, nil
 }
 
 func Parse(name string, b []byte) (*File, error) {
@@ -209,6 +266,9 @@ func (f *File) Warnings() []string {
 	if _, w := f.Region(); w != "" {
 		out = append(out, w)
 	}
+	if len(f.shadowed) > 0 {
+		out = append(out, fmt.Sprintf("%s도 있지만 이 파일만 씁니다(우선순위: %s)", strings.Join(f.shadowed, ", "), strings.Join(Files, " > ")))
+	}
 	return out
 }
 
@@ -273,19 +333,29 @@ func (f *File) Apply(sp *store.Spec) ([]string, error) {
 			if !ok {
 				return nil, errors.New("deploy.preDeployCommand: must be a string or string array")
 			}
-			parts = append(parts, s)
+			if s = strings.TrimSpace(s); s != "" {
+				parts = append(parts, s)
+			}
 		}
-		cmd := strings.Join(parts, " && ")
-		sp.PreDeployCommand = &cmd
+		// An empty list clears the command, like "" does (it used to set an empty command).
+		sp.PreDeployCommand = nil
+		if len(parts) > 0 {
+			cmd := strings.Join(parts, " && ")
+			sp.PreDeployCommand = &cmd
+		}
 		set("deploy.preDeployCommand")
 	default:
 		return nil, errors.New("deploy.preDeployCommand: must be a string or string array")
 	}
 	if d.HealthcheckPath != nil {
-		sp.HealthcheckPath = *d.HealthcheckPath
-		if sp.HealthcheckPath == "" {
-			sp.HealthcheckPath = "/"
+		p := strings.TrimSpace(*d.HealthcheckPath)
+		if strings.ContainsAny(p, "\x00\r\n ") {
+			return nil, errors.New("deploy.healthcheckPath: must be a URL path without spaces")
 		}
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p // "health" and "/health" mean the same; without the slash the probe URL broke
+		}
+		sp.HealthcheckPath = p
 		sp.HealthcheckType = "http"
 		set("deploy.healthcheckPath")
 	}
@@ -310,6 +380,9 @@ func (f *File) Apply(sp *store.Spec) ([]string, error) {
 		set("deploy.restartPolicyType")
 	}
 	if n := d.RestartPolicyMaxRetries; n != nil {
+		if *n < 0 {
+			return nil, errors.New("deploy.restartPolicyMaxRetries: must be 0 or more")
+		}
 		sp.RestartMaxRetries = *n
 		set("deploy.restartPolicyMaxRetries")
 	}

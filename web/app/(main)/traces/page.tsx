@@ -230,7 +230,7 @@ function TracesInner() {
       ) : (
         <div className={cx("flex min-h-0 flex-col", traceId ? "max-h-[38%] shrink-0" : "flex-1")}>
           <div
-            role="row"
+            aria-hidden="true"
             className="relative flex shrink-0 items-center gap-3 bg-secondaryBg px-6 py-1.5 text-xs font-medium text-neutral-secondary after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']"
           >
             <span className="w-[150px] shrink-0">{t("시작")}</span>
@@ -240,7 +240,7 @@ function TracesInner() {
             <span className="w-[52px] shrink-0 text-right">span</span>
             <span className="w-[52px] shrink-0 text-right">{t("오류")}</span>
           </div>
-          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" role="table" aria-label={t("trace 목록")}>
+          <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" role="group" aria-label={t("trace 목록")}>
             {items.length === 0 ? (
               <div className="px-6 py-6">
                 <EmptyState icon={<Waypoints className="size-6" />} title={t("trace가 없습니다")}>
@@ -256,8 +256,8 @@ function TracesInner() {
                 <button
                   key={row.trace_id}
                   type="button"
-                  role="row"
-                  aria-selected={row.trace_id === traceId}
+                  aria-pressed={row.trace_id === traceId}
+                  aria-label={`${row.root_name || t("(이름 없음)")} · ${row.service_name || "—"} · ${fmtSpanMs(row.duration_ms)}${row.error_count ? ` · ${t("오류 {count}", { count: row.error_count })}` : ""}`}
                   onClick={() => go({ trace: row.trace_id === traceId ? null : row.trace_id })}
                   className={cx(
                     "flex min-h-[28px] w-full cursor-pointer items-center gap-3 px-6 text-left font-mono text-xs hover:bg-gray-50",

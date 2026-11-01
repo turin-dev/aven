@@ -18,6 +18,8 @@ func (s *Server) httpLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ctx, stop := s.guardStream(r, c.p.ID, c.env.ID)
+	defer stop()
 	past, ch, cancel := s.Deploy.HTTPLogs.Subscribe(c.in.ID)
 	defer cancel()
 	e, ok := newSSE(w)
@@ -32,7 +34,7 @@ func (s *Server) httpLogs(w http.ResponseWriter, r *http.Request) {
 	defer keepalive.Stop()
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return
 		case <-keepalive.C:
 			fmt.Fprint(w, ": ping\n\n")
@@ -46,11 +48,12 @@ func (s *Server) httpLogs(w http.ResponseWriter, r *http.Request) {
 
 // envLogs는 환경의 모든(또는 선택한) 서비스 현재 배포 로그를 합쳐 흘려보낸다. q 필터는 서버에서 적용한다.
 func (s *Server) envLogs(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	env, _, ok := s.envAndProject(w, r)
 	if !ok {
 		return
 	}
+	ctx, stop := s.guardStream(r, env.ProjectID, env.ID)
+	defer stop()
 	want := map[string]bool{}
 	if q := r.URL.Query().Get("services"); q != "" {
 		for _, id := range strings.Split(q, ",") {

@@ -234,7 +234,11 @@ func (m *Manager) Scope(ctx context.Context, envID string, ov *Override) (*vars.
 				latest.Status == store.DepSkipped && latest.Error == nil {
 				if bs := loadBase(); bs != nil && bs.Services[svc.Name] != nil {
 					if res, err := vars.Resolve(bs, svc.Name); err == nil {
-						merged = res.Vars
+						// 이미 해석한 값이다: 이 범위에서 다시 해석할 때 값 안의 글자 ${{ }}가 참조가 되지 않게 한다.
+						merged = make(map[string]string, len(res.Vars))
+						for k, v := range res.Vars {
+							merged[k] = vars.Escape(v)
+						}
 					}
 				}
 			}

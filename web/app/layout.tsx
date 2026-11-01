@@ -15,6 +15,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#13111C",
+  // Both themes are supported; ThemeScript picks one and sets color-scheme on <html> before first paint.
+  colorScheme: "dark light",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
