@@ -245,7 +245,7 @@ func (m *Manager) persistAS(ctx context.Context, instanceID string, e *asEntry, 
 	m.autoscale.mu.Unlock()
 	if err := m.Store.PutAutoscaleState(ctx, row); err != nil {
 		if m.Log != nil {
-			m.Log.Warn("autoscale state", "instance", instanceID, "err", err)
+			m.log().Warn("autoscale state", "instance", instanceID, "err", err)
 		}
 		return
 	}
@@ -393,7 +393,7 @@ func (m *Manager) autoscaleInstance(ctx context.Context, in *store.Instance, now
 	if _, err := m.ScaleReplicas(ctx, in, dec.Target, reason); err != nil {
 		msg := err.Error()
 		if !errors.Is(err, ErrScaleUnavailable) && m.Log != nil {
-			m.Log.Warn("autoscale", "instance", in.ID, "err", err)
+			m.log().Warn("autoscale", "instance", in.ID, "err", err)
 		}
 		setStatus(func(st *AutoscaleStatus) { st.Reason = "replica 변경 실패: " + msg })
 		return

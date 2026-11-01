@@ -478,14 +478,14 @@ func (m *Manager) deleteDBBackupFiles(ctx context.Context, b *store.DBBackup) er
 		return nil
 	}
 	if err != nil {
-		m.Log.Warn("delete db backup: storage", "backup", b.ID, "err", err)
+		m.log().Warn("delete db backup: storage", "backup", b.ID, "err", err)
 		return err
 	}
 	if b.ObjectKey == "" {
 		return nil
 	}
 	if err := st.Delete(ctx, b.ObjectKey); err != nil {
-		m.Log.Warn("delete db backup file", "backup", b.ID, "err", err)
+		m.log().Warn("delete db backup file", "backup", b.ID, "err", err)
 		return err
 	}
 	return nil
@@ -709,7 +709,7 @@ func (m *Manager) stopForRestore(ctx context.Context, drv Driver, containers []s
 func (m *Manager) startAfterRestore(ctx context.Context, drv Driver, containers []string) {
 	for _, c := range containers {
 		if err := drv.Start(ctx, c); err != nil && m.Log != nil {
-			m.Log.Warn("restore: start database", "container", c, "err", err)
+			m.log().Warn("restore: start database", "container", c, "err", err)
 		}
 		m.undrain(c)
 	}
@@ -733,7 +733,7 @@ func (m *Manager) dbBackupTick(ctx context.Context, now time.Time) {
 			continue
 		}
 		if _, err := m.CreateDBBackup(ctx, in, "schedule", c.DestinationID); err != nil {
-			m.Log.Warn("scheduled db backup", "instance", id, "err", err)
+			m.log().Warn("scheduled db backup", "instance", id, "err", err)
 		}
 	}
 }

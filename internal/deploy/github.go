@@ -44,7 +44,7 @@ func (m *Manager) UserGitHubToken(ctx context.Context, userID string) string {
 	tok, err := m.Store.Unseal(c.Token)
 	if err != nil {
 		if m.Log != nil {
-			m.Log.Warn("github connection token cannot be decrypted (master.key changed?)", "user", userID, "err", err)
+			m.log().Warn("github connection token cannot be decrypted (master.key changed?)", "user", userID, "err", err)
 		}
 		return ""
 	}
@@ -85,9 +85,9 @@ func (m *Manager) refreshGitHubToken(ctx context.Context, c *store.GitHubConnect
 		if m.Log != nil {
 			var oe *ghoauth.Error
 			if errors.As(err, &oe) {
-				m.Log.Warn("github token refresh rejected; the user must reconnect GitHub", "user", c.UserID, "login", c.Login, "err", err)
+				m.log().Warn("github token refresh rejected; the user must reconnect GitHub", "user", c.UserID, "login", c.Login, "err", err)
 			} else {
-				m.Log.Warn("github token refresh failed", "user", c.UserID, "login", c.Login, "err", err)
+				m.log().Warn("github token refresh failed", "user", c.UserID, "login", c.Login, "err", err)
 			}
 		}
 		return nil
@@ -96,7 +96,7 @@ func (m *Manager) refreshGitHubToken(ctx context.Context, c *store.GitHubConnect
 		store.GitHubTokens{Access: t.Access, Refresh: t.Refresh, ExpiresAt: t.ExpiresAt, RefreshExpiresAt: t.RefreshExpiresAt})
 	if err != nil || !ok {
 		if m.Log != nil && err != nil {
-			m.Log.Warn("github token refresh not saved", "user", c.UserID, "err", err)
+			m.log().Warn("github token refresh not saved", "user", c.UserID, "err", err)
 		}
 		if again, gerr := m.Store.GetGitHubConnection(ctx, c.UserID); gerr == nil {
 			return again
@@ -104,7 +104,7 @@ func (m *Manager) refreshGitHubToken(ctx context.Context, c *store.GitHubConnect
 		return nil
 	}
 	if m.Log != nil {
-		m.Log.Info("github token refreshed", "user", c.UserID, "login", c.Login, "expires_at", t.ExpiresAt)
+		m.log().Info("github token refreshed", "user", c.UserID, "login", c.Login, "expires_at", t.ExpiresAt)
 	}
 	nc, err := m.Store.GetGitHubConnection(ctx, c.UserID)
 	if err != nil {

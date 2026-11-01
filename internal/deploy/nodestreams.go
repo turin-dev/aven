@@ -85,7 +85,7 @@ func (m *Manager) followLoop(ctx context.Context, nodeID, what string, call func
 			return
 		}
 		if err != nil && m.Log != nil {
-			m.Log.Warn("node stream ended; retrying", "node", nodeID, "stream", what, "err", err)
+			m.log().Warn("node stream ended; retrying", "node", nodeID, "stream", what, "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -118,7 +118,7 @@ func (m *Manager) HandleAgentRequest(nodeID string, msg agentprotocol.Message) {
 		reply.Error = fmt.Sprintf("operation %q is not allowed", msg.Operation)
 	}
 	if err := m.Agents.Reply(ctx, nodeID, reply); err != nil && m.Log != nil {
-		m.Log.Warn("reply to agent", "node", nodeID, "op", msg.Operation, "err", err)
+		m.log().Warn("reply to agent", "node", nodeID, "op", msg.Operation, "err", err)
 	}
 }
 

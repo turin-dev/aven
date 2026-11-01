@@ -57,7 +57,7 @@ func (m *Manager) SyncProxy(ctx context.Context) error {
 	errs := m.syncProxy(ctx)
 	for n, err := range errs {
 		if n != store.LocalNodeID && err != nil && !errors.Is(err, agentprotocol.ErrOffline) {
-			m.Log.Warn("proxy sync on remote node", "node", n, "err", err)
+			m.log().Warn("proxy sync on remote node", "node", n, "err", err)
 		}
 	}
 	return errs[store.LocalNodeID]
@@ -98,7 +98,7 @@ func (m *Manager) syncProxy(ctx context.Context) map[string]error {
 				if m.externalAllowed(ctx, nk, dm.Upstream) {
 					routes[nk] = append(routes[nk], m.upstreamRoutes(ctx, in, dm)...)
 				} else if m.Log != nil {
-					m.Log.Warn("external upstream not allowed on node; domain not routed", "host", dm.Host, "upstream", dm.Upstream, "node", nk)
+					m.log().Warn("external upstream not allowed on node; domain not routed", "host", dm.Host, "upstream", dm.Upstream, "node", nk)
 				}
 				continue
 			}
@@ -163,7 +163,7 @@ func (m *Manager) syncProxy(ctx context.Context) map[string]error {
 			routes[store.LocalNodeID] = append(routes[store.LocalNodeID], proxy.Route{Hosts: []string{m.Cfg.SelfHost},
 				Upstreams: []string{m.Cfg.SelfUpstream}, SetHeaders: m.Cfg.SelfHeaders})
 		} else if m.Log != nil {
-			m.Log.Warn("a service domain uses aven's own public host; aven-server is not routed", "host", m.Cfg.SelfHost)
+			m.log().Warn("a service domain uses aven's own public host; aven-server is not routed", "host", m.Cfg.SelfHost)
 		}
 	}
 	m.decorateDomainRoutes(ctx, routes, kinds)
@@ -261,7 +261,7 @@ func (m *Manager) Stop(ctx context.Context, in *store.Instance) error {
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
-		m.Log.Warn("proxy sync", "err", err)
+		m.log().Warn("proxy sync", "err", err)
 	}
 	var cur *store.Deployment
 	if in.CurrentDeploymentID != nil {
@@ -306,7 +306,7 @@ func (m *Manager) Restart(ctx context.Context, in *store.Instance) error {
 	}
 	for _, g := range d.Groups() {
 		if !m.nodeOnline(g.NodeID) {
-			m.Log.Warn("restart: node offline", "node", g.NodeID)
+			m.log().Warn("restart: node offline", "node", g.NodeID)
 			continue
 		}
 		drv := m.driverForNode(g.NodeID)
@@ -319,7 +319,7 @@ func (m *Manager) Restart(ctx context.Context, in *store.Instance) error {
 			}
 			if err != nil {
 				// 컨테이너가 없으면 reconcile이 다시 만든다.
-				m.Log.Warn("restart", "container", c, "err", err)
+				m.log().Warn("restart", "container", c, "err", err)
 			}
 		}
 	}
@@ -376,11 +376,11 @@ func (m *Manager) deleteVolumeData(ctx context.Context, v *store.Volume) {
 func (m *Manager) deleteVolumeDataOn(ctx context.Context, v *store.Volume, nodes []string) {
 	for _, n := range nodes {
 		if !m.nodeOnline(n) {
-			m.Log.Warn("remove volume: node offline, volume left in place", "volume", v.DockerName, "node", n)
+			m.log().Warn("remove volume: node offline, volume left in place", "volume", v.DockerName, "node", n)
 			continue
 		}
 		if err := m.driverForNode(n).RemoveVolume(ctx, v.DockerName); err != nil {
-			m.Log.Warn("remove volume", "volume", v.DockerName, "node", n, "err", err)
+			m.log().Warn("remove volume", "volume", v.DockerName, "node", n, "err", err)
 		}
 	}
 	bs, _ := m.Store.ListBackups(ctx, v.ID)
@@ -405,7 +405,7 @@ func (m *Manager) DeleteService(ctx context.Context, svc *store.Service) error {
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
-		m.Log.Warn("proxy sync", "err", err)
+		m.log().Warn("proxy sync", "err", err)
 	}
 	for _, drv := range m.onlineDrivers(ctx) {
 		for _, img := range drv.ImagesByRepo(ctx, m.imageRepo(svc.ID)) {
@@ -437,7 +437,7 @@ func (m *Manager) DeleteEnvironment(ctx context.Context, env *store.Environment)
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
-		m.Log.Warn("proxy sync", "err", err)
+		m.log().Warn("proxy sync", "err", err)
 	}
 	m.removeEnvNetwork(ctx, env.ID)
 	return nil
@@ -497,14 +497,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			continue
 		}
 		if rerr := m.reconcileNode(ctx, n.ID); rerr != nil && ctx.Err() == nil {
-			m.Log.Warn("reconcile: remote node", "node", n.ID, "err", rerr)
+			m.log().Warn("reconcile: remote node", "node", n.ID, "err", rerr)
 		}
 	}
 	if err != nil {
 		return err
 	}
 	if merr := m.SyncMesh(ctx); merr != nil && ctx.Err() == nil {
-		m.Log.Warn("reconcile: mesh", "err", merr)
+		m.log().Warn("reconcile: mesh", "err", merr)
 	}
 	return m.SyncProxy(ctx)
 }
@@ -516,7 +516,7 @@ func (m *Manager) ReconcileNode(ctx context.Context, nodeID string) error {
 		return err
 	}
 	if merr := m.SyncMesh(ctx); merr != nil && ctx.Err() == nil {
-		m.Log.Warn("reconcile: mesh", "node", nodeID, "err", merr)
+		m.log().Warn("reconcile: mesh", "node", nodeID, "err", merr)
 	}
 	return m.syncProxy(ctx)[nodeKey(nodeID)]
 }
@@ -548,7 +548,7 @@ func (m *Manager) reconcileNode(ctx context.Context, nodeID string) error {
 	for _, e := range envs {
 		if local || envOnNode[e.ID] {
 			if err := m.ensureEnvNetwork(ctx, e, nodeID); err != nil {
-				m.Log.Warn("reconcile: env network", "env", e.ID, "node", nodeID, "err", err)
+				m.log().Warn("reconcile: env network", "env", e.ID, "node", nodeID, "err", err)
 			}
 		}
 	}
@@ -594,7 +594,7 @@ func (m *Manager) reconcileNode(ctx context.Context, nodeID string) error {
 		}
 		if t, err := m.Load(ctx, in.ID); err == nil {
 			if err := m.syncTCPProxy(ctx, t); err != nil {
-				m.Log.Warn("reconcile: tcp proxy", "instance", in.ID, "node", nodeID, "err", err)
+				m.log().Warn("reconcile: tcp proxy", "instance", in.ID, "node", nodeID, "err", err)
 			}
 		}
 	}
@@ -608,7 +608,7 @@ func (m *Manager) reconcileNode(ctx context.Context, nodeID string) error {
 		case node.RoleCron, node.RolePreDeploy:
 			// 보통 실행기가 끝나면 지운다. 실행 중에 aven-server가 재시작했으면(원격 노드는 그때 연결도 없다) 아무도 지우지 않는다.
 			if m.staleRunner(ctx, role, labels) {
-				m.Log.Info("reconcile: removing leftover "+role+" container", "container", name, "node", nodeID)
+				m.log().Info("reconcile: removing leftover "+role+" container", "container", name, "node", nodeID)
 				drv.Remove(ctx, name, 10)
 			}
 			continue
@@ -621,7 +621,7 @@ func (m *Manager) reconcileNode(ctx context.Context, nodeID string) error {
 		if !m.isOrphan(ctx, labels, nodeID) {
 			continue
 		}
-		m.Log.Info("reconcile: removing orphan container", "container", name, "node", nodeID)
+		m.log().Info("reconcile: removing orphan container", "container", name, "node", nodeID)
 		drv.Remove(ctx, name, 10)
 	}
 	return nil
@@ -658,14 +658,14 @@ func (m *Manager) reconcileInstance(ctx context.Context, t *Target, nodeID strin
 		st := states[c]
 		switch {
 		case st == nil:
-			m.Log.Warn("reconcile: container missing, recreating", "service", t.Service.Name, "container", c, "node", nodeKey(nodeID))
+			m.log().Warn("reconcile: container missing, recreating", "service", t.Service.Name, "container", c, "node", nodeKey(nodeID))
 			m.ensureEnvNetwork(ctx, t.Env, nodeID)
 			if err := drv.Run(ctx, m.runSpecNamed(t, d, c, replicaIndex(c))); err != nil {
-				m.Log.Error("reconcile: recreate failed", "service", t.Service.Name, "err", err)
+				m.log().Error("reconcile: recreate failed", "service", t.Service.Name, "err", err)
 			}
 		case !st.Running && st.Status != "restarting" && in.Status != store.InstCrashed:
 			if d.Spec.RestartPolicy == "always" {
-				m.Log.Warn("reconcile: container stopped, starting", "container", c, "status", st.Status)
+				m.log().Warn("reconcile: container stopped, starting", "container", c, "status", st.Status)
 				drv.Start(ctx, c)
 			} else {
 				m.markCrashed(ctx, t, d, c, st.ExitCode)
@@ -745,7 +745,7 @@ func (m *Manager) ReconcileLoop(ctx context.Context, every time.Duration) {
 	defer t.Stop()
 	for {
 		if err := m.Reconcile(ctx); err != nil && ctx.Err() == nil {
-			m.Log.Error("reconcile", "err", err)
+			m.log().Error("reconcile", "err", err)
 		}
 		select {
 		case <-ctx.Done():

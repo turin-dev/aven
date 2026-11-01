@@ -530,7 +530,7 @@ func (m *Manager) ConfigurePITR(ctx context.Context, in *store.Instance, enabled
 		if cur.Enabled {
 			if pt, err := m.pitrTargetFor(ctx, in); err == nil && pt.kind == "postgres" && pt.container != "" {
 				if _, err := m.pitrExec(ctx, pt, pgTeardownScript, map[string]string{"PITR_DIR": pt.archiveDir()}); err != nil {
-					m.Log.Warn("pitr teardown", "instance", in.ID, "err", err)
+					m.log().Warn("pitr teardown", "instance", in.ID, "err", err)
 				}
 			}
 		}
@@ -594,7 +594,7 @@ func (m *Manager) pitrTick(ctx context.Context, now time.Time) {
 	for id := range cfgs {
 		go func(id string) {
 			if err := m.pitrSyncInstance(context.Background(), id, now); err != nil && !errors.Is(err, ErrPITRBusy) {
-				m.Log.Warn("pitr sync", "instance", id, "err", err)
+				m.log().Warn("pitr sync", "instance", id, "err", err)
 			}
 		}(id)
 	}
@@ -652,7 +652,7 @@ func (m *Manager) pitrSyncInstance(ctx context.Context, id string, now time.Time
 	if cfg != nil && cfg.Enabled && (cfg.LastBaseAt == nil || now.Sub(*cfg.LastBaseAt) >= pitrBaseEvery) &&
 		(cfg.LastBaseTry == nil || now.Sub(*cfg.LastBaseTry) >= pitrBaseBackoff) {
 		if err := m.StartPITRBase(context.Background(), in); err != nil && !errors.Is(err, ErrPITRBusy) {
-			m.Log.Warn("pitr base", "instance", id, "err", err)
+			m.log().Warn("pitr base", "instance", id, "err", err)
 		}
 	}
 	if !PITRRestoreRunning(id) { // 복원이 읽고 있는 파일은 지우지 않는다
@@ -1035,7 +1035,7 @@ func (m *Manager) deletePITRObject(ctx context.Context, o *store.DBPITRObject) e
 		return err
 	}
 	if err := st.Delete(ctx, o.ObjectKey); err != nil {
-		m.Log.Warn("pitr delete", "object", o.ID, "err", err)
+		m.log().Warn("pitr delete", "object", o.ID, "err", err)
 		return err
 	}
 	return m.Store.DeleteDBPITRObject(ctx, o.ID)
@@ -1189,7 +1189,7 @@ func (m *Manager) runPITRRestore(ctx context.Context, src, target *store.Instanc
 	if cur, err := m.Store.GetInstance(ctx, src.ID); err == nil && cur.Status == store.InstOnline {
 		step("최근 로그 보관")
 		if err := m.SyncPITRNow(ctx, cur); err != nil {
-			m.Log.Warn("pitr restore: sync source", "instance", src.ID, "err", err)
+			m.log().Warn("pitr restore: sync source", "instance", src.ID, "err", err)
 		}
 	}
 	objs, err := m.Store.ListDBPITRObjects(ctx, src.ID)

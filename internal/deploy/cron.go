@@ -52,7 +52,7 @@ func (m *Manager) cronInstancesTick(ctx context.Context, now time.Time) {
 			continue
 		}
 		if _, err := m.RunCron(ctx, in); err != nil {
-			m.Log.Warn("cron run", "instance", in.ID, "err", err)
+			m.log().Warn("cron run", "instance", in.ID, "err", err)
 		}
 	}
 }
@@ -68,7 +68,7 @@ func (m *Manager) volumeBackupTick(ctx context.Context, now time.Time) {
 		}
 		if s, err := cronx.Parse(*v.BackupCron); err == nil && s.Match(now) {
 			if _, err := m.CreateBackup(ctx, v); err != nil {
-				m.Log.Warn("scheduled backup", "volume", v.ID, "err", err)
+				m.log().Warn("scheduled backup", "volume", v.ID, "err", err)
 			}
 		}
 	}

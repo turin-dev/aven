@@ -83,7 +83,7 @@ func (m *Manager) SleepLoop(ctx context.Context) {
 				continue
 			}
 			if err := m.Sleep(ctx, in); err != nil {
-				m.Log.Warn("sleep", "instance", in.ID, "err", err)
+				m.log().Warn("sleep", "instance", in.ID, "err", err)
 			}
 		}
 	}
@@ -311,7 +311,7 @@ func (m *Manager) WakeHandler() http.Handler {
 		// 진행 중인 sleep이 중단 직전이라도 새 요청을 감지하게 한다.
 		m.HTTPLogs.Touch(id)
 		if err := m.Wake(r.Context(), id); err != nil {
-			m.Log.Warn("wake", "host", host, "err", err)
+			m.log().Warn("wake", "host", host, "err", err)
 			http.Error(w, "service is waking up, please retry: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}

@@ -324,6 +324,6 @@ func imageUpdateStatus(s store.DeployStatus) string {
 
 func (m *Manager) warn(msg string, args ...any) {
 	if m.Log != nil {
-		m.Log.Warn(msg, args...)
+		m.log().Warn(msg, args...)
 	}
 }

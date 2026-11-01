@@ -186,7 +186,7 @@ func (m *Manager) AssignDomainIPv6(ctx context.Context) error {
 	}
 	for _, c := range ch {
 		if m.Log != nil {
-			m.Log.Info("domain ipv6", "host", c.Host, "old", c.Old, "new", c.New)
+			m.log().Info("domain ipv6", "host", c.Host, "old", c.Old, "new", c.New)
 		}
 	}
 	return nil
@@ -294,13 +294,13 @@ func (m *Manager) ensureNodeIPv6(ctx context.Context, nodeID string, pool netip.
 		prev := m.ipv6StatusRaw(nodeID)
 		m.setIPv6Status(nodeID, st)
 		if m.Log != nil && (prev == nil || prev.LastError != st.LastError) { // 같은 오류를 60초마다 남기지 않는다
-			m.Log.Warn("domain ipv6 sync", "node", nodeID, "err", err)
+			m.log().Warn("domain ipv6 sync", "node", nodeID, "err", err)
 		}
 		return err
 	}
 	m.setIPv6Status(nodeID, st)
 	if res != nil && (res.Added > 0 || res.Removed > 0) && m.Log != nil {
-		m.Log.Info("domain ipv6 addresses", "node", nodeID, "iface", res.Iface, "pool", pool, "added", res.Added, "removed", res.Removed, "present", res.Present)
+		m.log().Info("domain ipv6 addresses", "node", nodeID, "iface", res.Iface, "pool", pool, "added", res.Added, "removed", res.Removed, "present", res.Present)
 	}
 	return nil
 }
@@ -387,7 +387,7 @@ func (m *Manager) ReleaseIPv6Pool(ctx context.Context, nodeID string, old netip.
 		return nil
 	}
 	if err == nil && res != nil && res.Removed > 0 && m.Log != nil {
-		m.Log.Info("domain ipv6 old pool released", "node", nodeID, "pool", old, "removed", res.Removed)
+		m.log().Info("domain ipv6 old pool released", "node", nodeID, "pool", old, "removed", res.Removed)
 	}
 	return err
 }

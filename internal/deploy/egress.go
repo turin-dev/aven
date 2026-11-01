@@ -269,7 +269,7 @@ func (m *Manager) syncEgressNode(ctx context.Context, nodeID string, blocked []s
 		n.clean = len(blocked) == 0 && res != nil && res.Rules == 0
 	})
 	if res != nil && (res.Added > 0 || res.Removed > 0) && m.Log != nil {
-		m.Log.Info("egress6 rules", "node", nodeID, "added", res.Added, "removed", res.Removed, "rules", res.Rules)
+		m.log().Info("egress6 rules", "node", nodeID, "added", res.Added, "removed", res.Removed, "rules", res.Rules)
 	}
 	return nil
 }
@@ -288,7 +288,7 @@ func (m *Manager) logEgressErr(nodeID string, err error) {
 	n.lastErr = err.Error()
 	m.egressSt.mu.Unlock()
 	if !same && m.Log != nil {
-		m.Log.Warn("egress6 sync", "node", nodeID, "err", err)
+		m.log().Warn("egress6 sync", "node", nodeID, "err", err)
 	}
 }
 

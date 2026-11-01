@@ -353,7 +353,7 @@ func (m *Manager) Enqueue(ctx context.Context, in *store.Instance, o EnqueueOpts
 	}
 	// function 서비스는 배포를 만들 때의 코드를 스냅샷으로 남긴다(pending_changes와 재빌드 기준). 다른 서비스는 복사할 행이 없다.
 	if err := m.Store.SnapshotFunctionCode(ctx, d); err != nil && m.Log != nil {
-		m.Log.Warn("function snapshot", "deployment", d.ID, "err", err)
+		m.log().Warn("function snapshot", "deployment", d.ID, "err", err)
 	}
 	if d.Status == store.DepSkipped {
 		if t, err := m.Load(ctx, in.ID); err == nil {
@@ -1400,6 +1400,14 @@ func lexicalJoin(root, rel string) (string, error) {
 		return "", fmt.Errorf("잘못된 경로: %s", rel)
 	}
 	return p, nil
+}
+
+// log is the manager's logger; a Manager built without one (tests, tools) logs to slog.Default instead of panicking.
+func (m *Manager) log() *slog.Logger {
+	if m.Log == nil {
+		return slog.Default()
+	}
+	return m.Log
 }
 
 func safeJoin(root, rel string) (string, error) {

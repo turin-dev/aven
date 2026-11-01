@@ -12,7 +12,7 @@ import (
 func (m *Manager) attachEdge(ctx context.Context, in *store.Instance, rt *proxy.Route) {
 	settings, err := m.Store.GetEdgeSettings(ctx, in.ID)
 	if err != nil {
-		m.Log.Warn("edge settings", "instance", in.ID, "err", err)
+		m.log().Warn("edge settings", "instance", in.ID, "err", err)
 		return
 	}
 	if settings.Enabled() {
@@ -25,7 +25,7 @@ func (m *Manager) attachEdge(ctx context.Context, in *store.Instance, rt *proxy.
 func (m *Manager) edgePurgeOnDeploy(ctx context.Context, insts []*store.Instance) {
 	all, err := m.Store.ListEdgeSettings(ctx)
 	if err != nil {
-		m.Log.Warn("edge settings", "err", err)
+		m.log().Warn("edge settings", "err", err)
 		return
 	}
 	for _, in := range insts {
@@ -50,7 +50,7 @@ func (m *Manager) edgePurgeOnDeploy(ctx context.Context, insts []*store.Instance
 			}
 		}
 		if err := m.Store.SaveEdgeSettings(ctx, in.ID, settings); err != nil {
-			m.Log.Warn("edge purge on deploy", "instance", in.ID, "err", err)
+			m.log().Warn("edge purge on deploy", "instance", in.ID, "err", err)
 		}
 	}
 }
