@@ -120,16 +120,16 @@ func (m *Manager) IsRemoteVolume(ctx context.Context, v *store.Volume) bool {
 func (m *Manager) removeEnvNetwork(ctx context.Context, envID string) {
 	// 환경 네트워크에 붙은 mesh forwarder를 먼저 지운다(DB에서 환경이 지워졌으므로 mesh 원하는 상태에서 빠진다).
 	if err := m.SyncMesh(ctx); err != nil {
-		m.Log.Warn("mesh sync before network removal", "err", err)
+		m.log().Warn("mesh sync before network removal", "err", err)
 	}
 	for _, name := range []string{EnvNetwork(envID), LegacyEnvNetwork(envID)} {
 		if err := m.Docker.RemoveNetwork(ctx, name, proxy.ContainerName, proxy.LegacyContainerName); err != nil {
-			m.Log.Warn("remove network", "network", name, "err", err)
+			m.log().Warn("remove network", "network", name, "err", err)
 		}
 		for _, n := range m.remoteNodes(ctx) {
 			if m.nodeOnline(n.ID) {
 				if err := m.driverForNode(n.ID).RemoveNetwork(ctx, name); err != nil {
-					m.Log.Warn("remove network", "node", n.ID, "network", name, "err", err)
+					m.log().Warn("remove network", "node", n.ID, "network", name, "err", err)
 				}
 			}
 		}

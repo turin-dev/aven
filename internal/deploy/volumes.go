@@ -190,7 +190,7 @@ func (m *Manager) RestoreBackup(ctx context.Context, b *store.Backup) error {
 	go func() {
 		ctx := context.Background()
 		if err := m.restore(ctx, v, b); err != nil {
-			m.Log.Error("restore", "backup", b.ID, "err", err)
+			m.log().Error("restore", "backup", b.ID, "err", err)
 			m.emitVolume(ctx, v, "backup.restore_failed", fmt.Sprintf("볼륨 %s를 백업 %s로 복원하지 못했습니다: %v", v.Name, b.ID, err))
 		}
 	}()

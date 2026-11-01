@@ -353,7 +353,7 @@ func (m *Manager) SyncMesh(ctx context.Context) error {
 	if m.LocalMesh != nil {
 		if c, err := m.localMeshCert(); err == nil && c.Leaf != nil && agentpki.NeedsRenewal(c.Leaf.NotAfter, time.Now()) {
 			if err := m.issueLocalMeshCert(); err != nil {
-				m.Log.Warn("mesh: local certificate renewal", "err", err)
+				m.log().Warn("mesh: local certificate renewal", "err", err)
 			}
 		}
 	}
@@ -392,7 +392,7 @@ func (m *Manager) SyncMesh(ctx context.Context) error {
 				continue
 			}
 			if _, err := mesh.Ensure(ctx, m.LocalMesh, m.Docker, cfg); err != nil {
-				m.Log.Warn("mesh: local", "err", err)
+				m.log().Warn("mesh: local", "err", err)
 			}
 			continue
 		}
@@ -426,7 +426,7 @@ func (m *Manager) syncMeshAsync() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		if err := m.SyncMesh(ctx); err != nil && m.Log != nil {
-			m.Log.Warn("mesh sync", "err", err)
+			m.log().Warn("mesh sync", "err", err)
 		}
 	})
 }

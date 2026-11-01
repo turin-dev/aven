@@ -531,7 +531,7 @@ func (m *Manager) ScaleReplicas(ctx context.Context, in *store.Instance, n int, 
 	defer func() {
 		if !committedResources {
 			if err := m.Store.PrepareDeploymentResources(ctx, d, res.From); err != nil && m.Log != nil {
-				m.Log.Warn("restore replica resource reservation", "deployment", d.ID, "err", err)
+				m.log().Warn("restore replica resource reservation", "deployment", d.ID, "err", err)
 			}
 		}
 	}()

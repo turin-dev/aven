@@ -67,7 +67,7 @@ func (m *Manager) applyRemoteProxy(ctx context.Context, nodeID string, routes []
 	pc.noCheck[nodeID] = time.Now()
 	pc.mu.Unlock()
 	if m.Log != nil {
-		m.Log.Info("node agent does not support domain check routes; sending routes without them (DNS/TXT verification only)", "node", nodeID)
+		m.log().Info("node agent does not support domain check routes; sending routes without them (DNS/TXT verification only)", "node", nodeID)
 	}
 	return drv.applyProxy(ctx, withoutDomainCheck(routes))
 }
@@ -100,7 +100,7 @@ func (m *Manager) decorateDomainRoutes(ctx context.Context, routes map[string][]
 			states[st.Host] = st
 		}
 	} else if m.Log != nil {
-		m.Log.Warn("domain states unavailable; not holding ACME for new domains", "err", err)
+		m.log().Warn("domain states unavailable; not holding ACME for new domains", "err", err)
 	}
 	tokens := map[string]string{}
 	for nk, rs := range routes {

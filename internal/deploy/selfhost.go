@@ -270,7 +270,7 @@ func (m *Manager) finishSelfDeploy(ctx context.Context) {
 	}
 	res, err := selfhost.TakeResult(m.Cfg.DataDir)
 	if err != nil {
-		m.Log.Warn("selfhost result", "err", err)
+		m.log().Warn("selfhost result", "err", err)
 	}
 	if res != nil {
 		m.selfRolledBack(ctx, res)
@@ -298,7 +298,7 @@ func (m *Manager) finishSelfDeploy(ctx context.Context) {
 		prev := t.Instance.CurrentDeploymentID
 		// 새 서버가 이 설정으로 떴다: 다음 교체가 실패하면 되돌릴 기준으로 둔다.
 		if err := selfhost.SaveGoodEnv(m.Cfg.DataDir, m.selfEnvFile()); err != nil {
-			m.Log.Warn("selfhost: save env snapshot", "err", err)
+			m.log().Warn("selfhost: save env snapshot", "err", err)
 		}
 		m.Store.SetInstanceStatus(ctx, t.Instance.ID, store.InstOnline, &d.ID)
 		m.finish(ctx, d, store.DepLive, "")
@@ -331,9 +331,9 @@ func (m *Manager) selfRolledBack(ctx context.Context, res *selfhost.Result) {
 	}
 	// 대시보드에서 고친 서버 설정 때문일 수 있다: 이전 서버가 쓰던 설정으로 env 파일을 되돌린다.
 	if restored, err := selfhost.RestoreGoodEnv(m.Cfg.DataDir, m.selfEnvFile()); err != nil {
-		m.Log.Warn("selfhost: restore env", "err", err)
+		m.log().Warn("selfhost: restore env", "err", err)
 	} else if restored {
-		m.Log.Warn("selfhost: restored the server settings that last worked", "file", m.selfEnvFile())
+		m.log().Warn("selfhost: restored the server settings that last worked", "file", m.selfEnvFile())
 		if b, err := m.Logs.Open(d.ID); err == nil {
 			b.Printf("서버 설정(%s)을 마지막으로 정상 동작한 내용으로 되돌렸습니다", m.selfEnvFile())
 			b.Close(string(store.DepFailed))
