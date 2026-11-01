@@ -1,16 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowUp, History, MessageSquare, Plus, ShieldAlert, Sparkles, Square, Trash2, Wrench, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Ban, CheckCircle2, ChevronRight, History, MessageSquare, Plus, ShieldAlert, Sparkles, Square, Trash2, Wrench, X, XCircle } from "lucide-react";
 import { agentApi, type AgentMessage, type AgentPendingAction, type AgentStreamEvent } from "@/lib/agentApi";
 import { useCaps } from "@/lib/queries";
 import type { Workspace } from "@/lib/workspace";
 import { t, dateLocale } from "@/lib/i18n";
 import { Button, EmptyState, IconButton, Menu, MenuItem, Spinner, cx, errorMessage, useEscape } from "./ui";
+import { Markdown } from "./AgentMarkdown";
 
 
 const OPEN_EVENT = "keel:agent-open";
@@ -22,8 +23,9 @@ export function openAvenAgent(detail: OpenDetail = {}) {
 type Item =
   | { kind: "user"; text: string }
   | { kind: "assistant"; text: string }
-  | { kind: "tool"; name: string; isError?: boolean; declined?: boolean }
-  | { kind: "error"; text: string };
+  | { kind: "tool"; name: string; args?: Record<string, unknown>; result?: unknown; isError?: boolean; declined?: boolean }
+  | { kind: "error"; text: string }
+  | { kind: "stopped" };
 const TOOL_LABELS: Record<string, string> = {
   list_projects: t("프로젝트 목록 확인"),
   list_services: t("서비스 상태 확인"),
@@ -49,42 +51,6 @@ function fromThread(messages: AgentMessage[]): Item[] {
     m.role === "tool" ? { kind: "tool", name: m.tool ?? "" } : { kind: m.role, text: m.content ?? "" },
   );
 }
-/* ── tiny markdown (code fences, inline code, bold); rendered as React nodes, never as HTML ── */
-function inline(text: string, key: string): ReactNode[] {
-  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/g).map((part, i) => {
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 2)
-      return (
-        <code key={`${key}-${i}`} className="rounded bg-gray-100 px-1 py-px font-mono text-xs">
-          {part.slice(1, -1)}
-        </code>
-      );
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4)
-      return (
-        <strong key={`${key}-${i}`} className="font-semibold text-foreground">
-          {part.slice(2, -2)}
-        </strong>
-      );
-    return part;
-  });
-}
-function Markdown({ text }: { text: string }) {
-  const blocks = text.split(/```[^\n]*\n?/);
-  return (
-    <>
-      {blocks.map((block, i) =>
-        i % 2 === 1 ? (
-          <pre key={i} className="my-2 overflow-x-auto rounded-md bg-gray-100 p-2 font-mono text-xs leading-[18px] text-foreground">
-            {block.replace(/\n$/, "")}
-          </pre>
-        ) : (
-          <span key={i} className="whitespace-pre-wrap break-words">
-            {inline(block, String(i))}
-          </span>
-        ),
-      )}
-    </>
-  );
-}
 /* ── panel ───────────────────────────────────────────────────────────── */
 function useAgentContext(ws: Workspace) {
   const params = useSearchParams();
@@ -107,9 +73,12 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
   const inputRef = useRef<HTMLTextAreaElement>(null);
   useEscape(onClose);
   useEffect(() => () => abort.current?.abort(), []);
+  // Follow the reply while the reader is at the bottom; scrolling up to read earlier text stops that.
+  const pinned = useRef(true);
   useEffect(() => {
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [items, pending]);
+    const el = scroller.current;
+    if (el && pinned.current) el.scrollTo({ top: el.scrollHeight });
+  }, [items, pending, busy]);
   const onEvent = useCallback(
     (e: AgentStreamEvent) => {
       switch (e.event) {
@@ -124,7 +93,7 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
           });
           break;
         case "tool":
-          setItems((cur) => [...cur, { kind: "tool", name: e.data.name, isError: e.data.is_error, declined: e.data.declined }]);
+          setItems((cur) => [...cur, { kind: "tool", name: e.data.name, args: e.data.arguments, result: e.data.result, isError: e.data.is_error, declined: e.data.declined }]);
           if (e.data.name in ACTION_TITLES && !e.data.declined) {
             // The action changed something: refresh canvas, instances and deployments.
             for (const key of ["canvas", "instance", "deployments", "project"]) qc.invalidateQueries({ queryKey: [key] });
@@ -132,6 +101,14 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
           break;
         case "confirmation_required":
           setPending(e.data);
+          break;
+        case "done":
+          // Models that do not stream tokens only send the final reply here.
+          if (e.data.response)
+            setItems((cur) => {
+              const lastUser = cur.map((x) => x.kind).lastIndexOf("user");
+              return cur.slice(lastUser + 1).some((x) => x.kind === "assistant") ? cur : [...cur, { kind: "assistant", text: e.data.response }];
+            });
           break;
         case "error":
           setItems((cur) => [...cur, { kind: "error", text: e.data.message }]);
@@ -171,10 +148,18 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
         setItems([{ kind: "user", text }]);
       } else setItems((cur) => [...cur, { kind: "user", text }]);
       setInput("");
+      pinned.current = true;
       void runStream((signal) => agentApi.chat({ ...(opts.context ?? ctx), thread_id: tid, prompt: text }, onEvent, signal));
     },
     [ctx, onEvent, runStream, threadId],
   );
+  /** Stop the reply: keep what streamed so far and say that it was cut off. */
+  const stop = () => {
+    if (!abort.current) return;
+    abort.current.abort();
+    setItems((cur) => (cur[cur.length - 1]?.kind === "stopped" ? cur : [...cur, { kind: "stopped" }]));
+    inputRef.current?.focus();
+  };
   const decide = (approve: boolean) => {
     if (!pending || !threadId) return;
     const callId = pending.call_id;
@@ -279,7 +264,15 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
           <X />
         </IconButton>
       </header>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto px-4 py-4" aria-live="polite">
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        }}
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+        aria-busy={busy}
+      >
         {settings.isPending || loadingThread ? (
           <div className="flex justify-center py-10">
             <Spinner />
@@ -327,14 +320,14 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
                   <div className="whitespace-pre-wrap break-words rounded-lg bg-pink-500 px-3 py-2 text-sm text-white">{item.text}</div>
                 </div>
               ) : item.kind === "assistant" ? (
-                <div key={i} className="mr-4 text-sm leading-6 text-foreground">
-                  <Markdown text={item.text} />
+                <div key={i} className="mr-2 text-sm leading-6 text-foreground">
+                  <Markdown text={item.text} streaming={busy && i === items.length - 1} />
                 </div>
               ) : item.kind === "tool" ? (
-                <div key={i} className={cx("flex items-center gap-1.5 text-xs", item.isError ? "text-danger" : "text-gray-500")}>
-                  <Wrench className="size-3" />
-                  {TOOL_LABELS[item.name] ?? item.name}
-                  {item.declined ? ` · ${t("거절됨")}` : item.isError ? ` · ${t("실패")}` : ""}
+                <ToolCall key={i} item={item} />
+              ) : item.kind === "stopped" ? (
+                <div key={i} className="flex items-center gap-1.5 text-xs text-gray-500">
+                  <Square className="size-2.5 fill-current" aria-hidden /> {t("응답을 중지했습니다")}
                 </div>
               ) : (
                 <div key={i} role="alert" className="flex items-start gap-2 rounded-md bg-danger-surface px-3 py-2 text-xs text-danger">
@@ -343,8 +336,8 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
                 </div>
               ),
             )}
-            {busy && !pending && (
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+            {busy && !pending && items[items.length - 1]?.kind !== "assistant" && (
+              <div role="status" className="flex items-center gap-2 text-xs text-gray-500">
                 <Spinner className="size-3" /> {t("생각하는 중…")}
               </div>
             )}
@@ -380,8 +373,8 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
               style={{ fieldSizing: "content" } as React.CSSProperties}
             />
             {busy ? (
-              <IconButton label={t("응답 중지")} size="sm" onClick={() => abort.current?.abort()}>
-                <Square />
+              <IconButton label={t("응답 중지")} size="sm" onClick={stop} className="!text-foreground">
+                <Square className="fill-current" />
               </IconButton>
             ) : (
               <IconButton label={t("보내기")} size="sm" type="submit" disabled={!input.trim() || !!pending} className="!text-pink-500 disabled:!text-gray-400">
@@ -399,6 +392,53 @@ function AgentPanel({ ws, onClose, request }: { ws: Workspace; onClose: () => vo
     </aside>
   );
 }
+/** Pretty JSON for tool arguments and results, cut to a size the panel can show. */
+function preview(v: unknown, max = 4000): string | null {
+  if (v === undefined || v === null || (typeof v === "object" && !Array.isArray(v) && !Object.keys(v as object).length)) return null;
+  const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  return text.length > max ? `${text.slice(0, max)}\n… ${t("({count}자 생략)", { count: text.length - max })}` : text;
+}
+
+/** A tool the agent ran: label and outcome, with arguments and result behind a disclosure. */
+function ToolCall({ item }: { item: Extract<Item, { kind: "tool" }> }) {
+  const args = preview(item.args, 1500);
+  const result = preview(item.result);
+  const label = TOOL_LABELS[item.name] ?? item.name;
+  const status = item.declined ? t("거절됨") : item.isError ? t("실패") : t("완료");
+  const Icon = item.declined ? Ban : item.isError ? XCircle : CheckCircle2;
+  const head = (
+    <>
+      <Wrench className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0 truncate">{label}</span>
+      <Icon className={cx("size-3 shrink-0", item.isError ? "text-danger" : item.declined ? "text-gray-400" : "text-success")} aria-hidden />
+      <span className="sr-only">{status}</span>
+    </>
+  );
+  if (!args && !result) return <div className={cx("flex items-center gap-1.5 text-xs", item.isError ? "text-danger" : "text-gray-500")}>{head}</div>;
+  return (
+    <details className="group/tool text-xs text-gray-500">
+      <summary className={cx("flex w-fit max-w-full cursor-pointer select-none list-none items-center gap-1.5 rounded px-1 -mx-1 hover:bg-gray-100 hover:text-foreground [&::-webkit-details-marker]:hidden", item.isError && "text-danger")}>
+        {head}
+        <ChevronRight className="size-3 shrink-0 transition-transform group-open/tool:rotate-90 motion-reduce:transition-none" aria-hidden />
+      </summary>
+      <div className="mt-1.5 space-y-1.5 border-l border-gray-200 pl-3">
+        {args && (
+          <div>
+            <div className="mb-0.5 text-[11px] font-medium text-gray-500">{t("인자")}</div>
+            <pre className="max-h-40 overflow-auto rounded bg-gray-100 p-2 font-mono text-[11px] leading-4 text-foreground">{args}</pre>
+          </div>
+        )}
+        {result && (
+          <div>
+            <div className="mb-0.5 text-[11px] font-medium text-gray-500">{t("결과")}</div>
+            <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-100 p-2 font-mono text-[11px] leading-4 text-foreground">{result}</pre>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 function ConfirmCard({ action, busy, onDecide }: { action: AgentPendingAction; busy: boolean; onDecide: (approve: boolean) => void }) {
   const args = action.arguments && Object.keys(action.arguments).length ? JSON.stringify(action.arguments, null, 2) : null;
   const danger = action.name === "rollback_deployment" || action.name === "set_variables";
@@ -430,6 +470,7 @@ function ConfirmCard({ action, busy, onDecide }: { action: AgentPendingAction; b
 export function AgentButton({ ws }: { ws: Workspace }) {
   const [open, setOpen] = useState(false);
   const [request, setRequest] = useState<(OpenDetail & { seq: number }) | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let seq = 0;
     const onOpen = (e: Event) => {
@@ -443,6 +484,7 @@ export function AgentButton({ ws }: { ws: Workspace }) {
   return (
     <>
       <button
+        ref={button}
         type="button"
         aria-label={t("Aven 에이전트")}
         aria-pressed={open}
@@ -465,6 +507,7 @@ export function AgentButton({ ws }: { ws: Workspace }) {
             onClose={() => {
               setOpen(false);
               setRequest(null);
+              button.current?.focus();
             }}
           />,
           document.body,

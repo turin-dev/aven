@@ -102,12 +102,13 @@ func (s *Store) ConsumeJoinToken(ctx context.Context, hash, credentialHash strin
 	return result, err
 }
 
-func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
+const nodeCols = `id, name, schedulable, labels, created_at, status, address, last_seen_at, info, draining, ` + ingressCols
+
+func scanNode(r scanner) (*Node, error) {
 	var n Node
 	var address, labels, created, info string
 	var seen *string
-	err := s.q.QueryRowContext(ctx, `SELECT id, name, schedulable, labels, created_at, status, address, last_seen_at, info, draining, `+ingressCols+` FROM nodes WHERE id=?`, id).
-		Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &n.Status, &address, &seen, &info, &n.Draining, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
+	err := r.Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &n.Status, &address, &seen, &info, &n.Draining, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -117,7 +118,7 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 		n.MeshPort = ni.MeshPort
 		n.ExternalUpstreams = ni.ExternalUpstreams
 	}
-	n.IsLocal = id == LocalNodeID
+	n.IsLocal = n.ID == LocalNodeID
 	n.CreatedAt = parseTS(created)
 	if seen != nil {
 		n.LastSeenAt = parseTS(*seen)
@@ -130,34 +131,27 @@ func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
 	return &n, nil
 }
 
+func (s *Store) GetNode(ctx context.Context, id string) (*Node, error) {
+	return scanNode(s.q.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, id))
+}
+
+// ListNodes는 모든 노드를 한 쿼리로 읽는다. 예전에는 id 목록을 읽은 뒤 노드마다 GetNode를 불러서(N+1)
+// 그 사이 노드가 지워지면 목록 전체가 ErrNotFound로 실패했다.
 func (s *Store) ListNodes(ctx context.Context) ([]*Node, error) {
-	rows, err := s.q.QueryContext(ctx, `SELECT id FROM nodes ORDER BY created_at, id`)
+	rows, err := s.q.QueryContext(ctx, `SELECT `+nodeCols+` FROM nodes ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
-	var ids []string
+	defer rows.Close()
+	out := []*Node{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*Node, 0, len(ids))
-	for _, id := range ids {
-		n, err := s.GetNode(ctx, id)
+		n, err := scanNode(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, n)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *Store) VerifyNodeCredential(ctx context.Context, id, credentialHash string) error {

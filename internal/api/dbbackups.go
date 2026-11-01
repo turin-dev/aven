@@ -360,6 +360,42 @@ func (s *Server) downloadDBBackup(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, rc)
 }
 
+// requireTargetEnv는 본문으로 가리킨 다른 환경(복원 대상 등)에 요청 주체가 min 이상의 권한이 있는지 확인한다.
+// 없으면 응답을 쓰고 false다: 보이지 않는 환경은 notFound 메시지의 404, 보이지만 권한이 모자라면 403.
+func (s *Server) requireTargetEnv(w http.ResponseWriter, r *http.Request, eid string, min int, notFound string) bool {
+	p := principalFrom(r)
+	if p == nil { // 핸들러를 직접 부르는 테스트
+		return true
+	}
+	env, err := s.Store.GetEnvironment(r.Context(), eid)
+	if err != nil {
+		writeErr(w, 404, notFound)
+		return false
+	}
+	projectLv, err := s.projectLevel(r.Context(), p, env.ProjectID, "")
+	if err != nil {
+		s.storeErr(w, err)
+		return false
+	}
+	if projectLv == lvNone { // 다른 사람의 프로젝트: 있는지도 알리지 않는다
+		writeErr(w, 404, notFound)
+		return false
+	}
+	lv, err := s.projectLevel(r.Context(), p, env.ProjectID, env.ID)
+	switch {
+	case err != nil:
+		s.storeErr(w, err)
+		return false
+	case lv == lvNone:
+		writeErr(w, 403, errRestrictedEnv)
+		return false
+	case lv < min:
+		writeErr(w, 403, "권한이 없습니다")
+		return false
+	}
+	return true
+}
+
 // restoreDBBackup은 백업을 같은 또는 다른 DB 서비스에 복원한다. 대상 데이터는 덮어써진다.
 // body: {service_id?, environment_id?} (비우면 백업을 만든 인스턴스). 비동기(202)이고 GET .../restore로 상태를 본다.
 func (s *Server) restoreDBBackup(w http.ResponseWriter, r *http.Request) {
@@ -384,6 +420,11 @@ func (s *Server) restoreDBBackup(w http.ResponseWriter, r *http.Request) {
 	target, err := s.Store.GetInstanceFor(ctx, body.ServiceID, body.EnvironmentID)
 	if err != nil {
 		writeErr(w, 404, "target database instance not found")
+		return
+	}
+	// 복원은 대상 데이터를 덮어쓴다. 라우트 권한은 백업의 환경만 확인했으므로 대상 환경도 member 이상이어야 한다
+	// (다른 프로젝트나 제한된 환경의 데이터베이스를 덮어쓰지 못하게).
+	if !s.requireTargetEnv(w, r, target.EnvironmentID, lvMember, "target database instance not found") {
 		return
 	}
 	if err := s.Deploy.RestoreDBBackup(ctx, b, target); err != nil {

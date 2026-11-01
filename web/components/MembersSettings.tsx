@@ -2,16 +2,16 @@
 
 import { useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type ID, type InstanceRole, type ProjectRole, type WorkspaceRole } from "@/lib/api";
+import { api, type ID, type InstanceRole, type Invite, type ProjectRole, type WorkspaceRole } from "@/lib/api";
 import { qk, useCaps, useMe, useSystem, useWorkspaceMembers } from "@/lib/queries";
 import type { Workspace } from "@/lib/workspace";
-import { fmtRelative } from "@/lib/format";
+import { fmtRelative, fmtTime } from "@/lib/format";
 import type { User } from "@/lib/api";
 import { t, tr } from "@/lib/i18n";
 import { removeStorage } from "@/lib/legacyStorage";
 import { WorkspaceResourceSummary } from "./ResourceLimitsSettings";
-import { Eye, KeyRound, LogOut, MoreHorizontal, Pencil, ScrollText, ShieldCheck, ShieldOff, Trash2, UserCog, UserMinus, UserPlus } from "lucide-react";
-import { Avatar, Button, Card, CenterSpinner, CopyField, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Menu, MenuItem, Notice, RowList, Segmented, Select, useConfirm } from "./ui";
+import { ChevronDown, Clock, Eye, KeyRound, LogOut, MoreHorizontal, Pencil, ScrollText, ShieldCheck, ShieldOff, Trash2, UserCog, UserMinus, UserPlus } from "lucide-react";
+import { Avatar, Button, Card, CenterSpinner, CopyField, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Menu, MenuItem, Notice, RowList, Segmented, Select, cx, useConfirm } from "./ui";
 
 const ROLE_LABEL: Record<string, string> = { owner: "Owner", admin: "Admin", member: "Member", viewer: "Viewer" };
 
@@ -60,11 +60,111 @@ function SendMailToggle({ checked, onChange }: { checked: boolean; onChange: (v:
   );
 }
 
-/* ── Project → Members ───────────────────────────────────────────────── */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Loose client-side check so obvious typos are caught before the request; the server validates for real. */
+export const validEmail = (s: string) => EMAIL_RE.test(s.trim());
 
+const PROJECT_ROLES: [ProjectRole, string][] = [
+  ["admin", t("멤버·설정·위험 구역까지 모두 관리하고 제한된 환경에 접근합니다.")],
+  ["member", t("서비스, 변수, 배포, 도메인을 바꿀 수 있습니다. 멤버와 프로젝트 설정은 바꿀 수 없습니다.")],
+  ["viewer", t("모든 것을 읽기만 합니다. 변수 값은 가려집니다.")],
+];
+const WORKSPACE_ROLES: [WorkspaceRole, string][] = [
+  ["owner", t("작업 공간 삭제와 Owner 지정을 포함해 모든 것을 관리합니다.")],
+  ["admin", t("모든 프로젝트와 멤버, 접근 그룹을 관리합니다.")],
+  ["member", t("프로젝트를 만들 수 있고, 만들었거나 추가된 프로젝트만 봅니다.")],
+  ["viewer", t("추가된 프로젝트만 읽기 전용으로 봅니다.")],
+];
+
+/** Collapsible "what can each role do" table shown above member lists. */
+function RoleLegend({ roles }: { roles: [string, string][] }) {
+  return (
+    <details className="group mt-4 rounded-lg border border-gray-200 text-sm">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-gray-600 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 [&::-webkit-details-marker]:hidden">
+        <ChevronDown className="size-4 -rotate-90 transition-transform group-open:rotate-0 motion-reduce:transition-none" aria-hidden />
+        {t("역할별 권한")}
+      </summary>
+      <dl className="grid grid-cols-[80px_1fr] gap-x-4 gap-y-2 border-t border-gray-200 px-4 py-3">
+        {roles.map(([r, d]) => (
+          <div key={r} className="contents">
+            <dt>
+              <span className={roleBadge}>{ROLE_LABEL[r]}</span>
+            </dt>
+            <dd className="text-gray-600">{d}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
+  );
+}
+
+const expired = (i: Invite) => Date.parse(i.expires_at) <= Date.now();
+
+/** Unused invites (instance admins only: GET /invites is admin-only), optionally filtered to a project or workspace. */
+function PendingInvites({ filter, roleOf }: { filter: (i: Invite) => boolean; roleOf: (i: Invite) => string | null | undefined }) {
+  const qc = useQueryClient();
+  const me = useMe().data;
+  const isAdmin = me?.instance_admin === true && !me?.token;
+  const invites = useQuery({ queryKey: qk.invites, queryFn: api.invites, enabled: isAdmin, retry: false });
+  const { confirm, node } = useConfirm();
+  const list = (invites.data ?? []).filter(filter);
+  if (!isAdmin || (!list.length && !invites.error)) return null;
+  return (
+    <section className="mt-6 max-w-3xl" aria-label={t("대기 중인 초대")}>
+      {node}
+      <h4 className="mb-2 flex items-center gap-2 text-sm font-semibold">
+        {t("대기 중인 초대")} <span className="rounded border border-gray-200 px-1.5 text-xs font-normal tabular-nums text-gray-600">{list.length}</span>
+      </h4>
+      <ErrorBox error={invites.error} className="mb-2" />
+      <RowList>
+        {list.map((i) => (
+          <InviteRow
+            key={i.id}
+            invite={i}
+            role={roleOf(i)}
+            onCancel={() =>
+              confirm({
+                title: t("초대 취소"),
+                message: t("{email}에게 보낸 초대 링크를 더 이상 쓸 수 없게 됩니다.", { email: i.email }),
+                confirmLabel: t("초대 취소"),
+                danger: true,
+                run: async () => {
+                  try {
+                    await api.deleteInvite(i.id);
+                  } finally {
+                    await qc.invalidateQueries({ queryKey: qk.invites });
+                  }
+                },
+              })
+            }
+          />
+        ))}
+      </RowList>
+    </section>
+  );
+}
+
+function InviteRow({ invite: i, role, onCancel }: { invite: Invite; role?: string | null; onCancel: () => void }) {
+  const old = expired(i);
+  return (
+    <li className={cx("flex items-center gap-3 px-4 py-3", old && "opacity-60")}>
+      <Avatar name={i.email} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm">{i.email}</div>
+        <div className="flex items-center gap-1 truncate text-xs tabular-nums text-gray-500">
+          <Clock className="size-3 shrink-0" aria-hidden />
+          {old ? t("만료됨 · {date}", { date: fmtTime(i.expires_at) }) : t("만료 {time}", { time: fmtRelative(i.expires_at) })}
+        </div>
+      </div>
+      {role && <span className={roleBadge}>{ROLE_LABEL[role] ?? role}</span>}
+      <Button size="sm" variant="outline" onClick={onCancel}>
+        {old ? t("지우기") : t("초대 취소")}
+      </Button>
+    </li>
+  );
+}
 
 /** 사용자 2FA 상태 요약(인증 앱, 패스키 수). */
-/* ── Project → Members ───────────────────────────────────────────────── */
 function mfaLabel(u: User): string {
   const parts = [u.totp_enabled && t("인증 앱"), (u.passkey_count ?? 0) > 0 && t("패스키 {count}개", { count: u.passkey_count ?? 0 })].filter(Boolean);
   return parts.length ? t("켜짐({methods})", { methods: parts.join(", ") }) : t("꺼짐");
@@ -114,6 +214,7 @@ function PeopleSection({
 export function ProjectMembers({ pid }: { pid: ID }) {
   const qc = useQueryClient();
   const caps = useCaps(pid);
+  const me = useMe().data;
   const members = useQuery({ queryKey: qk.members(pid), queryFn: () => api.members(pid) });
   const users = useQuery({ queryKey: [...qk.workspaceMembers(caps.workspaceId ?? ""), "people"], queryFn: () => api.workspacePeople(caps.workspaceId!), enabled: caps.canAdmin && !!caps.workspaceId, retry: false });
   const [uid, setUid] = useState("");
@@ -149,6 +250,7 @@ export function ProjectMembers({ pid }: { pid: ID }) {
     setError(null);
   };
   const existing = mode === "existing" && candidates.length > 0;
+  const emailBad = !existing && email.trim() !== "" && !validEmail(email);
   const submitInvite = () =>
     run(async () => {
       if (existing) {
@@ -171,6 +273,7 @@ export function ProjectMembers({ pid }: { pid: ID }) {
         tab={t("사람")}
         count={members.data?.length}
         cols={[t("이름"), t("접근")]}
+        filters={<RoleLegend roles={PROJECT_ROLES} />}
         action={
           caps.canAdmin && (
             <Button variant="primary" size="sm" onClick={() => setInviting(true)}>
@@ -203,8 +306,21 @@ export function ProjectMembers({ pid }: { pid: ID }) {
                     <Select
                       aria-label={t("{email} 역할", { email: m.email })}
                       value={m.role}
+                      disabled={busy}
                       className="w-[116px]"
-                      onChange={(e) => run(async () => (await api.setMember(pid, m.user_id, e.target.value as ProjectRole), await refresh()))}
+                      onChange={(e) => {
+                        const next = e.target.value as ProjectRole;
+                        const apply = () => run(async () => (await api.setMember(pid, m.user_id, next), await refresh()));
+                        if (m.user_id === me?.id && m.role === "admin" && next !== "admin")
+                          confirm({
+                            title: t("내 역할 낮추기"),
+                            message: t("이 프로젝트의 Admin 권한을 잃습니다. 다른 Admin이 다시 올려 주기 전까지 멤버와 설정을 바꿀 수 없습니다."),
+                            confirmLabel: t("역할 낮추기"),
+                            danger: true,
+                            run: apply,
+                          });
+                        else void apply();
+                      }}
                     >
                       <option value="admin">Admin</option>
                       <option value="member">Member</option>
@@ -239,6 +355,7 @@ export function ProjectMembers({ pid }: { pid: ID }) {
           </ul>
         )}
       </PeopleSection>
+      <PendingInvites filter={(i) => i.project_id === pid} roleOf={(i) => i.project_role} />
       </Card>
       <Dialog
         open={inviting}
@@ -254,7 +371,7 @@ export function ProjectMembers({ pid }: { pid: ID }) {
               <Button variant="outline" onClick={closeInvite} disabled={busy}>
                 {t("취소")}
               </Button>
-              <Button variant="primary" loading={busy} disabled={existing ? !uid : !email.trim()} onClick={submitInvite}>
+              <Button variant="primary" loading={busy} disabled={existing ? !uid : !validEmail(email)} onClick={submitInvite}>
                 {existing ? t("추가") : t("초대 링크 만들기")}
               </Button>
             </>
@@ -268,7 +385,7 @@ export function ProjectMembers({ pid }: { pid: ID }) {
             className="space-y-4 pt-1"
             onSubmit={(e) => {
               e.preventDefault();
-              if (existing ? uid : email.trim()) submitInvite();
+              if (existing ? uid : validEmail(email)) submitInvite();
             }}
           >
             {candidates.length > 0 && (
@@ -304,8 +421,8 @@ export function ProjectMembers({ pid }: { pid: ID }) {
               </>
             ) : (
               <>
-                <Field label={t("이메일")}>
-                  <Input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" />
+                <Field label={t("이메일")} hint={emailBad ? <span className="text-danger">{t("올바른 이메일 주소를 입력하세요.")}</span> : undefined}>
+                  <Input type="email" autoFocus value={email} invalid={emailBad} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" />
                 </Field>
                 <Field label={t("프로젝트 역할")}>
                   <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as ProjectRole)}>
@@ -461,7 +578,14 @@ export function InstanceUsers() {
                                 icon={u.disabled ? <ShieldCheck className="size-3.5" /> : <ShieldOff className="size-3.5" />}
                                 onSelect={() => {
                                   close();
-                                  run(() => api.updateUser(u.id, { disabled: !u.disabled }));
+                                  if (u.disabled) return void run(() => api.updateUser(u.id, { disabled: false }));
+                                  confirm({
+                                    title: t("사용자 비활성화"),
+                                    message: t("{email}의 세션이 끝나고 다시 활성화할 때까지 로그인할 수 없습니다. API 토큰도 쓸 수 없습니다.", { email: u.email }),
+                                    confirmLabel: t("비활성화"),
+                                    danger: true,
+                                    run: () => run(() => api.updateUser(u.id, { disabled: true })),
+                                  });
                                 }}
                               >
                                 {u.disabled ? t("활성화") : t("비활성화")}
@@ -491,7 +615,13 @@ export function InstanceUsers() {
                                 icon={<KeyRound className="size-3.5" />}
                                 onSelect={() => {
                                   close();
-                                  run(() => api.updateUser(u.id, { reset_2fa: true }));
+                                  confirm({
+                                    title: t("2FA 초기화"),
+                                    message: t("{email}의 인증 앱과 패스키를 모두 지웁니다. 2FA가 필수인 서버라면 다음 로그인 때 다시 설정해야 합니다.", { email: u.email }),
+                                    confirmLabel: t("2FA 초기화"),
+                                    danger: true,
+                                    run: () => run(() => api.updateUser(u.id, { reset_2fa: true })),
+                                  });
                                 }}
                               >
                                 {t("2FA 초기화")}
@@ -533,15 +663,20 @@ export function InstanceUsers() {
           <Card flush title={t("대기 중인 초대")}>
             <RowList bare>
               {invites.data.map((i) => (
-                <li key={i.id} className="flex items-center gap-3 px-4 py-3">
-                  <Avatar name={i.email} />
-                  <div className="min-w-0 flex-1 truncate text-sm">
-                    {i.email} <span className="text-xs tabular-nums text-gray-500">· {t("{role} · 만료 {date}", { role: ROLE_LABEL[i.role], date: i.expires_at.slice(0, 10) })}</span>
-                  </div>
-                  <Button size="sm" onClick={() => run(() => api.deleteInvite(i.id))}>
-                    {t("취소")}
-                  </Button>
-                </li>
+                <InviteRow
+                  key={i.id}
+                  invite={i}
+                  role={i.role}
+                  onCancel={() =>
+                    confirm({
+                      title: t("초대 취소"),
+                      message: t("{email}에게 보낸 초대 링크를 더 이상 쓸 수 없게 됩니다.", { email: i.email }),
+                      confirmLabel: t("초대 취소"),
+                      danger: true,
+                      run: () => run(() => api.deleteInvite(i.id)),
+                    })
+                  }
+                />
               ))}
             </RowList>
           </Card>
@@ -560,7 +695,7 @@ export function InstanceUsers() {
               <Button variant="outline" onClick={closeInvite} disabled={busy}>
                 {t("취소")}
               </Button>
-              <Button variant="primary" loading={busy} disabled={!email.trim()} onClick={submitInvite}>
+              <Button variant="primary" loading={busy} disabled={!validEmail(email)} onClick={submitInvite}>
                 {t("초대 링크 만들기")}
               </Button>
             </>
@@ -574,7 +709,7 @@ export function InstanceUsers() {
             className="space-y-4 pt-1"
             onSubmit={(e) => {
               e.preventDefault();
-              if (email.trim()) submitInvite();
+              if (validEmail(email)) submitInvite();
             }}
           >
             <p className="text-sm text-gray-600">{t("가입할 수 있는 링크를 만듭니다. 팀 참여는 가입 후 작업 공간에서 정합니다.")}</p>
@@ -654,6 +789,8 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
   const [typed, setTyped] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [sendMail, setSendMail] = useState(true);
+  const smtp = !!useSystem().data?.smtp_configured;
   const { confirm, node } = useConfirm();
 
   const refreshMembers = () => qc.invalidateQueries({ queryKey: qk.workspaceMembers(wsid ?? "") });
@@ -697,7 +834,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
             tab={t("멤버")}
             count={members.data?.length}
             cols={[t("이름"), t("역할")]}
-            desc={t("Owner/Admin은 이 작업 공간의 모든 프로젝트와 멤버를 관리합니다. Member는 프로젝트를 만들 수 있고, Member/Viewer는 자기가 만들었거나 멤버로 추가된 프로젝트만 봅니다.")}
+            filters={<RoleLegend roles={WORKSPACE_ROLES} />}
             action={
               canManage && (
                 <Button variant="primary" size="sm" onClick={() => { setWorkspaceInvite(null); setAdding(true); }}>
@@ -735,7 +872,23 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
                           value={m.role}
                           disabled={busy}
                           className="w-[116px]"
-                          onChange={(e) => run(async () => (await api.setWorkspaceMember(wsid!, m.user_id, e.target.value as WorkspaceRole), await refreshMembers(), await refreshWorkspaces()))}
+                          onChange={(e) => {
+                            const next = e.target.value as WorkspaceRole;
+                            const apply = () => run(async () => (await api.setWorkspaceMember(wsid!, m.user_id, next), await refreshMembers(), await refreshWorkspaces()));
+                            const demotesSelf = self && (m.role === "owner" || m.role === "admin") && (next === "member" || next === "viewer" || (m.role === "owner" && next === "admin"));
+                            const grantsOwner = !self && next === "owner";
+                            if (demotesSelf || grantsOwner)
+                              confirm({
+                                title: demotesSelf ? t("내 역할 낮추기") : t("Owner 지정"),
+                                message: demotesSelf
+                                  ? t("이 작업 공간에서 지금 권한을 잃습니다. 다른 Owner나 Admin이 다시 올려 주기 전까지 되돌릴 수 없습니다.")
+                                  : t("{email}에게 작업 공간 삭제를 포함한 모든 권한을 줍니다.", { email: m.email }),
+                                confirmLabel: demotesSelf ? t("역할 낮추기") : t("Owner 지정"),
+                                danger: true,
+                                run: apply,
+                              });
+                            else void apply();
+                          }}
                         >
                           {isOwner && <option value="owner">Owner</option>}
                           <option value="admin">Admin</option>
@@ -782,6 +935,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
               </ul>
             )}
           </PeopleSection>
+          {canManage && <PendingInvites filter={(i) => i.workspace_id === cur.id} roleOf={(i) => i.workspace_role} />}
       </Card>
 
       <WorkspaceResourceSummary wsid={cur.id} />
@@ -837,14 +991,14 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
             <Button variant="outline" onClick={() => (setAdding(false), setEmail(""), setError(null))} disabled={busy}>
               {t("취소")}
             </Button>
-            <Button variant="outline" loading={busy} disabled={!email.trim() || !!workspaceInvite}
-              onClick={() => run(async () => { setWorkspaceInvite(await api.inviteWorkspaceMember(wsid!, { email: email.trim(), role: inviteRole })); })}>
+            <Button variant="outline" loading={busy} disabled={!validEmail(email) || !!workspaceInvite}
+              onClick={() => run(async () => { setWorkspaceInvite(await api.inviteWorkspaceMember(wsid!, { email: email.trim(), role: inviteRole, send_email: smtp && sendMail })); await qc.invalidateQueries({ queryKey: qk.invites }); })}>
               {t("새 사용자 초대 링크")}
             </Button>
             <Button
               variant="primary"
               loading={busy}
-              disabled={!email.trim()}
+              disabled={!validEmail(email)}
               onClick={() =>
                 run(async () => {
                   await api.addWorkspaceMember(wsid!, { email: email.trim(), role: inviteRole });
@@ -863,7 +1017,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
           className="space-y-4 pt-1"
           onSubmit={(e) => {
             e.preventDefault();
-            if (email.trim())
+            if (validEmail(email))
               run(async () => {
                 await api.addWorkspaceMember(wsid!, { email: email.trim(), role: inviteRole });
                 setEmail("");
@@ -875,7 +1029,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
           <p className="text-sm text-gray-600">{t("Aven에 이미 있는 사용자만 추가할 수 있습니다. 새 사용자는 아래에서 초대 링크를 만들 수 있습니다.")}</p>
           {workspaceInvite && <InviteLink invite={workspaceInvite} />}
           <Field label={t("이메일")}>
-            <Input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" />
+            <Input type="email" autoFocus value={email} onChange={(e) => (setEmail(e.target.value), setWorkspaceInvite(null))} placeholder="teammate@example.com" />
           </Field>
           <Field label={t("역할")}>
             <Select value={inviteRole} onChange={(e) => setInviteRole(e.target.value as WorkspaceRole)}>
@@ -885,6 +1039,7 @@ export function WorkspaceMembersSettings({ ws }: { ws: Workspace }) {
               <option value="viewer">Viewer</option>
             </Select>
           </Field>
+          <SendMailToggle checked={sendMail} onChange={setSendMail} />
           {adding && <ErrorBox error={error} />}
           <button type="submit" className="hidden" aria-hidden tabIndex={-1} />
         </form>

@@ -358,11 +358,12 @@ func (m *Manager) buildRepoOn(ctx context.Context, t *Target, d *store.Deploymen
 		}); err != nil {
 			return err
 		}
-		root, err := safeJoin(filepath.Join(dir, "src"), d.Spec.RootDir)
+		src := filepath.Join(dir, "src")
+		root, err := sourceRoot(src, d.Spec.RootDir)
 		if err != nil {
 			return err
 		}
-		_, err = m.buildLocalImage(ctx, t, d, b, root, dir, builder, img)
+		_, err = m.buildLocalImage(ctx, t, d, b, src, root, dir, builder, img)
 		return err
 	}
 	rd := &remoteDriver{hub: m.Agents, node: nodeID}
@@ -398,11 +399,12 @@ func (m *Manager) buildUploadOn(ctx context.Context, t *Target, d *store.Deploym
 		if err := extractTarGz(upload, filepath.Join(dir, "src")); err != nil {
 			return fmt.Errorf("extract upload: %w", err)
 		}
-		root, err := safeJoin(filepath.Join(dir, "src"), d.Spec.RootDir)
+		src := filepath.Join(dir, "src")
+		root, err := sourceRoot(src, d.Spec.RootDir)
 		if err != nil {
 			return err
 		}
-		_, err = m.buildLocalImage(ctx, t, d, b, root, dir, builder, img)
+		_, err = m.buildLocalImage(ctx, t, d, b, src, root, dir, builder, img)
 		return err
 	}
 	f, err := os.Open(upload)
@@ -592,7 +594,7 @@ func (m *Manager) ScaleReplicas(ctx context.Context, in *store.Instance, n int, 
 				return nil, fmt.Errorf("새 replica healthcheck 실패: %w", err)
 			}
 		}
-		// 그사이 새 배포로 바뀌었으면 새 컨테이너는 쓸모가 없다.
+		// 그사이 새 배포로 바뀌었으면 새 컨테이너는 쓸모가 없다(아래 저장 직전에 잠금 안에서 다시 확인한다).
 		if fresh, err := m.Store.GetInstance(ctx, cur.ID); err != nil || fresh.CurrentDeploymentID == nil || *fresh.CurrentDeploymentID != d.ID {
 			cleanup()
 			return nil, fmt.Errorf("%w: 그사이 현재 배포가 바뀌었습니다", ErrScaleUnavailable)
@@ -613,7 +615,18 @@ func (m *Manager) ScaleReplicas(ctx context.Context, in *store.Instance, n int, 
 	}
 	// 새 목록을 저장하고 프록시를 맞춘다(새 replica는 들어가고, 뺄 replica는 빠진다).
 	setGroups(d, have)
-	if err := m.Store.SetDeploymentContainers(ctx, d.ID, d.Containers, d.Extra); err != nil {
+	// 컷오버(현재 배포 전환)나 중지와 엇갈리지 않게 확인과 저장을 한 번에 한다. 컷오버가 먼저 끝났으면 이전 배포의
+	// 컨테이너 목록에 새 replica를 더하지 않는다(retire가 모르는 컨테이너가 남는다).
+	unlock := m.instLock(cur.ID)
+	fresh, ferr := m.Store.GetInstance(ctx, cur.ID)
+	if ferr != nil || fresh.CurrentDeploymentID == nil || *fresh.CurrentDeploymentID != d.ID || fresh.Status != store.InstOnline {
+		unlock()
+		cleanup()
+		return nil, fmt.Errorf("%w: 그사이 현재 배포나 서비스 상태가 바뀌었습니다", ErrScaleUnavailable)
+	}
+	err = m.Store.SetDeploymentContainers(ctx, d.ID, d.Containers, d.Extra)
+	unlock()
+	if err != nil {
 		cleanup()
 		return nil, err
 	}

@@ -137,11 +137,17 @@ type Manager struct {
 	streamCtx context.Context               // 노드 스트림(access log, 이벤트)의 부모 ctx
 	streams   map[string]context.CancelFunc // nodeID → 그 노드의 스트림 취소
 
-	scaleMu    sync.Mutex
-	scaleLocks map[string]*sync.Mutex // instanceID → replica 수 변경 직렬화
-	autoscale  autoscaleState
-	egressSt   egressState // 아웃바운드 IPv6 상태 캐시와 차단 규칙 동기화(egress.go)
-	ipv6St     ipv6State   // 도메인별 공개 IPv6 반영 상태(ipv6addr.go)
+	scaleMu     sync.Mutex
+	scaleLocks  map[string]*sync.Mutex // instanceID → replica 수 변경 직렬화
+	instMu      sync.Mutex
+	instLocks   map[string]*sync.Mutex // instanceID → 상태 확인·변경 직렬화(instLock)
+	autoscale   autoscaleState
+	egressSt    egressState // 아웃바운드 IPv6 상태 캐시와 차단 규칙 동기화(egress.go)
+	tcpAllocMu  sync.Mutex
+	tcpReserved map[int]time.Time // AllocateTCPPortFor가 막 고른 공개 포트(저장되기 전)
+	meshKick    coalescer         // syncMeshAsync: 전체 mesh 동기화를 몰아서 한 번씩
+	egressKick  coalescer         // syncEgressAsync: 전체 egress 동기화를 몰아서 한 번씩
+	ipv6St      ipv6State         // 도메인별 공개 IPv6 반영 상태(ipv6addr.go)
 
 	// 테스트용: localDrv가 있으면 로컬 노드 드라이버 대신 쓰고, localProxy가 있으면 로컬 keel-proxy 대신 라우트를 넘긴다.
 	localDrv   Driver
@@ -227,7 +233,8 @@ func (m *Manager) Init(ctx context.Context) error {
 	for _, r := range runs {
 		r.Status = "failed"
 		m.Store.FinishCronRun(ctx, r)
-		m.Docker.Remove(ctx, r.Container, 1)
+		// 로컬 노드의 컨테이너는 바로 지운다. 원격 노드의 것은 노드가 연결되면 reconcile이 지운다(staleRunner).
+		m.driverForNode(store.LocalNodeID).Remove(ctx, r.Container, 1)
 	}
 	return nil
 }
@@ -392,21 +399,88 @@ func (m *Manager) checkDeploymentSource(ctx context.Context, in *store.Instance,
 	return guardrails.Check(p, src)
 }
 
-// dispatch는 배포를 인스턴스 큐에 넣는다.
+// queueSize는 인스턴스 큐에 쌓아 둘 수 있는 배포 수다. 넘치면 가장 오래 기다린 배포를 대체된 것으로 끝낸다
+// (worker도 어차피 가장 새 배포만 실행한다). 요청 처리(API, webhook)가 큐 때문에 막히지 않는다.
+const queueSize = 64
+
+// dispatch는 배포를 인스턴스 큐에 넣는다. 큐가 없으면 worker와 함께 만든다(worker는 큐가 비면 끝난다).
+// 큐에 넣는 일과 worker가 끝나는 일은 m.mu 안에서 하므로 넣은 배포는 반드시 어떤 worker가 꺼낸다.
 func (m *Manager) dispatch(instanceID, depID string) {
 	if m.Dispatch != nil {
 		m.Dispatch(instanceID, depID)
 		return
 	}
+	var dropped []string
 	m.mu.Lock()
 	q, ok := m.queues[instanceID]
 	if !ok {
-		q = make(chan string, 64)
+		q = make(chan string, queueSize)
 		m.queues[instanceID] = q
-		go m.worker(q)
+		go m.worker(instanceID, q)
+	}
+	for sent := false; !sent; {
+		select {
+		case q <- depID:
+			sent = true
+		default:
+			select {
+			case old := <-q:
+				dropped = append(dropped, old)
+			default:
+			}
+		}
 	}
 	m.mu.Unlock()
-	q <- depID
+	for _, id := range dropped {
+		m.supersedeQueued(id)
+	}
+}
+
+// supersedeQueued는 아직 queued인 배포를 removed로 끝낸다(더 새 배포가 같은 인스턴스 큐에 있다).
+func (m *Manager) supersedeQueued(depID string) {
+	ctx := context.Background()
+	if d, err := m.Store.GetDeployment(ctx, depID); err == nil && d.Status == store.DepQueued {
+		m.finishFrom(ctx, d, store.DepQueued, store.DepRemoved, "superseded by a newer deployment")
+	}
+}
+
+// finishFrom은 배포가 아직 from 상태일 때만 끝 상태 s로 바꾼다. 시작하는 worker, 취소, 대체가 같은 배포를 두고
+// 경쟁해도 한쪽만 이긴다. 바꿨으면 true.
+func (m *Manager) finishFrom(ctx context.Context, d *store.Deployment, from, s store.DeployStatus, errMsg string) bool {
+	ctx = context.WithoutCancel(ctx)
+	var msg *string
+	if errMsg != "" {
+		msg = &errMsg
+	}
+	ok, err := m.Store.TransitionDeployment(ctx, d.ID, from, s, msg)
+	if err != nil || !ok {
+		return false
+	}
+	now := time.Now().UTC()
+	d.Status, d.FinishedAt = s, &now
+	if msg != nil {
+		d.Error = msg
+	}
+	m.finishImageUpdate(ctx, d, s, errMsg, now)
+	m.notifyStatus(d)
+	return true
+}
+
+// instLock은 인스턴스 상태(status, current_deployment_id)를 읽고 바꾸는 짧은 구간을 직렬화한다.
+// 컷오버·중지·sleep·replica 변경이 서로의 확인과 변경 사이에 끼어들지 않게 한다. DB 작업 몇 개 동안만 잡는다.
+func (m *Manager) instLock(instanceID string) func() {
+	m.instMu.Lock()
+	if m.instLocks == nil {
+		m.instLocks = map[string]*sync.Mutex{}
+	}
+	l := m.instLocks[instanceID]
+	if l == nil {
+		l = &sync.Mutex{}
+		m.instLocks[instanceID] = l
+	}
+	m.instMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 // supersedeWaiting은 인스턴스의 CI 대기 배포 중 keep이 아닌 것을 removed로 끝낸다.
@@ -488,16 +562,30 @@ func strPtr(s string) *string {
 }
 
 // worker는 인스턴스마다 하나씩 돌며 배포를 순서대로 처리한다.
-// 큐에 더 새로운 배포가 쌓여 있으면 오래된 것은 removed로 건너뛴다.
-func (m *Manager) worker(q chan string) {
-	for id := range q {
+// 큐에 더 새로운 배포가 쌓여 있으면 오래된 것은 removed로 건너뛴다. 큐가 비면 큐를 지우고 끝난다
+// (다음 dispatch가 새 worker를 만든다. 지운 인스턴스의 goroutine이 남지 않는다).
+func (m *Manager) worker(instanceID string, q chan string) {
+	for {
+		var id string
+		select {
+		case id = <-q:
+		default:
+			m.mu.Lock()
+			if len(q) == 0 {
+				if m.queues[instanceID] == q {
+					delete(m.queues, instanceID)
+				}
+				m.mu.Unlock()
+				return
+			}
+			m.mu.Unlock()
+			continue
+		}
 	drain:
 		for {
 			select {
 			case newer := <-q:
-				if d, err := m.Store.GetDeployment(context.Background(), id); err == nil && d.Status == store.DepQueued {
-					m.finish(context.Background(), d, store.DepRemoved, "superseded by a newer deployment")
-				}
+				m.supersedeQueued(id)
 				id = newer
 			default:
 				break drain
@@ -519,14 +607,19 @@ func (m *Manager) Cancel(ctx context.Context, depID string) error {
 	if err != nil {
 		return err
 	}
-	if d.Status == store.DepQueued {
-		m.finish(ctx, d, store.DepCancelled, "")
-	}
-	if d.Status == store.DepWaiting {
-		if ok, _ := m.Store.TransitionDeployment(ctx, d.ID, store.DepWaiting, store.DepCancelled, nil); ok {
-			d.Status = store.DepCancelled
-			m.notifyStatus(d)
+	switch d.Status {
+	case store.DepQueued:
+		// worker가 막 시작했다면 시작(queued → initializing)과 취소 중 하나만 이긴다.
+		if !m.finishFrom(ctx, d, store.DepQueued, store.DepCancelled, "") {
+			m.mu.Lock()
+			cancel = m.cancels[depID]
+			m.mu.Unlock()
+			if cancel != nil {
+				cancel(errCancelled)
+			}
 		}
+	case store.DepWaiting:
+		m.finishFrom(ctx, d, store.DepWaiting, store.DepCancelled, "")
 	}
 	return nil
 }
@@ -571,33 +664,51 @@ func (m *Manager) execute(depID string) {
 	if err != nil || d.Status != store.DepQueued {
 		return
 	}
+	// 취소 함수를 먼저 등록한 뒤 queued → initializing으로 가져온다. Cancel이 먼저 이기면(queued → cancelled)
+	// 여기서 멈추고, 가져온 뒤에 온 Cancel은 등록된 취소 함수를 부른다(취소 요청이 사라지지 않는다).
+	ctx, cancel := context.WithCancelCause(base)
+	m.mu.Lock()
+	m.cancels[d.ID] = cancel
+	m.mu.Unlock()
+	release := func() {
+		cancel(nil)
+		m.mu.Lock()
+		delete(m.cancels, d.ID)
+		m.mu.Unlock()
+	}
+	if ok, err := m.Store.TransitionDeployment(base, d.ID, store.DepQueued, store.DepInitializing, nil); err != nil || !ok {
+		release()
+		return
+	}
+	d.Status = store.DepInitializing
 	t, err := m.Load(base, d.InstanceID)
 	if err != nil {
+		release()
 		m.finish(base, d, store.DepFailed, "service not found")
 		return
 	}
 	book, err := m.Logs.Open(d.ID)
 	if err != nil {
+		release()
 		m.finish(base, d, store.DepFailed, "open log: "+err.Error())
 		return
 	}
-	ctx, cancel := context.WithCancelCause(base)
-	m.mu.Lock()
-	m.cancels[d.ID] = cancel
-	m.mu.Unlock()
 	defer func() {
-		cancel(nil)
-		m.mu.Lock()
-		delete(m.cancels, d.ID)
-		m.mu.Unlock()
+		release()
 		book.Close(string(d.Status))
 		m.Logs.Release(d.ID)
 	}()
 
 	now := time.Now().UTC()
 	d.StartedAt = &now
+	// 상태를 읽고 deploying으로 바꾸는 사이에 sleep·중지가 끼어들지 않게 한다(sleep은 online일 때만 재운다).
+	unlock := m.instLock(t.Instance.ID)
 	prevStatus := t.Instance.Status
+	if cur, err := m.Store.GetInstance(base, t.Instance.ID); err == nil {
+		prevStatus = cur.Status
+	}
 	m.Store.SetInstanceStatus(base, t.Instance.ID, store.InstDeploying, nil)
+	unlock()
 	m.emit(events.WithDeployment(base, d.ID), t, "deploy.started", fmt.Sprintf("%s: 배포 시작 (%s)", t.Service.Name, d.Trigger))
 
 	var stopped stoppedContainers // recreate 전략에서 먼저 멈춘 이전 컨테이너
@@ -625,16 +736,19 @@ func (m *Manager) execute(depID string) {
 	}
 	// 실패하거나 취소되면 새 컨테이너만 지운다. 라우트는 아직 이전 컨테이너를 가리킨다.
 	m.removeContainers(base, d, d.AllContainers(), 2)
+	// 그사이 Stop/Delete가 됐을 수 있으니 최신 상태를 다시 읽는다.
+	cur, cerr := m.Store.GetInstance(base, t.Instance.ID)
+	stoppedByUser := cerr != nil || cur.Status == store.InstOffline
 	for _, c := range stopped.names {
-		book.Printf("이전 컨테이너 %s를 다시 시작합니다", c)
-		stopped.drv.Start(base, c)
+		if !stoppedByUser {
+			book.Printf("이전 컨테이너 %s를 다시 시작합니다", c)
+			stopped.drv.Start(base, c)
+		}
 		m.undrain(c)
 	}
 	// 인스턴스 상태를 먼저 되돌린 뒤 배포를 끝낸다(배포가 끝났다고 보이는 시점에 인스턴스도 정리돼 있게).
-	// 그사이 Stop/Delete가 됐을 수 있으니 최신 상태를 다시 읽는다.
-	cur, cerr := m.Store.GetInstance(base, t.Instance.ID)
 	switch {
-	case cerr != nil || cur.Status == store.InstOffline:
+	case stoppedByUser:
 	case cur.CurrentDeploymentID != nil && (prevStatus == store.InstOnline || prevStatus == store.InstScheduled || prevStatus == store.InstCrashed || prevStatus == store.InstDeploying || prevStatus == store.InstSleeping):
 		book.Printf("이전 배포 %s가 계속 서비스 중입니다", *cur.CurrentDeploymentID)
 		st := prevStatus
@@ -879,6 +993,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 		}
 		cmd := *d.Spec.PreDeployCommand
 		b.Printf("pre-deploy: %s", cmd)
+		line, flush := limitedLog(b.Line)
 		err := stage(ctx, m.Timeouts.PreDeploy, "pre-deploy", func(ctx context.Context) error {
 			spec := m.runSpec(t, d, 0)
 			spec.Name = "keel-predeploy-" + strings.TrimPrefix(d.ID, "dep_")[:8]
@@ -889,7 +1004,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 			sh := "/bin/sh"
 			spec.Entrypoint, spec.Cmd = &sh, []string{"-c", cmd}
 			drv.Remove(ctx, spec.Name, 0)
-			code, err := drv.RunToCompletion(ctx, spec, func(stream, l string) { b.Line("  | " + l) })
+			code, err := drv.RunToCompletion(ctx, spec, func(stream, l string) { line("  | " + l) })
 			if err != nil {
 				return err
 			}
@@ -898,6 +1013,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 			}
 			return nil
 		})
+		flush()
 		if err != nil {
 			return err
 		}
@@ -931,6 +1047,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 	}
 	// 볼륨이 붙은 서비스는 같은 데이터 디렉터리를 두 프로세스가 열지 않도록 이전 컨테이너를 먼저 멈춘다(recreate).
 	var moved []movedVolume
+	live := false // 컷오버까지 끝났는지(아래 defer가 본다)
 	if len(vols) > 0 {
 		if cur, err := m.Store.GetInstance(ctx, t.Instance.ID); err == nil && cur.CurrentDeploymentID != nil && *cur.CurrentDeploymentID != d.ID {
 			if old, err := m.Store.GetDeployment(ctx, *cur.CurrentDeploymentID); err == nil {
@@ -960,6 +1077,20 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 					if moved, err = m.copyVolumes(ctx, b, vols, stopped.drv, drv, old, d); err != nil {
 						return err
 					}
+					// 이후 단계(시작, healthcheck)에서 실패하면 이전 노드가 계속 원본이다. 새 노드의 복사본을 남기지 않는다
+					// (볼륨을 쓰는 새 컨테이너를 먼저 지워야 볼륨을 지울 수 있다. execute가 다시 지우는 것은 문제없다).
+					defer func() {
+						if live {
+							return
+						}
+						rctx := context.WithoutCancel(ctx)
+						m.removeContainers(rctx, d, d.AllContainers(), 2)
+						for _, mv := range moved {
+							if err := drv.RemoveVolume(rctx, mv.name); err != nil {
+								b.Printf("WARN: 새 노드의 볼륨 복사본 %s를 지우지 못했습니다: %v", mv.name, err)
+							}
+						}
+					}()
 				}
 			}
 		}
@@ -1002,6 +1133,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 	if err := m.cutover(ctx, t, d, b, stopped.names); err != nil {
 		return err
 	}
+	live = true
 	// 데이터는 새 노드로 옮겨졌고 서비스가 거기서 live가 됐다. 이전 노드의 볼륨은 더 쓰이지 않는다.
 	for _, mv := range moved {
 		if err := mv.drv.RemoveVolume(context.WithoutCancel(ctx), mv.name); err != nil {
@@ -1041,7 +1173,11 @@ func (m *Manager) copyVolumes(ctx context.Context, b *logbook.Book, vols []*stor
 		pr.CloseWithError(ierr)
 		eerr := <-errc
 		if err := errors.Join(eerr, ierr); err != nil {
+			// 이 볼륨과 앞서 복사한 볼륨의 새 노드 복사본을 모두 지운다(이전 노드의 데이터가 계속 원본이다).
 			to.RemoveVolume(context.WithoutCancel(ctx), v.DockerName)
+			for _, mv := range done {
+				to.RemoveVolume(context.WithoutCancel(ctx), mv.name)
+			}
 			return nil, fmt.Errorf("볼륨 %s 복사 실패 (이전 노드의 데이터는 그대로입니다): %w", v.Name, err)
 		}
 		done = append(done, movedVolume{drv: from, node: nodeKey(old.NodeID), name: v.DockerName})
@@ -1058,12 +1194,15 @@ func short(sha string) string {
 
 // build는 소스 디렉터리에서 config-as-code를 읽고 Dockerfile 또는 railpack으로 이미지를 만든다.
 func (m *Manager) build(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book, srcDir, workDir string) error {
-	root, err := safeJoin(srcDir, d.Spec.RootDir)
+	root, err := sourceRoot(srcDir, d.Spec.RootDir)
 	if err != nil {
 		return err
 	}
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
 		return fmt.Errorf("root_dir %s가 저장소에 없습니다", d.Spec.RootDir)
+	}
+	if err := checkConfigLinks(srcDir, root); err != nil {
+		return err
 	}
 	name, cfg, err := config.Find(root)
 	if err != nil {
@@ -1079,7 +1218,7 @@ func (m *Manager) build(ctx context.Context, t *Target, d *store.Deployment, b *
 		return nil
 	}
 	image := m.imageRepo(t.Service.ID) + ":" + strings.ReplaceAll(d.ID, "_", "-")
-	builder, err := m.buildLocalImage(ctx, t, d, b, root, workDir, d.Spec.Builder, image)
+	builder, err := m.buildLocalImage(ctx, t, d, b, srcDir, root, workDir, d.Spec.Builder, image)
 	if err != nil {
 		return err
 	}
@@ -1091,15 +1230,16 @@ func (m *Manager) build(ctx context.Context, t *Target, d *store.Deployment, b *
 }
 
 // buildLocalImage는 로컬 노드에서 root(config-as-code가 이미 반영된 소스)를 builder로 빌드해 image를 만든다.
+// srcDir는 소스 전체(clone 위치)이고 root는 그 안의 root_dir이다. 링크로 srcDir 밖의 파일을 읽지 않는다(srcpath.go).
 // d는 읽기만 한다(placement의 다른 노드 빌드와 동시에 불릴 수 있다). 실제로 쓴 builder를 돌려준다.
-func (m *Manager) buildLocalImage(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book, root, workDir, builder, image string) (string, error) {
+func (m *Manager) buildLocalImage(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book, srcDir, root, workDir, builder, image string) (string, error) {
 	// 빌드에도 변수를 넘긴다(Dockerfile ARG / railpack secret).
 	res, err := m.Resolve(ctx, t.Instance, &Override{InstanceID: t.Instance.ID, Vars: d.VarsRaw, Spec: &d.Spec, Deployment: d})
 	if err != nil {
 		return "", err
 	}
 	buildVars, buildTarget := composeBuild(&d.Spec, res.Vars)
-	dockerfile, err := safeJoin(root, d.Spec.DockerfilePath)
+	dockerfile, err := sourceFile(srcDir, root, d.Spec.DockerfilePath)
 	if err != nil {
 		return "", err
 	}
@@ -1119,23 +1259,30 @@ func (m *Manager) buildLocalImage(ctx context.Context, t *Target, d *store.Deplo
 		if d.Spec.BuildCommand != nil && *d.Spec.BuildCommand != "" {
 			b.Printf("build.buildCommand는 Dockerfile 빌드에서 쓰지 않습니다(빌드 단계는 Dockerfile의 RUN으로 정하세요)")
 		}
+		line, flush := limitedLog(b.Line)
 		err = stage(ctx, m.Timeouts.Build, "build", func(ctx context.Context) error {
 			plain, secrets := node.SplitSecrets(buildVars, d.Spec.BuildSecrets)
 			if len(secrets) > 0 {
 				b.Printf("build secrets: %s (BuildKit --secret)", strings.Join(sortedNames(secrets), ", "))
 			}
-			return m.Docker.BuildSecrets(ctx, root, dockerfile, image, buildTarget, labels, buildArgsFor(dockerfile, plain), secrets, b.Line)
+			return m.Docker.BuildSecrets(ctx, root, dockerfile, image, buildTarget, labels, buildArgsFor(dockerfile, plain), secrets, line)
 		})
+		flush()
 	case "railpack":
 		if m.Cfg.Railpack == "" {
 			return "", errors.New("railpack을 찾을 수 없습니다 (KEEL_RAILPACK_BIN)")
 		}
 		b.Printf("railpack prepare + buildx (frontend %s)", m.Cfg.RailpackFrontend)
+		if err := stripEscapingLinks(srcDir, root, b); err != nil {
+			return "", err
+		}
 		rpVars := withBuildCommand(&d.Spec, buildVars, b)
+		line, flush := limitedLog(b.Line)
 		err = stage(ctx, m.Timeouts.Build, "build", func(ctx context.Context) error {
-			_, err := m.Docker.RailpackBuild(ctx, m.Cfg.Railpack, m.Cfg.RailpackFrontend, root, workDir, image, rpVars, b.Line)
+			_, err := m.Docker.RailpackBuild(ctx, m.Cfg.Railpack, m.Cfg.RailpackFrontend, root, workDir, image, rpVars, line)
 			return err
 		})
+		flush()
 	default:
 		return "", fmt.Errorf("unknown builder %q", builder)
 	}
@@ -1246,12 +1393,43 @@ func (m *Manager) runSpecNamed(t *Target, d *store.Deployment, name string, i in
 	return s
 }
 
-func safeJoin(root, rel string) (string, error) {
+// lexicalJoin은 rel을 root 아래로 글자 그대로 붙인다(.. 는 root에서 멈춘다). symlink는 따지지 않는다.
+func lexicalJoin(root, rel string) (string, error) {
 	p := filepath.Join(root, filepath.Clean("/"+rel))
 	if p != root && !strings.HasPrefix(p, root+string(filepath.Separator)) {
 		return "", fmt.Errorf("잘못된 경로: %s", rel)
 	}
 	return p, nil
+}
+
+func safeJoin(root, rel string) (string, error) {
+	p, err := lexicalJoin(root, rel)
+	if err != nil {
+		return "", err
+	}
+	// 저장소는 사용자가 정하므로 symlink로 root 밖(예: 호스트 /)을 가리킬 수 있다. 있는 데까지 따라가 실제 위치도 root 안인지 본다.
+	if !resolvesWithin(root, p) {
+		return "", fmt.Errorf("잘못된 경로(저장소 밖을 가리키는 symlink): %s", rel)
+	}
+	return p, nil
+}
+
+// resolvesWithin은 p에서 실제로 있는 가장 긴 앞부분을 symlink까지 풀었을 때 root(역시 풀어서) 안인지다.
+// root가 아직 없으면(테스트, 만들기 전) 글자 그대로의 검사만으로 충분하다.
+func resolvesWithin(root, p string) bool {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return true
+	}
+	for cur := p; ; cur = filepath.Dir(cur) {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			rel, err := filepath.Rel(realRoot, real)
+			return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		}
+		if cur == root || cur == filepath.Dir(cur) {
+			return true
+		}
+	}
 }
 
 // maxHealthRestarts는 healthcheck 중 허용하는 재시작 횟수다.
@@ -1286,6 +1464,7 @@ func (m *Manager) healthcheckNames(ctx context.Context, t *Target, d *store.Depl
 	network := EnvNetwork(t.Env.ID)
 	var last string
 	noneSince := time.Now()
+	noneSettle := noneHealthSettle(ctx)
 	restarts := map[string]int{}
 	for attempt := 1; ; attempt++ {
 		states, err := drv.InspectMany(ctx, names)
@@ -1315,7 +1494,7 @@ func (m *Manager) healthcheckNames(ctx context.Context, t *Target, d *store.Depl
 			}
 			switch {
 			case d.Spec.HealthcheckType == "none":
-				ok[i] = time.Since(noneSince) > 3*time.Second
+				ok[i] = time.Since(noneSince) >= noneSettle
 			case isLocal(nodeID) && m.localDrv == nil:
 				var detail string
 				if ok[i], detail = node.ProbeState(ctx, st, network, kind, port, d.Spec.HealthcheckPath); ok[i] {
@@ -1345,12 +1524,26 @@ func (m *Manager) healthcheckNames(ctx context.Context, t *Target, d *store.Depl
 		if attempt%5 == 1 && last != "" {
 			b.Printf("healthcheck 대기 중... (%s)", last)
 		}
+		wait := time.Second
+		if d.Spec.HealthcheckType == "none" {
+			wait = min(wait, max(noneSettle-time.Since(noneSince), 10*time.Millisecond))
+		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("마지막 응답: %s", last)
-		case <-time.After(time.Second):
+		case <-time.After(wait):
 		}
 	}
+}
+
+// noneHealthSettle은 healthcheck가 없을 때 컨테이너가 계속 떠 있어야 하는 시간이다(기본 3초).
+// healthcheck 제한 시간이 짧으면 그 절반으로 줄인다(제한 시간 안에 통과할 수 있게).
+func noneHealthSettle(ctx context.Context) time.Duration {
+	settle := 3 * time.Second
+	if dl, ok := ctx.Deadline(); ok {
+		settle = min(settle, time.Until(dl)/2)
+	}
+	return max(settle, 0)
 }
 
 func (m *Manager) markDrain(c string) {
@@ -1374,11 +1567,15 @@ func (m *Manager) draining(c string) bool {
 // cutover는 새 배포를 live로 만들고 프록시를 전환한 뒤 이전 컨테이너를 drain 후 지운다. 이 시점부터 취소하지 않는다.
 func (m *Manager) cutover(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book, stopped []string) error {
 	ctx = context.WithoutCancel(ctx)
+	// 중지(Stop)·replica 변경과 엇갈리지 않게 확인과 전환을 한 번에 한다.
+	unlock := m.instLock(t.Instance.ID)
 	cur, err := m.Store.GetInstance(ctx, t.Instance.ID)
 	if err != nil {
+		unlock()
 		return err
 	}
 	if cur.Status == store.InstOffline {
+		unlock()
 		return errors.New("배포 중에 서비스가 중지되었습니다")
 	}
 	prev := cur.CurrentDeploymentID
@@ -1386,6 +1583,7 @@ func (m *Manager) cutover(ctx context.Context, t *Target, d *store.Deployment, b
 	m.Store.SetInstanceStatus(ctx, t.Instance.ID, store.InstOnline, &d.ID)
 	d.Status = store.DepLive
 	m.Store.UpdateDeployment(ctx, d)
+	unlock()
 	b.Status(string(store.DepLive))
 	perr := m.syncProxy(ctx)
 	proxyOK := true
@@ -1512,15 +1710,22 @@ func (m *Manager) removeContainers(ctx context.Context, d *store.Deployment, nam
 // cutoverCron은 cron 서비스의 배포를 live로 만든다. 컨테이너는 띄우지 않고 스케줄러가 실행한다.
 func (m *Manager) cutoverCron(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book) error {
 	ctx = context.WithoutCancel(ctx)
+	unlock := m.instLock(t.Instance.ID)
 	cur, err := m.Store.GetInstance(ctx, t.Instance.ID)
 	if err != nil {
+		unlock()
 		return err
+	}
+	if cur.Status == store.InstOffline {
+		unlock()
+		return errors.New("배포 중에 서비스가 중지되었습니다")
 	}
 	prev := cur.CurrentDeploymentID
 	m.Store.SetInstanceStatus(ctx, t.Instance.ID, store.InstScheduled, &d.ID)
 	d.Status = store.DepLive
 	d.Containers = nil
 	m.Store.UpdateDeployment(ctx, d)
+	unlock()
 	b.Status(string(store.DepLive))
 	b.Printf("cron 작업으로 등록했습니다: %s (UTC)", *d.Spec.CronSchedule)
 	m.SyncProxy(ctx)

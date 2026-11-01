@@ -36,7 +36,7 @@ function itemsAt(root: MenuEntry[], path: number[], level: number): MenuEntry[] 
 }
 
 const panelCls =
-  "z-50 min-w-[219px] max-w-[319px] rounded-md border border-gray-200 bg-background p-2 shadow-[0px_2px_6px_rgba(0,0,0,0.04),0px_6px_24px_rgba(0,0,0,0.04)]";
+  "z-50 min-w-[219px] max-w-[319px] rounded-lg border border-gray-200 bg-background p-2 shadow-popover dark:bg-secondaryBg";
 
 function Panel({
   items,
@@ -83,7 +83,7 @@ function Panel({
           return e.kind === "sep" ? (
             <div key={i} role="separator" className="m-2 h-px bg-gray-100" />
           ) : (
-            <div key={i} className="px-2 py-1 text-xs text-gray-600">
+            <div key={i} role="presentation" className="px-2 py-1 text-xs font-medium text-gray-500">
               {e.label}
             </div>
           );
@@ -104,16 +104,16 @@ function Panel({
               onPointerEnter={() => setPath([...path.slice(0, level), i, ...(e.children && !e.disabled ? [-1] : [])])}
               onClick={() => choose(e, level, i)}
               className={cx(
-                "relative mb-0.5 flex w-full select-none items-center rounded px-3 py-2 text-left text-sm leading-4 last:mb-0",
+                "relative mb-0.5 flex w-full select-none items-center rounded-md px-3 py-2 text-left text-sm leading-4 transition-colors duration-75 last:mb-0 focus:outline-none",
                 e.disabled ? "cursor-not-allowed text-gray-400" : e.danger ? "cursor-pointer text-danger" : "cursor-pointer text-gray-600",
                 isActive && !e.disabled && (e.danger ? "bg-red-600/10" : "bg-pink-50 text-pink-500 dark:text-pink-600"),
                 isActive && e.disabled && "bg-gray-100",
               )}
             >
-              <span className="mr-3 flex size-[16px] shrink-0 items-center justify-center text-current">{e.icon}</span>
+              <span aria-hidden="true" className="mr-3 flex size-[16px] shrink-0 items-center justify-center text-current">{e.icon}</span>
               <span className="min-w-0 flex-1 truncate">{e.label}</span>
               {e.checked && <Check className="size-[14px] text-pink-600" />}
-              {e.shortcut && <span className="ml-[12px] shrink-0 text-xs text-gray-400">{e.shortcut}</span>}
+              {e.shortcut && <span className="ml-[12px] shrink-0 font-mono text-xs text-gray-500">{e.shortcut}</span>}
               {e.children && <ChevronRight className="size-[14px] shrink-0 text-gray-400" />}
             </button>
             {open && e.children && (
@@ -172,6 +172,15 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
       window.removeEventListener("blur", hard);
     };
   }, [onClose]);
+
+  // Keep DOM focus on the highlighted item (the deepest open level) so screen readers announce it.
+  useEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    const active = el.querySelectorAll<HTMLElement>("[data-active]");
+    const target = active[active.length - 1];
+    if (target && document.activeElement !== target) target.focus({ preventScroll: true });
+  }, [path]);
 
   const choose = useCallback(
     (it: Item, level: number, idx: number) => {

@@ -35,9 +35,7 @@ function Slider({
         <div className="h-2 w-full rounded-full bg-black/15 dark:bg-gray-200">
           <div className="h-full rounded-full bg-pink-500 dark:bg-pink-300" style={{ width: left }} />
         </div>
-        <div className="pointer-events-none absolute top-1/2 -translate-y-1/2" style={{ left }}>
-          <div className="block size-4 -translate-x-1/2 rounded border-2 border-pink-500 bg-background dark:border-white dark:bg-pink-300" />
-        </div>
+        {/* The native range input sits on top (invisible) for pointer and keyboard; the thumb shows its focus. */}
         <input
           type="range"
           min={min}
@@ -47,8 +45,11 @@ function Slider({
           aria-label={label}
           aria-valuetext={valueText}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
         />
+        <div className="pointer-events-none absolute top-1/2 -translate-y-1/2 rounded peer-focus-visible:ring-2 peer-focus-visible:ring-pink-700 peer-focus-visible:ring-offset-2 peer-focus-visible:ring-offset-background" style={{ left }}>
+          <div className="block size-4 -translate-x-1/2 rounded border-2 border-pink-500 bg-background dark:border-white dark:bg-pink-300" />
+        </div>
       </div>
     </div>
   );

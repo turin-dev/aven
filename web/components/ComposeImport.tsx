@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Check, Globe, HardDrive, Network, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, FileUp, Globe, HardDrive, Network, X } from "lucide-react";
 import { api, type ComposePreview, type ComposeRequest, type Environment } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { BrandIcon } from "./ServiceIcon";
@@ -32,7 +32,25 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
   const [preview, setPreview] = useState<ComposePreview | null>(null);
   const [expose, setExpose] = useState<Record<string, boolean>>({});
   const [prune, setPrune] = useState(false);
-  useEscape(() => (preview ? setPreview(null) : onBack()));
+  const fileRef = useRef<HTMLInputElement>(null);
+  // Escape steps back (preview -> form -> source picker) but never interrupts a running preview or apply.
+  useEscape(() => {
+    if (busy) return;
+    if (preview) setPreview(null);
+    else onBack();
+  });
+
+  /** Loads a compose file from disk into the YAML box (the server limits the size; 1 MiB is plenty for compose). */
+  const openFile = async (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > 1 << 20) {
+      setError(new Error(t("파일이 너무 큽니다 (최대 1 MiB)")));
+      return;
+    }
+    setYaml(await f.text());
+    setSource("yaml");
+    setError(null);
+  };
 
   const request = (): ComposeRequest => ({
     source,
@@ -52,9 +70,9 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
     try {
       const p = await api.composePreview(pid, env.id, request());
       setPreview(p);
-      const ex: Record<string, boolean> = {};
-      for (const s of p.plan.services) ex[s.compose_name] = false;
-      setExpose(ex);
+      // Keep the domain choices of services that are still in the file; deletion is opt-in on every preview.
+      setExpose((prev) => Object.fromEntries(p.plan.services.map((s) => [s.compose_name, !!prev[s.compose_name]])));
+      setPrune(false);
     } catch (e) {
       setError(e);
     } finally {
@@ -72,19 +90,28 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
         if (expose[s.compose_name]) domains[s.compose_name] = [s.domain_candidates[0] ? { target_port: s.domain_candidates[0].port } : {}];
       }
       await api.composeApply(pid, env.id, { ...request(), domains, prune, deploy: true });
-      await Promise.all([qc.invalidateQueries({ queryKey: qk.canvas(env.id) }), qc.invalidateQueries({ queryKey: qk.project(pid) })]);
       onClose();
     } catch (e) {
       setError(e);
     } finally {
+      // A failed apply can still have created some services; refresh the canvas either way.
+      await Promise.all([qc.invalidateQueries({ queryKey: qk.canvas(env.id) }), qc.invalidateQueries({ queryKey: qk.project(pid) })]);
       setBusy(null);
     }
   };
 
   const plan = preview?.plan;
   const errs = plan?.errors ?? [];
-  const warns = plan?.warnings.filter((w) => w.severity === "warning") ?? [];
+  // missing_variable warnings are listed in their own box below.
+  const warns = plan?.warnings.filter((w) => w.severity === "warning" && w.code !== "missing_variable") ?? [];
   const diffOf = (n: string) => preview?.diff.find((d) => d.compose_name === n);
+  const tally = (a: string) => preview?.diff.filter((d) => d.action === a).length ?? 0;
+  const summary: [number, string][] = [
+    [tally("create"), t("새로 만들기")],
+    [tally("update"), t("변경|action")],
+    [tally("unchanged"), t("변경 없음")],
+    [tally("remove") + tally("keep"), t("compose에서 빠짐")],
+  ];
 
   return (
     <div
@@ -95,6 +122,14 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
         role="dialog"
         aria-modal="true"
         aria-label={t("Docker Compose 가져오기")}
+        onKeyDown={(e) => {
+          // Cmd/Ctrl+Enter runs the primary action of the current step.
+          if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || busy) return;
+          e.preventDefault();
+          if (!preview) {
+            if (ready) void runPreview();
+          } else if (preview.ok) void apply();
+        }}
         className="flex max-h-[88vh] w-full max-w-[759px] animate-pop-in flex-col overflow-hidden rounded-lg border border-gray-200 bg-background shadow-[0_32px_80px_-16px_rgba(0,0,0,0.75)] dark:bg-secondaryBg"
       >
         <div className="flex h-14 shrink-0 items-center gap-2 border-b border-gray-200 px-3">
@@ -108,19 +143,48 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           {!preview ? (
             <div className="flex flex-col gap-3">
-              <Segmented
-                label={t("가져오기 방식")}
-                value={source}
-                onChange={(v) => setSource(v)}
-                options={[
-                  { value: "yaml", label: t("YAML 붙여넣기") },
-                  { value: "repo", label: t("Git 저장소") },
-                ]}
-              />
+              <div className="flex items-center gap-2">
+                <Segmented
+                  label={t("가져오기 방식")}
+                  value={source}
+                  onChange={(v) => setSource(v)}
+                  options={[
+                    { value: "yaml", label: t("YAML 붙여넣기") },
+                    { value: "repo", label: t("Git 저장소") },
+                  ]}
+                />
+                {source === "yaml" && (
+                  <>
+                    <Button variant="outline" size="sm" className="ml-auto" onClick={() => fileRef.current?.click()}>
+                      <FileUp className="size-3.5" aria-hidden="true" /> {t("파일 열기")}
+                    </Button>
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept=".yml,.yaml,application/yaml,text/yaml"
+                      className="hidden"
+                      aria-hidden="true"
+                      tabIndex={-1}
+                      onChange={(e) => {
+                        void openFile(e.target.files?.[0]);
+                        e.target.value = "";
+                      }}
+                    />
+                  </>
+                )}
+              </div>
               {source === "yaml" ? (
                 <Textarea
+                  autoFocus
                   value={yaml}
                   onChange={(e) => setYaml(e.target.value)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    const f = e.dataTransfer.files?.[0];
+                    if (!f) return;
+                    e.preventDefault();
+                    void openFile(f);
+                  }}
                   placeholder={"services:\n  web:\n    image: nginx:alpine\n    ports: [\"8080:80\"]"}
                   rows={12}
                   spellCheck={false}
@@ -163,6 +227,15 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
                 {preview.exists && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-xs">{t("기존 스택 업데이트")}</span>}
                 <span className="ml-auto">{t("{env} 환경", { env: env.name })}</span>
               </div>
+              {summary.some(([n]) => n > 0) && (
+                <div className="flex flex-wrap gap-1.5 text-xs tabular-nums" aria-label={t("변경 요약")}>
+                  {summary.filter(([n]) => n > 0).map(([n, label]) => (
+                    <span key={label} className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">
+                      {label} <span className="font-medium text-foreground">{n}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
 
               {errs.length > 0 && (
                 <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-danger" role="alert">
@@ -177,6 +250,15 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+              {(plan?.missing_variables.length ?? 0) > 0 && (
+                <div className="rounded-md border border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+                  <div className="flex items-center gap-1.5 font-medium text-foreground">
+                    <AlertTriangle className="size-4 text-warn" aria-hidden="true" /> {t("값이 없는 변수 {count}개", { count: plan!.missing_variables.length })}
+                  </div>
+                  <p className="mt-1">{t("compose 파일이 참조하지만 값이 없어 빈 값으로 들어갑니다. 뒤로 가서 변수 칸에 넣을 수 있습니다.")}</p>
+                  <p className="mt-1.5 break-all font-mono text-xs text-foreground">{plan!.missing_variables.join(", ")}</p>
                 </div>
               )}
               {warns.length > 0 && (
@@ -283,7 +365,7 @@ export function ComposeImport({ pid, env, onBack, onClose }: { pid: string; env:
         </div>
 
         <div className="flex shrink-0 items-center gap-2 border-t border-gray-200 px-4 py-3">
-          <span className="text-xs text-gray-400">{t("비밀값은 변수로 저장됩니다. 서비스는 의존 순서대로 배포됩니다.")}</span>
+          <span className="text-xs text-gray-500">{t("비밀값은 변수로 저장됩니다. 서비스는 의존 순서대로 배포됩니다.")}</span>
           <span className="ml-auto flex gap-2">
             {!preview ? (
               <Button variant="primary" loading={busy === "preview"} disabled={!ready || busy !== null} onClick={runPreview}>

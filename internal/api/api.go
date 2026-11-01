@@ -94,6 +94,8 @@ type Server struct {
 
 	// routes는 Handler()가 등록한 인증 라우트와 권한 선언이다(Routes()).
 	routes []Route
+	// publicRoutes는 권한 계층 밖에서 등록한 라우트 패턴이다(PublicRoutes()).
+	publicRoutes []string
 	// restartFn이 있으면 owner의 재시작 요청 때 SIGTERM 대신 이것을 부른다(테스트용).
 	restartFn func()
 
@@ -108,44 +110,52 @@ type envOps interface {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	// requireAuth/authorize를 거치지 않는 라우트는 모두 pub으로 등록한다(PublicRoutes, TestPublicRoutesAreReviewed).
+	// 이런 라우트의 핸들러는 인증(토큰, 서명, 세션)을 직접 확인해야 한다.
+	s.publicRoutes = nil
+	pub := func(pattern string, h http.Handler) {
+		s.publicRoutes = append(s.publicRoutes, pattern)
+		mux.Handle(pattern, h)
+	}
+	pubF := func(pattern string, f http.HandlerFunc) { pub(pattern, f) }
 	if s.Deploy != nil {
 		s.Deploy.EnqueueHook = s.auditBorrowedGitHub
 	}
 	// OAuth 2.0 / OpenID Connect provider (oauth.go). /oauth/consent/는 웹 UI 페이지다.
-	mux.HandleFunc("GET /.well-known/openid-configuration", oauthCORS(s.oauthDiscovery))
-	mux.HandleFunc("GET /oauth/.well-known/openid-configuration", oauthCORS(s.oauthDiscovery))
-	mux.HandleFunc("GET /oauth/jwks", oauthCORS(s.oauthJWKS))
-	mux.HandleFunc("GET /oauth/auth", s.oauthAuthorize)
-	mux.HandleFunc("GET /oauth/authorize", s.oauthAuthorize)
-	mux.HandleFunc("/oauth/token", oauthCORS(oauthMethod("POST", s.oauthToken)))
-	mux.HandleFunc("/oauth/me", oauthCORS(oauthMethod("GET, POST", s.oauthUserInfo)))
-	mux.HandleFunc("/oauth/userinfo", oauthCORS(oauthMethod("GET, POST", s.oauthUserInfo)))
-	mux.HandleFunc("/oauth/revoke", oauthCORS(oauthMethod("POST", s.oauthRevoke)))
-	mux.HandleFunc("POST /api/auth/login", s.login)
-	mux.HandleFunc("POST /api/auth/logout", s.logout)
-	mux.HandleFunc("POST /api/auth/view-as/stop", s.stopViewAs)
-	mux.HandleFunc("GET /api/auth/saml/status", s.samlStatus)
-	mux.HandleFunc("GET /api/auth/saml/login", s.samlLogin)
-	mux.HandleFunc("POST /api/auth/saml/acs", s.samlACS)
-	mux.HandleFunc("GET /api/auth/saml/metadata", s.samlMetadata)
-	mux.HandleFunc("POST /api/auth/passkeys/login/begin", s.beginPasskeyLogin)
-	mux.HandleFunc("POST /api/auth/passkeys/login/factor/{challenge}/finish", s.finishPasskeyFactorLogin)
-	mux.HandleFunc("POST /api/auth/passkeys/login/discoverable/{challenge}/finish", s.finishPasskeyDiscoverableLogin)
-	mux.HandleFunc("POST /api/webhooks/github", s.githubWebhook)
+	pubF("GET /.well-known/openid-configuration", oauthCORS(s.oauthDiscovery))
+	pubF("GET /oauth/.well-known/openid-configuration", oauthCORS(s.oauthDiscovery))
+	pubF("GET /oauth/jwks", oauthCORS(s.oauthJWKS))
+	pubF("GET /oauth/auth", s.oauthAuthorize)
+	pubF("GET /oauth/authorize", s.oauthAuthorize)
+	pubF("/oauth/token", oauthCORS(oauthMethod("POST", s.oauthToken)))
+	pubF("/oauth/me", oauthCORS(oauthMethod("GET, POST", s.oauthUserInfo)))
+	pubF("/oauth/userinfo", oauthCORS(oauthMethod("GET, POST", s.oauthUserInfo)))
+	pubF("/oauth/revoke", oauthCORS(oauthMethod("POST", s.oauthRevoke)))
+	pubF("POST /api/auth/login", s.login)
+	pubF("POST /api/auth/logout", s.logout)
+	pubF("POST /api/auth/view-as/stop", s.stopViewAs)
+	pubF("GET /api/auth/saml/status", s.samlStatus)
+	pubF("GET /api/auth/saml/login", s.samlLogin)
+	pubF("POST /api/auth/saml/acs", s.samlACS)
+	pubF("GET /api/auth/saml/metadata", s.samlMetadata)
+	pubF("POST /api/auth/passkeys/login/begin", s.beginPasskeyLogin)
+	pubF("POST /api/auth/passkeys/login/factor/{challenge}/finish", s.finishPasskeyFactorLogin)
+	pubF("POST /api/auth/passkeys/login/discoverable/{challenge}/finish", s.finishPasskeyDiscoverableLogin)
+	pubF("POST /api/webhooks/github", s.githubWebhook)
 	// GitHub에서 돌아오는 cross-site 이동에는 SameSite=Strict 세션 쿠키가 붙지 않으므로 핸들러가 직접 세션을 확인한다
 	// (없으면 같은 origin에서 한 번 다시 이동). 권한(작업 공간 admin, 세션만)은 githubOAuthReturn이 검사한다.
-	mux.HandleFunc("GET /api/github/oauth/callback", s.githubOAuthReturn)
-	mux.HandleFunc("POST /api/agent/enroll", s.enrollAgent)
-	mux.HandleFunc("POST /api/agent/upgrade", s.upgradeAgent)
-	mux.HandleFunc("GET /api/agent/connect", s.connectAgent)
-	mux.HandleFunc("GET /install-agent.sh", s.installScript)
-	mux.HandleFunc("GET /downloads/{file}", s.downloadAgent)
-	mux.HandleFunc("GET /install.sh", s.installCLIScript)
-	mux.HandleFunc("GET /api/cli/downloads", s.cliDownloads)
+	pubF("GET /api/github/oauth/callback", s.githubOAuthReturn)
+	pubF("POST /api/agent/enroll", s.enrollAgent)
+	pubF("POST /api/agent/upgrade", s.upgradeAgent)
+	pubF("GET /api/agent/connect", s.connectAgent)
+	pubF("GET /install-agent.sh", s.installScript)
+	pubF("GET /downloads/{file}", s.downloadAgent)
+	pubF("GET /install.sh", s.installCLIScript)
+	pubF("GET /api/cli/downloads", s.cliDownloads)
 
-	mux.HandleFunc("POST /api/auth/accept-invite", s.acceptInvite)
+	pubF("POST /api/auth/accept-invite", s.acceptInvite)
 	if s.Traces != nil {
-		mux.Handle("POST /v1/traces", s.Traces)
+		pub("POST /v1/traces", s.Traces)
 	}
 
 	// 모든 인증 라우트는 필요한 권한을 선언한다(authz.go). 프로젝트 라우트는 경로 변수로 리소스의 프로젝트/환경을 찾는다.
@@ -536,13 +546,13 @@ func (s *Server) Handler() http.Handler {
 	h("POST /api/owner/holds", ownerOnly(), s.createOwnerHold)
 	h("DELETE /api/owner/holds/{scope}/{tid}", ownerOnly(), s.releaseOwnerHold)
 
-	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, 404, "not found") })
-	mux.Handle("/mcp", s.mcpHandler(mux))
+	pubF("/api/", func(w http.ResponseWriter, r *http.Request) { writeErr(w, 404, "not found") })
+	pub("/mcp", s.mcpHandler(mux))
 	// Public GraphQL API(graphql.go): POST는 REST 라우트를 감싼 GraphQL, GET은 브라우저용 playground다.
-	mux.Handle("POST /graphql/v2", s.graphQLHandler(mux))
-	mux.HandleFunc("GET /graphql/v2", s.graphiql)
+	pub("POST /graphql/v2", s.graphQLHandler(mux))
+	pubF("GET /graphql/v2", s.graphiql)
 	if s.Web != nil {
-		mux.Handle("/", spaHandler(s.Web))
+		pub("/", spaHandler(s.Web))
 	}
 	return s.secureHeaders(s.logRequests(mux))
 }

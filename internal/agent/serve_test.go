@@ -49,3 +49,45 @@ func TestServeReturnsWhenConnectionDropsDuringStream(t *testing.T) {
 		t.Fatal("Serve did not return after the connection dropped (in-flight stream was not cancelled)")
 	}
 }
+
+// 처리 중인 요청과 같은 id의 요청은 거부한다. 그래도 첫 요청은 cancel로 멈출 수 있어야 한다.
+func TestServeRejectsDuplicateInFlightIDsAndKeepsCancel(t *testing.T) {
+	f := &eventsDocker{started: make(chan struct{})}
+	h := &Handler{Docker: f, Proxy: &fakeProxy{}}
+	enc := func(m agentprotocol.Message) []byte { b, _ := json.Marshal(m); return b }
+	cancelPayload, _ := json.Marshal(agentprotocol.CancelRequest{ID: "req-1"})
+	in := make(chan []byte, 8)
+	in <- enc(agentprotocol.Message{ID: "req-1", Operation: agentprotocol.OpEvents})
+	read := func(ctx context.Context) ([]byte, error) {
+		select {
+		case b := <-in:
+			return b, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	out := make(chan agentprotocol.Message, 8)
+	write := func(_ context.Context, m agentprotocol.Message) error { out <- m; return nil }
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go h.Serve(ctx, read, write)
+	<-f.started
+	in <- enc(agentprotocol.Message{ID: "req-1", Operation: agentprotocol.OpPing})
+	select {
+	case m := <-out:
+		if m.ID != "req-1" || m.Error != "duplicate request id" {
+			t.Fatalf("duplicate request answered with %+v", m)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("duplicate request id was not refused")
+	}
+	in <- enc(agentprotocol.Message{Operation: agentprotocol.OpCancel, Payload: cancelPayload})
+	select {
+	case m := <-out:
+		if m.ID != "req-1" || m.Error == "" {
+			t.Fatalf("cancelled stream answered with %+v", m)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first request could not be cancelled")
+	}
+}

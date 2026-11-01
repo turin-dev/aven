@@ -7,7 +7,8 @@ import { ALERT_METRICS, api, type AlertMetric, type AlertRule, type AlertRuleInp
 import { qk, useAlertRules, useCaps } from "@/lib/queries";
 import { t, tr } from "@/lib/i18n";
 import { fmtRelative, fmtTime } from "@/lib/format";
-import { Button, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Select, Spinner, Toggle, cx, useConfirm } from "./ui";
+import { Button, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Select, Spinner, Toggle, cx, errorMessage, useConfirm } from "./ui";
+import { toast } from "@/lib/uiState";
 
 const STATE_LABEL: Record<AlertRule["last_state"], string> = { ok: t("정상"), pending: t("대기"), firing: t("발생") };
 
@@ -58,6 +59,46 @@ function toDraft(r?: AlertRule): Draft {
   };
 }
 
+function fmtDuration(sec: number) {
+  if (sec <= 0) return t("즉시");
+  if (sec % 3600 === 0) return t("{n}시간", { n: sec / 3600 });
+  if (sec % 60 === 0) return t("{n}분", { n: sec / 60 });
+  return t("{n}초", { n: sec });
+}
+
+/** Plain-language summary of a rule draft, shown live in the dialog. */
+function RulePreview({ d, envs, services }: { d: Draft; envs: Environment[]; services: Service[] }) {
+  const threshold = Number(d.threshold);
+  const forS = Number(d.for_seconds);
+  if (d.threshold.trim() === "" || !Number.isFinite(threshold)) return null;
+  const svc = d.service_id ? (services.find((s) => s.id === d.service_id)?.name ?? d.service_id) : t("모든 서비스");
+  const env = d.environment_id ? (envs.find((e) => e.id === d.environment_id)?.name ?? d.environment_id) : t("모든 환경");
+  return (
+    <div className="rounded-md border border-gray-200 bg-secondaryBg px-3 py-2.5 text-sm" role="status" aria-live="polite">
+      <div className="mb-1 text-xs font-semibold text-gray-500">{t("미리보기")}</div>
+      <p className="text-gray-700">
+        {(() => {
+          const parts = {
+          target: <b className="text-foreground">{`${svc} · ${env}`}</b>,
+          metric: <b className="text-foreground">{metricLabel(d.metric)}</b>,
+          cmp: <span className="font-mono">{d.comparator}</span>,
+          value: <b className="tabular-nums text-foreground">{fmtValue(d.metric, threshold)}</b>,
+          dur: <b className="text-foreground">{Number.isFinite(forS) ? fmtDuration(forS) : "?"}</b>,
+          firing: <code className="font-mono text-xs">alert.firing</code>,
+          resolved: <code className="font-mono text-xs">alert.resolved</code>,
+        };
+          return forS > 0
+            ? tr("{target}에서 {metric}이(가) {cmp} {value} 상태로 {dur} 지속되면 {firing}을 보내고, 돌아오면 {resolved}를 보냅니다.", parts)
+            : tr("{target}에서 {metric}이(가) {cmp} {value}이(가) 되는 즉시 {firing}을 보내고, 돌아오면 {resolved}를 보냅니다.", parts);
+        })()}
+      </p>
+      {!d.enabled && <p className="mt-1 text-xs text-warn">{t("꺼 둔 규칙은 평가하지 않습니다.")}</p>}
+    </div>
+  );
+}
+
+const isPercent = (m: AlertMetric) => m.endsWith("_percent") || m === "http_5xx_rate";
+
 function RuleDialog({
   pid,
   rule,
@@ -78,7 +119,10 @@ function RuleDialog({
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }));
   const threshold = Number(d.threshold);
   const forS = Number(d.for_seconds);
-  const valid = d.threshold.trim() !== "" && Number.isFinite(threshold) && threshold >= 0 && Number.isInteger(forS) && forS >= 0 && forS <= 86400;
+  const thresholdBad = d.threshold.trim() === "" || !Number.isFinite(threshold) || threshold < 0;
+  const forBad = d.for_seconds.trim() === "" || !Number.isInteger(forS) || forS < 0 || forS > 86400;
+  const valid = !thresholdBad && !forBad;
+  const pctOver = isPercent(d.metric) && threshold > 100;
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -139,12 +183,21 @@ function RuleDialog({
               <option value="<">&lt;</option>
             </Select>
           </Field>
-          <Field label={t("기준 값")} hint={d.metric.endsWith("_bytes") ? t("bytes (예: 536870912 = 512 MB)") : undefined}>
-            <Input type="number" min={0} step="any" value={d.threshold} onChange={(e) => set({ threshold: e.target.value })} />
+          <Field
+            label={t("기준 값")}
+            hint={
+              pctOver ? (
+                <span className="text-warn">{t("100%를 넘는 기준은 발생하지 않습니다.")}</span>
+              ) : d.metric.endsWith("_bytes") ? (
+                !thresholdBad && threshold > 0 ? `= ${fmtValue(d.metric, threshold)}` : t("bytes (예: 536870912 = 512 MB)")
+              ) : undefined
+            }
+          >
+            <Input type="number" min={0} step="any" value={d.threshold} invalid={thresholdBad} onChange={(e) => set({ threshold: e.target.value })} />
           </Field>
         </div>
         <Field label={t("지속 시간(초)")} hint={t("이 시간 동안 계속 기준을 넘으면 알림을 냅니다. 0이면 바로. 30초마다 평가합니다.")}>
-          <Input type="number" min={0} max={86400} step={30} value={d.for_seconds} onChange={(e) => set({ for_seconds: e.target.value })} />
+          <Input type="number" min={0} max={86400} step={30} value={d.for_seconds} invalid={forBad} onChange={(e) => set({ for_seconds: e.target.value })} />
         </Field>
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={t("환경")}>
@@ -172,6 +225,7 @@ function RuleDialog({
           <Toggle checked={d.enabled} onChange={(v) => set({ enabled: v })} label={t("사용")} />
           <span className="text-sm text-gray-600">{t("사용")}</span>
         </div>
+        <RulePreview d={d} envs={envs} services={services} />
         <ErrorBox error={error} />
       </div>
     </Dialog>
@@ -241,8 +295,8 @@ export function AlertRulesSection({ pid, envs, services }: { pid: ID; envs: Envi
                     <td className="px-3 py-2">
                       <div className="font-medium">{r.name || metricLabel(r.metric)}</div>
                       <div className="font-mono text-xs tabular-nums text-gray-500">
-                        {r.metric} {r.comparator} {r.threshold}
-                        {r.for_seconds > 0 && ` · ${t("{n}초", { n: r.for_seconds })}`}
+                        {r.metric} {r.comparator} {fmtValue(r.metric, r.threshold)}
+                        {r.for_seconds > 0 && ` · ${fmtDuration(r.for_seconds)}`}
                       </div>
                     </td>
                     <td className="px-3 py-2 text-gray-600">
@@ -268,8 +322,13 @@ export function AlertRulesSection({ pid, envs, services }: { pid: ID; envs: Envi
                                 confirmLabel: t("삭제"),
                                 danger: true,
                                 run: async () => {
-                                  await api.deleteAlertRule(pid, r.id);
-                                  await qc.invalidateQueries({ queryKey: qk.alertRules(pid) });
+                                  try {
+                                    await api.deleteAlertRule(pid, r.id);
+                                  } catch (e) {
+                                    toast(errorMessage(e), "error");
+                                  } finally {
+                                    await qc.invalidateQueries({ queryKey: qk.alertRules(pid) });
+                                  }
                                 },
                               })
                             }

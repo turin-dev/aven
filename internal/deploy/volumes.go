@@ -254,15 +254,24 @@ func (m *Manager) restore(ctx context.Context, v *store.Volume, b *store.Backup)
 	}
 	defer dec.Close()
 	pr, pw := io.Pipe()
-	go func() { _, err := io.Copy(pw, dec); pw.CloseWithError(err) }()
+	copied := make(chan struct{})
+	go func() {
+		defer close(copied)
+		_, err := io.Copy(pw, dec)
+		pw.CloseWithError(err)
+	}()
 	name := "keel-restore-" + strings.TrimPrefix(b.ID, "bak_")
 	ierr := drv.ImportVolume(ctx, v.DockerName, name, pr)
 	pr.Close()
+	<-copied // dec.Close(defer)가 아직 읽고 있는 decoder를 닫지 않게 복사가 끝나기를 기다린다
 	if cur != nil && t != nil {
-		if ierr != nil {
+		restart := func() {
 			for _, c := range cur.Containers {
 				drv.Start(ctx, c)
 			}
+		}
+		if ierr != nil {
+			restart()
 			return ierr
 		}
 		in, err := m.Store.GetInstance(ctx, t.Instance.ID)
@@ -271,7 +280,9 @@ func (m *Manager) restore(ctx context.Context, v *store.Volume, b *store.Backup)
 			bu := cur.BuilderUsed
 			if _, err := m.Enqueue(ctx, in, EnqueueOpts{Trigger: "redeploy", Image: cur.Image, Spec: &cur.Spec, ReqSpec: &cur.ReqSpec,
 				Commit: commitOf(cur), Branch: cur.Branch, BuilderUsed: bu}); err != nil {
-				return err
+				// 배포를 만들지 못했다(사용량 한도 등): 멈춰 둔 컨테이너를 복원된 데이터로 다시 띄운다.
+				restart()
+				return fmt.Errorf("restored, but the redeploy could not be queued: %w", err)
 			}
 		}
 	}

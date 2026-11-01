@@ -28,10 +28,21 @@ const (
 )
 
 // Aggregate는 한 인스턴스의 점(시간순)을 [from, to) 안의 시간별 사용량으로 묶는다.
-// 점 하나는 자기 해상도(res초) 동안의 평균으로 본다. 네트워크 송신량은 누적 카운터의 증가분이다
+// 점 하나는 자기 해상도(res초) 동안, 즉 [T, T+res) 구간의 평균으로 본다. 구간이 시간 경계를 넘으면 겹치는 만큼 각 시간에
+// 나눠 넣는다(예전에는 다음 시간으로 넘어간 부분을 버려서 경계마다 사용량이 조금씩 빠졌다). 그래서 from 이전의 점도
+// from 시간에 걸치는 부분은 센다. 네트워크 송신량은 누적 카운터의 증가분이고 점이 찍힌 시간에 넣는다
 // (from 이전의 점은 기준값으로만 쓰고, 카운터가 줄면(컨테이너 재시작) 새 값 전체를 증가분으로 본다).
+// 범위를 나눠 여러 번 집계해도(시간별 집계 + 부분 시간) 합은 한 번에 집계한 것과 같다.
 func Aggregate(rows []store.MetricRow, from, to int64) map[int64]*store.UsageRow {
 	out := map[int64]*store.UsageRow{}
+	bucket := func(h int64) *store.UsageRow {
+		u := out[h]
+		if u == nil {
+			u = &store.UsageRow{Hour: h}
+			out[h] = u
+		}
+		return u
+	}
 	var prevTx int64
 	havePrev := false
 	for _, r := range rows {
@@ -47,30 +58,38 @@ func Aggregate(rows []store.MetricRow, from, to int64) map[int64]*store.UsageRow
 			}
 		}
 		prevTx, havePrev = r.Tx, true
-		if r.T < from {
-			continue
+		if r.T >= from && egress != 0 {
+			bucket(r.T - r.T%Hour).EgressBytes += egress
 		}
-		h := r.T - r.T%Hour
-		u := out[h]
-		if u == nil {
-			u = &store.UsageRow{Hour: h}
-			out[h] = u
+		res := int64(r.Resolution)
+		if res <= 0 {
+			res = 10
 		}
-		w := float64(r.Resolution)
-		if w <= 0 {
-			w = 10
-		}
-		if end := float64(h + Hour - r.T); w > end {
-			w = end // 시간 경계를 넘는 부분은 자른다
-		}
-		u.CPUCoreSeconds += r.CPU / 100 * w
-		u.MemGBSeconds += float64(r.Mem) / GB * w
-		u.EgressBytes += egress
-		if r.Disk != nil {
-			u.DiskGBHours += float64(*r.Disk) / GB * w / float64(Hour)
+		// [T, T+res)를 [from, to) 안에서 시간마다 나눈다.
+		start, end := max(r.T, from), min(r.T+res, to)
+		for start < end {
+			h := start - floorMod(start, Hour)
+			seg := min(end, h+Hour) - start
+			w := float64(seg)
+			u := bucket(h)
+			u.CPUCoreSeconds += r.CPU / 100 * w
+			u.MemGBSeconds += float64(r.Mem) / GB * w
+			if r.Disk != nil {
+				u.DiskGBHours += float64(*r.Disk) / GB * w / float64(Hour)
+			}
+			start += seg
 		}
 	}
 	return out
+}
+
+// floorMod는 음수에서도 0 이상인 나머지다.
+func floorMod(a, b int64) int64 {
+	m := a % b
+	if m < 0 {
+		m += b
+	}
+	return m
 }
 
 // Roller는 시간별 집계 작업이다.
@@ -146,16 +165,19 @@ func (r *Roller) RollRange(ctx context.Context, from, to int64) error {
 	if err != nil {
 		return err
 	}
-	svcProject := map[string]string{}
+	// 서비스 → 프로젝트는 한 번에 읽는다(인스턴스마다 GetService를 부르지 않는다).
+	svcs, err := r.Store.ListServices(ctx, "")
+	if err != nil {
+		return err
+	}
+	svcProject := make(map[string]string, len(svcs))
+	for _, sv := range svcs {
+		svcProject[sv.ID] = sv.ProjectID
+	}
 	for _, in := range ins {
 		pid, ok := svcProject[in.ServiceID]
 		if !ok {
-			svc, err := r.Store.GetService(ctx, in.ServiceID)
-			if err != nil {
-				continue
-			}
-			pid = svc.ProjectID
-			svcProject[in.ServiceID] = pid
+			continue // 집계 중에 지워진 서비스
 		}
 		rows, err := r.Store.QueryMetrics(ctx, in.ID, from-600) // 송신량 기준값
 		if err != nil {

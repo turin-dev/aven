@@ -61,6 +61,9 @@ AGENT_CRED=/var/lib/keel-agent/credentials.json
 
 ESC=$(printf '\033')
 TAB=$(printf '\t')
+NL='
+'
+CR=$(printf '\r')
 FANCY=0 # glyphs, colors and spinners on stdout
 [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && FANCY=1
 ACC="" BOLD="" DIM="" RED="" GRN="" YEL="" RST=""
@@ -220,6 +223,19 @@ bg_tty() { # stat after "comm) ": state ppid pgrp session tty_nr tpgid
 	[ "${5:-0}" != 0 ] && [ "${6:--1}" != -1 ] && [ "$6" != "$3" ]
 }
 
+SECRET_VARS="AVEN_ADMIN_PASSWORD KEEL_ADMIN_PASSWORD AVEN_JOIN_TOKEN KEEL_JOIN_TOKEN GITHUB_TOKEN"
+# Run again by sudo (below): read the secrets the unprivileged run left in its private directory.
+if [ -n "${AVEN_INSTALLER_SECRETS:-}" ] && [ "$(id -u)" -eq 0 ] && [ -d "$AVEN_INSTALLER_SECRETS" ]; then
+	for _n in $SECRET_VARS; do
+		[ -f "$AVEN_INSTALLER_SECRETS/secret.$_n" ] || continue
+		_v=$(cat "$AVEN_INSTALLER_SECRETS/secret.$_n") || continue
+		eval "$_n=\$_v"
+		rm -f "$AVEN_INSTALLER_SECRETS/secret.$_n"
+	done
+	_v=""
+fi
+unset AVEN_INSTALLER_SECRETS
+
 # Not root: run again with sudo and the terminal as input, so sudo keeps the script in the foreground.
 if [ "$(id -u)" -ne 0 ]; then
 	case " $* " in
@@ -235,11 +251,19 @@ if [ "$(id -u)" -ne 0 ]; then
 					"${AVEN_INSTALLER_URL:-https://raw.githubusercontent.com/$REPO/main/install-server.sh}" &&
 					head -n1 "$SELF" | grep -q '^#!'; } || die "could not download the installer to run it with sudo; run it as root"
 			fi
-			# sudo resets the environment; pass on the settings this script reads
+			# sudo resets the environment; pass on the settings this script reads. Secrets go through
+			# files in the private $TMP (0700): sudo's command line stays visible in ps for the whole run.
 			set -- sh "$SELF" "$@"
-			for _n in AVEN_ADMIN_PASSWORD KEEL_ADMIN_PASSWORD AVEN_JOIN_TOKEN KEEL_JOIN_TOKEN AVEN_REPO GITHUB_TOKEN NO_COLOR TERM COLORTERM LANG LC_ALL LC_CTYPE; do
+			for _n in AVEN_REPO NO_COLOR TERM COLORTERM LANG LC_ALL LC_CTYPE; do
 				eval "[ -z \"\${$_n+x}\" ] || set -- \"$_n=\$$_n\" \"\$@\""
 			done
+			_sec=0
+			for _n in $SECRET_VARS; do
+				eval "[ -z \"\${$_n+x}\" ]" && continue
+				eval "printf '%s' \"\$$_n\"" >"$TMP/secret.$_n" || die "could not hand $_n to sudo"
+				_sec=1
+			done
+			[ "$_sec" -eq 0 ] || set -- "AVEN_INSTALLER_SECRETS=$TMP" "$@"
 			_rc=0
 			if (exec </dev/tty) 2>/dev/null; then sudo env "$@" </dev/tty || _rc=$?
 			else sudo env "$@" || _rc=$?; fi
@@ -550,7 +574,11 @@ email_problem() {
 }
 password_problem() {
 	[ ${#1} -ge 8 ] || { echo "The admin password must have at least 8 characters."; return; }
-	case "$1" in *[\"\'\\\$\`\ ]*) echo "The admin password must not contain quotes, backslashes, \$, backticks or spaces." ;; esac
+	case "$1" in
+		# one line in the env file: a tab or line break would end the value or start a new setting
+		*"$TAB"*|*"$NL"*|*"$CR"*) echo "The admin password must not contain tabs or line breaks." ;;
+		*[\"\'\\\$\`\ ]*) echo "The admin password must not contain quotes, backslashes, \$, backticks or spaces." ;;
+	esac
 }
 server_problem() { # what is wrong with main server URL $1 for a region server
 	case "$1" in

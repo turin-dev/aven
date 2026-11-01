@@ -7,7 +7,8 @@
 
 export type Style = { fg: string | null; bg: string | null; bold: boolean; dim: boolean; italic: boolean; underline: boolean; inverse: boolean };
 export type Cell = { ch: string; st: Style };
-export type Run = { text: string; st: Style };
+/** A style run; `cells` holds one entry per terminal column (a wide character is followed by an empty cell). */
+export type Run = { text: string; st: Style; cells: string[] };
 
 const PLAIN: Style = { fg: null, bg: null, bold: false, dim: false, italic: false, underline: false, inverse: false };
 
@@ -29,6 +30,26 @@ function color256(n: number): string {
 }
 
 const MAX_LINES = 3000;
+
+/** East Asian wide and emoji code points take two terminal columns (Hangul, CJK, fullwidth forms, emoji). */
+export function isWide(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0x303e) ||
+    (cp >= 0x3041 && cp <= 0x33ff) ||
+    (cp >= 0x3400 && cp <= 0x4dbf) ||
+    (cp >= 0x4e00 && cp <= 0x9fff) ||
+    (cp >= 0xa000 && cp <= 0xa4cf) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe30 && cp <= 0xfe4f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f64f) ||
+    (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  );
+}
 
 export class Terminal {
   cols: number;
@@ -82,7 +103,8 @@ export class Terminal {
   }
 
   private put(ch: string) {
-    if (this.cx >= this.cols) {
+    const wide = isWide(ch.codePointAt(0) ?? 0);
+    if (this.cx >= this.cols || (wide && this.cx >= this.cols - 1)) {
       this.cx = 0;
       this.newline();
     }
@@ -90,6 +112,11 @@ export class Terminal {
     while (l.length < this.cx) l.push({ ch: " ", st: PLAIN });
     l[this.cx] = { ch, st: this.st };
     this.cx++;
+    if (wide) {
+      // Placeholder for the second column so cursor addressing stays aligned.
+      l[this.cx] = { ch: "", st: this.st };
+      this.cx++;
+    }
   }
 
   write(data: string) {
@@ -105,6 +132,17 @@ export class Terminal {
           return;
         }
         i = n;
+        continue;
+      }
+      // Astral characters (emoji, rare CJK) arrive as surrogate pairs; keep them in one cell.
+      const code = s.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        if (i + 1 >= s.length) {
+          this.pending = c;
+          return;
+        }
+        this.put(s.slice(i, i + 2));
+        i += 2;
         continue;
       }
       i++;
@@ -168,7 +206,7 @@ export class Terminal {
         this.cy = Math.max(this.top, this.cy - n());
         break;
       case "B":
-        this.cy = this.cy + n();
+        this.cy = Math.min(this.cy + n(), this.top + this.rows - 1);
         this.line(this.cy);
         break;
       case "C":
@@ -295,8 +333,10 @@ export class Terminal {
       const out: Run[] = [];
       for (const c of l) {
         const last = out[out.length - 1];
-        if (last && last.st === c.st) last.text += c.ch;
-        else out.push({ text: c.ch, st: c.st });
+        if (last && last.st === c.st) {
+          last.text += c.ch;
+          last.cells.push(c.ch);
+        } else out.push({ text: c.ch, st: c.st, cells: [c.ch] });
       }
       return out;
     });
@@ -330,9 +370,11 @@ export function keyToBytes(e: { key: string; ctrlKey: boolean; altKey: boolean; 
   };
   if (e.key === "Tab" && e.shiftKey) return null; // Shift+Tab leaves the terminal (keyboard users)
   if (special[e.key]) return (e.altKey ? "\x1b" : "") + special[e.key];
+  // AltGr arrives as Ctrl+Alt on Windows and some Linux layouts: "@", "\\", "[" … are printable characters there.
+  if (e.ctrlKey && e.altKey && [...e.key].length === 1 && !/^[a-z]$/i.test(e.key)) return e.key;
   if (e.ctrlKey && e.key.length === 1) {
     const k = e.key.toLowerCase();
-    if (k >= "a" && k <= "z") return String.fromCharCode(k.charCodeAt(0) - 96);
+    if (k >= "a" && k <= "z") return (e.altKey ? "\x1b" : "") + String.fromCharCode(k.charCodeAt(0) - 96);
     const map: Record<string, string> = { "[": "\x1b", "\\": "\x1c", "]": "\x1d", "^": "\x1e", _: "\x1f", " ": "\x00", "@": "\x00" };
     return map[k] ?? null;
   }

@@ -15,7 +15,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"sync"
 
 	"github.com/coder/websocket"
 	"github.com/turin-dev/aven/internal/mesh"
@@ -330,18 +329,18 @@ type LineChunk struct {
 	Line string `json:"line"`
 }
 
+// Peer는 연결 하나의 쓰기 쪽이다. 여러 goroutine이 동시에 써도 된다.
 type Peer struct {
 	Conn *websocket.Conn
-	Mu   sync.Mutex
 }
 
+// Write는 메시지 하나를 보낸다. 쓰기 직렬화는 websocket.Conn이 ctx를 지키며 한다. 예전처럼 따로 sync.Mutex를 잡으면
+// 느린 상대에 막힌 쓰기 하나 뒤에서 다른 쓰기가 자기 ctx deadline을 넘겨 기다렸다(Call 제한 시간이 지켜지지 않음).
 func (p *Peer) Write(ctx context.Context, msg Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
-	p.Mu.Lock()
-	defer p.Mu.Unlock()
 	return p.Conn.Write(ctx, websocket.MessageText, data)
 }
 

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, KeyRound, Settings2, Variable } from "lucide-react";
+import { Eye, EyeOff, HardDrive, KeyRound, Settings2, Variable } from "lucide-react";
 import { api, type Environment, type SyncInclude, type SyncServiceDiff, type SyncVarChange } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
@@ -22,7 +22,11 @@ function show(v: unknown): string {
   return JSON.stringify(v);
 }
 
-function VarRows({ list }: { list: SyncVarChange[] }) {
+const MASK = "*******";
+/** Variable values are secrets more often than not: masked unless the user asks. References are shown as-is. */
+const val = (v: string | null, reveal: boolean) => (v === null ? t("없음") : reveal || /^\s*\$\{\{[^}]*\}\}\s*$/.test(v) ? show(v) : MASK);
+
+function VarRows({ list, reveal }: { list: SyncVarChange[]; reveal: boolean }) {
   return (
     <ul className="space-y-0.5">
       {list.map((c) => (
@@ -38,7 +42,7 @@ function VarRows({ list }: { list: SyncVarChange[] }) {
           </span>
           <span className="shrink-0 text-foreground">{c.key}</span>
           <span className="min-w-0 truncate text-gray-500">
-            {c.action === "changed" ? `${c.from} → ${c.to}` : c.action === "added" ? c.to : c.from}
+            {c.action === "changed" ? `${val(c.from, reveal)} → ${val(c.to, reveal)}` : c.action === "added" ? val(c.to, reveal) : val(c.from, reveal)}
           </span>
         </li>
       ))}
@@ -51,11 +55,13 @@ function ServiceDiff({
   include,
   checked,
   onToggle,
+  reveal,
 }: {
   d: SyncServiceDiff;
   include: SyncInclude;
   checked: boolean;
   onToggle: (v: boolean) => void;
+  reveal: boolean;
 }) {
   const id = `sync-${d.service_id}`;
   const parts = [
@@ -106,7 +112,7 @@ function ServiceDiff({
             <div className="mb-0.5 flex items-center gap-1 text-xs text-gray-400">
               <Variable className="size-3" aria-hidden /> {t("변수")}
             </div>
-            <VarRows list={d.variables} />
+            <VarRows list={d.variables} reveal={reveal} />
           </div>
         )}
         {include.volumes && d.volumes.length > 0 && (
@@ -151,6 +157,7 @@ export function SyncEnvironmentDialog({
   const [include, setInclude] = useState<SyncInclude>({ settings: true, variables: true, shared_variables: true, volumes: true });
   const [unchecked, setUnchecked] = useState<Record<string, boolean>>({});
   const [deploy, setDeploy] = useState(false);
+  const [reveal, setReveal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -172,9 +179,16 @@ export function SyncEnvironmentDialog({
         (include.volumes && d.volumes.length > 0),
     );
 
+  // Variables that exist here but not in the source are deleted by the sync: say so before applying.
+  const removals = [
+    ...(include.variables ? selected.flatMap((d) => d.variables.filter((c) => c.action === "removed").map((c) => `${d.service_name}.${c.key}`)) : []),
+    ...(hasShared ? (plan.data?.shared_variables ?? []).filter((c) => c.action === "removed").map((c) => `shared.${c.key}`) : []),
+  ];
+
   const close = () => {
     if (busy) return;
     setError(null);
+    setReveal(false);
     setUnchecked({});
     onClose();
   };
@@ -289,6 +303,11 @@ export function SyncEnvironmentDialog({
               </div>
             ) : (
               <div className="space-y-3" aria-live="polite">
+                <div className="flex justify-end">
+                  <Button size="sm" variant="ghost" aria-pressed={reveal} onClick={() => setReveal((v) => !v)} className="text-gray-600">
+                    {reveal ? <EyeOff /> : <Eye />} {reveal ? t("값 숨기기") : t("값 보기")}
+                  </Button>
+                </div>
                 {plan.data.services.length > 0 && (
                   <ul className="space-y-2" aria-label={t("서비스별 변경")}>
                     {plan.data.services.map((d) => (
@@ -298,6 +317,7 @@ export function SyncEnvironmentDialog({
                         include={include}
                         checked={!unchecked[d.service_id]}
                         onToggle={(v) => setUnchecked((u) => ({ ...u, [d.service_id]: !v }))}
+                        reveal={reveal}
                       />
                     ))}
                   </ul>
@@ -305,12 +325,17 @@ export function SyncEnvironmentDialog({
                 {plan.data.shared_variables.length > 0 && (
                   <div className={cx("rounded-md border border-gray-200 px-3 py-2.5", !include.shared_variables && "opacity-60")}>
                     <div className="mb-1 text-sm font-medium text-foreground">{t("공유 변수")}</div>
-                    <VarRows list={plan.data.shared_variables} />
+                    <VarRows list={plan.data.shared_variables} reveal={reveal} />
                   </div>
                 )}
               </div>
             )}
           </>
+        )}
+        {removals.length > 0 && (
+          <p role="note" className="rounded-md bg-warn-surface p-3 text-sm text-warn">
+            {t("가져올 환경에 없는 변수 {count}개가 이 환경에서 삭제됩니다: {names}", { count: removals.length, names: removals.join(", ") })}
+          </p>
         )}
         {error ? <ErrorBox error={error} /> : null}
       </div>

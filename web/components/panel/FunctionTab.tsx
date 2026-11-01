@@ -14,11 +14,35 @@ import { Button, CenterSpinner, ErrorBox, cx } from "../ui";
 
 const bytes = (s: string) => new TextEncoder().encode(s).length;
 
+/* Unsaved code survives switching panel tabs or services (the tab unmounts), kept per service and environment for the
+   browser session. Cleared on save and revert. */
+const draftKey = (sid: string, eid: string) => `aven.fn-draft.${sid}.${eid}`;
+function loadDraft(k: string): string | null {
+  try {
+    return window.sessionStorage.getItem(k);
+  } catch {
+    return null;
+  }
+}
+function storeDraft(k: string, v: string | null) {
+  try {
+    if (v === null) window.sessionStorage.removeItem(k);
+    else window.sessionStorage.setItem(k, v);
+  } catch {
+    /* storage full or blocked: the draft just isn't kept */
+  }
+}
+
 export function FunctionTab({ svc, env, actions }: { svc: CanvasService; env: Environment; actions: ServiceActions }) {
   const qc = useQueryClient();
   const key = layoutKeys.functionCode(svc.id, env.id);
   const fn = useQuery({ queryKey: key, queryFn: () => layoutApi.functionCode(svc.id, env.id), refetchOnWindowFocus: false });
-  const [draft, setDraft] = useState<string | null>(null);
+  const store = draftKey(svc.id, env.id);
+  const [draft, setDraftState] = useState<string | null>(() => (typeof window === "undefined" ? null : loadDraft(store)));
+  const setDraft = (v: string | null) => {
+    setDraftState(v);
+    storeDraft(store, v);
+  };
   const [busy, setBusy] = useState<"save" | "deploy" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -26,6 +50,7 @@ export function FunctionTab({ svc, env, actions }: { svc: CanvasService; env: En
   const d = fn.data;
   const code = draft ?? d?.code ?? "";
   const dirty = draft !== null && draft !== d?.code;
+  const restored = useRef(draft !== null);
   const size = bytes(code);
   const tooBig = !!d && size > d.max_bytes;
   const undeployed = !!d && d.deployed_sha256 !== d.sha256;
@@ -84,7 +109,7 @@ export function FunctionTab({ svc, env, actions }: { svc: CanvasService; env: En
         <span>{t("· Bun · PORT에서 HTTP 요청을 받습니다")}</span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {dirty ? (
-            <span className="text-warn">{t("저장하지 않은 변경")}</span>
+            <span className="text-warn">{restored.current ? t("저장하지 않은 변경 (이전 편집을 복구함)") : t("저장하지 않은 변경")}</span>
           ) : undeployed ? (
             <span className="text-pink-600">{d.deployed_sha256 ? t("배포된 코드와 다릅니다") : t("아직 배포하지 않았습니다")}</span>
           ) : (

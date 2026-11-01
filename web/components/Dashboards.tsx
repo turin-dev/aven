@@ -457,10 +457,10 @@ function metricFns(m: WidgetMetric): { series: (ps: MetricPoint[]) => { t: numbe
   }
 }
 
-function MetricBody({ w, height, services }: { w: Widget; height: number; services: CanvasService[] }) {
+function MetricBody({ w, range, height, services }: { w: Widget; range: MetricRange; height: number; services: CanvasService[] }) {
   const fns = metricFns((w.metric || "cpu_percent") as WidgetMetric);
-  const one = useMetrics(w.service_id ?? "", w.service_id ? (w.environment_id ?? "") : "", w.range);
-  const all = useEnvMetrics(w.service_id ? null : w.environment_id, w.range);
+  const one = useMetrics(w.service_id ?? "", w.service_id ? (w.environment_id ?? "") : "", range);
+  const all = useEnvMetrics(w.service_id ? null : w.environment_id, range);
   const series: Series[] = useMemo(() => {
     if (w.service_id) {
       const name = services.find((s) => s.id === w.service_id)?.name ?? t("서비스");
@@ -473,6 +473,7 @@ function MetricBody({ w, height, services }: { w: Widget; height: number; servic
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [w.service_id, w.metric, one.data, all.data, services]);
   const q = w.service_id ? one : all;
+  if (!w.environment_id) return <div className="flex h-full items-center justify-center text-sm text-gray-500">{t("환경이 지워졌습니다. 위젯을 편집해 다시 고르세요.")}</div>;
   if (q.error) return <ErrorBox error={q.error} />;
   if (q.isPending) return <Spinner />;
   return (
@@ -523,18 +524,32 @@ function EventsBody({ w, pid, names, open }: { w: Widget; pid: string; names: Ma
   if (!list.length) return <div className="flex h-full items-center justify-center text-sm text-gray-500">{t("이벤트가 없습니다")}</div>;
   return (
     <ul className="-mx-2 h-full overflow-y-auto" data-noscroll>
-      {list.map((e) => (
-        <li key={e.id}>
-          <Link href={e.service_id ? open(e.service_id) : "#"} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-100">
+      {list.map((e) => {
+        const row = (
+          <>
             {eventIcon(e.kind)}
             <span className="w-[100px] shrink-0 truncate text-sm font-medium">{(e.service_id && names.get(e.service_id)) || e.service_name || t("프로젝트")}</span>
-            <span className="min-w-0 flex-1 truncate text-sm text-gray-600">{e.message}</span>
-            <span className="shrink-0 text-xs tabular-nums text-gray-400" title={fmtTime(e.created_at)}>
-              {fmtRelative(e.created_at)}
+            <span className="min-w-0 flex-1 truncate text-sm text-gray-600" title={e.message}>
+              {e.message}
             </span>
-          </Link>
-        </li>
-      ))}
+            <time dateTime={e.created_at} className="shrink-0 text-xs tabular-nums text-gray-500" title={fmtTime(e.created_at)}>
+              {fmtRelative(e.created_at)}
+            </time>
+          </>
+        );
+        // Project-level events have no service to open; render them as plain rows instead of a "#" link.
+        return (
+          <li key={e.id}>
+            {e.service_id ? (
+              <Link href={open(e.service_id)} className="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-100">
+                {row}
+              </Link>
+            ) : (
+              <div className="flex items-center gap-3 px-2 py-1.5">{row}</div>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -607,8 +622,11 @@ function WidgetCard({
         e.preventDefault();
         setOver(true);
       }}
-      onDragLeave={() => setOver(false)}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
       onDrop={(e) => {
+        if (!canEdit) return;
         e.preventDefault();
         setOver(false);
         onDropAt();
@@ -688,6 +706,7 @@ export function DashboardView({
   currentEnv,
   canEdit,
   ctx,
+  range = null,
 }: {
   dashboard: Dashboard;
   pid: string;
@@ -695,6 +714,8 @@ export function DashboardView({
   currentEnv: string;
   canEdit: boolean;
   ctx: { project?: string | null; env?: string | null };
+  /** Overrides every metric widget's own range (page-level time picker); null keeps each widget's range. */
+  range?: MetricRange | null;
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Widget | "new" | null>(null);
@@ -791,7 +812,7 @@ export function DashboardView({
                 index={i}
                 count={widgets.length}
                 title={title}
-                aside={w.type === "metric" ? RANGE_LABEL[w.range] : w.environment_id && w.type !== "events" ? envName.get(w.environment_id) : undefined}
+                aside={w.type === "metric" ? RANGE_LABEL[range ?? w.range] : w.environment_id && w.type !== "events" ? envName.get(w.environment_id) : undefined}
                 canEdit={canEdit}
                 dragging={dragId === w.id}
                 handleRef={(el) => (el ? handles.current.set(w.id, el) : handles.current.delete(w.id))}
@@ -808,7 +829,7 @@ export function DashboardView({
                 }}
               >
                 {w.type === "metric" ? (
-                  <MetricBody w={w} height={w.h * ROW_PX - 24} services={svcs} />
+                  <MetricBody w={w} range={range ?? w.range} height={w.h * ROW_PX - 24} services={svcs} />
                 ) : w.type === "logs" ? (
                   <LogsBody w={w} services={svcs} />
                 ) : w.type === "http" ? (

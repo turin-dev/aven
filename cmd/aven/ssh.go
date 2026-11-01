@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"github.com/turin-dev/aven/internal/compat"
 	"io"
@@ -154,7 +153,7 @@ func sshPump(ctx context.Context, conn *websocket.Conn, in io.Reader, out, errOu
 }
 
 func cmdSSH(c *config, args []string) {
-	fl := flag.NewFlagSet("ssh", flag.ExitOnError)
+	fl := newFlagSet("ssh")
 	replica := fl.String("replica", "", "replica (container) name; default: the first one")
 	fl.StringVar(replica, "r", "", "replica (container) name")
 	tf := addTargetFlags(fl)

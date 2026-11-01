@@ -568,8 +568,8 @@ func (h *Handler) WakeHandler() http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), WakeTimeout)
 		defer cancel()
-		var res agentprotocol.WakeResult
-		if err := h.AskServer(ctx, agentprotocol.OpWake, agentprotocol.WakeRequest{Host: host}, &res); err != nil {
+		res, err := h.wake(ctx, host)
+		if err != nil {
 			http.Error(w, "service is waking up, please retry: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
@@ -596,6 +596,44 @@ func (h *Handler) WakeHandler() http.Handler {
 		}
 		rp.ServeHTTP(w, r)
 	})
+}
+
+// wakeFlight는 host 하나의 진행 중인 wake 요청이다.
+type wakeFlight struct {
+	done chan struct{}
+	res  agentprotocol.WakeResult
+	err  error
+}
+
+// wake는 서버에 host를 깨워 달라고 한다. 같은 host로 동시에 들어온 요청(잠든 앱에 몰린 트래픽)은 서버 요청 하나를 같이 기다린다.
+// 그래서 서버에 가는 wake 요청 수가 방문자 수가 아니라 잠든 host 수를 따른다(서버는 연결마다 동시 agent 요청 수를 제한한다).
+// 서버 요청은 처음 요청한 방문자의 연결과 상관없이 WakeTimeout까지 간다(그 방문자가 떠나도 기다리는 다른 방문자가 있다).
+func (h *Handler) wake(ctx context.Context, host string) (agentprotocol.WakeResult, error) {
+	h.wakeMu.Lock()
+	f := h.wakes[host]
+	if f == nil {
+		f = &wakeFlight{done: make(chan struct{})}
+		if h.wakes == nil {
+			h.wakes = map[string]*wakeFlight{}
+		}
+		h.wakes[host] = f
+		go func() {
+			fctx, cancel := context.WithTimeout(context.Background(), WakeTimeout)
+			defer cancel()
+			f.err = h.AskServer(fctx, agentprotocol.OpWake, agentprotocol.WakeRequest{Host: host}, &f.res)
+			h.wakeMu.Lock()
+			delete(h.wakes, host)
+			h.wakeMu.Unlock()
+			close(f.done)
+		}()
+	}
+	h.wakeMu.Unlock()
+	select {
+	case <-f.done:
+		return f.res, f.err
+	case <-ctx.Done():
+		return agentprotocol.WakeResult{}, ctx.Err()
+	}
 }
 
 // setRouteHosts는 서버가 마지막으로 적용한 라우트의 호스트와 on-demand TLS 허가 여부를 기억한다.

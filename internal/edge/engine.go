@@ -14,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -156,6 +157,19 @@ func (e *Engine) lookup(host string) *compiled {
 	return nil
 }
 
+// rulePath는 규칙이 비교할 경로다. "//admin", "/./admin", "/x/../admin"이 "/admin" 규칙을 피하지 못하게 정리한다
+// (origin 앱은 보통 같은 정리를 한 뒤 라우팅한다). 끝의 /는 남긴다. 요청 자체의 경로는 바꾸지 않는다.
+func rulePath(p string) string {
+	if p == "" {
+		return "/"
+	}
+	c := path.Clean("/" + p)
+	if strings.HasSuffix(p, "/") && c != "/" {
+		c += "/"
+	}
+	return c
+}
+
 func canonicalHost(h string) string {
 	h = strings.ToLower(strings.TrimSuffix(h, "."))
 	if host, _, err := net.SplitHostPort(h); err == nil {
@@ -173,6 +187,7 @@ type reqState struct {
 	override   *ActionParams
 	stale      *entry
 	headAsGet  bool
+	cookie     bool // 요청에 Cookie가 있었다(decideFor)
 	respHeader []ActionParams
 }
 
@@ -197,7 +212,7 @@ func (e *Engine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ip = ip.Unmap()
 	secure := r.Header.Get(HeaderClientProto) == "https"
 	s := pol.Settings
-	info := &reqInfo{ip: ip, host: host, path: r.URL.Path, method: r.Method, header: r.Header}
+	info := &reqInfo{ip: ip, host: host, path: rulePath(r.URL.Path), method: r.Method, header: r.Header}
 
 	switch r.URL.Path {
 	case ChallengePath, LegacyChallengePath:
@@ -289,7 +304,7 @@ rules:
 			if hasQuery {
 				r.URL.RawQuery = query
 			}
-			info.path = path
+			info.path = rulePath(path)
 		case ActSetHeader:
 			if p.Target == "request" {
 				if p.Value == "" {
@@ -306,9 +321,11 @@ rules:
 	st.caching = s.CDN.Enabled && !bypass && (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
 		r.Header.Get("Authorization") == "" && r.Header.Get("Upgrade") == ""
 	if st.caching {
+		st.cookie = r.Header.Get("Cookie") != ""
 		enc := encodingClass(r.Header.Get("Accept-Encoding"))
 		r.Header.Set("Accept-Encoding", enc)
-		st.pk = primaryKey(pol.InstanceID, host, r.URL, enc)
+		stripUnkeyed(r.Header)
+		st.pk = primaryKey(pol.InstanceID, secure, host, r.URL, enc)
 		key := e.cache.fullKey(st.pk, r.Header)
 		ent := e.cache.get(key)
 		if ent != nil && !ent.validFor(s.CDN) {
@@ -333,6 +350,21 @@ rules:
 		st.reqHeader = r.Header.Clone()
 	}
 	e.rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, st)))
+}
+
+// unkeyedHeaders는 캐시할 수 있는 요청에서 origin으로 보내지 않는 헤더다. 캐시 키에 없는데 응답을 바꿀 수 있어서
+// (프레임워크가 경로나 메서드, 링크의 scheme·호스트를 이 값으로 바꾼다) 한 클라이언트가 보낸 값이 다른 사람에게 갈
+// 캐시 항목을 오염시킨다(cache poisoning). X-Forwarded-Host/Proto/For는 origin 서버(Caddy)가 덮어쓴다.
+var unkeyedHeaders = []string{
+	"X-Original-Url", "X-Rewrite-Url", "X-Override-Url",
+	"X-Http-Method-Override", "X-Http-Method", "X-Method-Override",
+	"X-Forwarded-Scheme", "X-Forwarded-Server", "X-Forwarded-Port", "X-Forwarded-Prefix", "X-Host", "Forwarded",
+}
+
+func stripUnkeyed(h http.Header) {
+	for _, k := range unkeyedHeaders {
+		h.Del(k)
+	}
 }
 
 func deny(w http.ResponseWriter, status int, body, reason string) {
@@ -405,7 +437,7 @@ func (e *Engine) modifyResponse(resp *http.Response) error {
 		return errServeStale
 	}
 	cdn := st.pol.Settings.CDN
-	d := decide(cdn, resp.StatusCode, resp.Header, st.override)
+	d := decideFor(cdn, resp.StatusCode, resp.Header, st.override, st.cookie)
 	if !d.store {
 		resp.Header.Set("X-Cache", "DYNAMIC")
 		applyRespHeaders(resp.Header, st.respHeader)
@@ -534,7 +566,7 @@ func (e *Engine) refresh(r *http.Request, st *reqState, key string) {
 	out.Header.Del("If-Modified-Since")
 	pk, reqHeader := st.pk, r.Header.Clone()
 	pol := st.pol
-	override := st.override
+	override, cookie := st.override, st.cookie
 	go func() {
 		defer e.inflight.Delete(key)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -545,7 +577,7 @@ func (e *Engine) refresh(r *http.Request, st *reqState, key string) {
 		}
 		defer resp.Body.Close()
 		cdn := pol.Settings.CDN
-		d := decide(cdn, resp.StatusCode, resp.Header, override)
+		d := decideFor(cdn, resp.StatusCode, resp.Header, override, cookie)
 		if !d.store {
 			return
 		}

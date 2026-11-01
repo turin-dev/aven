@@ -1,8 +1,26 @@
 "use client";
 
-import { Fragment, useRef, useState, type KeyboardEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Check, MoreVertical, ChevronLeft, ChevronRight, KeyRound, Play, Plus, RotateCw, Search, Table2, Trash2, X } from "lucide-react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  Copy,
+  Download,
+  History,
+  KeyRound,
+  Play,
+  Plus,
+  RotateCw,
+  Save,
+  Search,
+  Table2,
+  Terminal,
+  Trash2,
+  Undo2,
+  X,
+} from "lucide-react";
 import {
   api,
   type CanvasService,
@@ -14,6 +32,8 @@ import {
   type DatabaseKind,
   type Environment,
 } from "@/lib/api";
+import { buildSelect, cellText, dangerOf, pushHistory, quoteIdent, toCsv, type SqlKind } from "@/lib/dataSql";
+import { useCaps } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { t, tr } from "@/lib/i18n";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
@@ -29,24 +49,17 @@ import {
   Kbd,
   Menu,
   MenuItem,
-  Segmented,
   Select,
-  Textarea,
   Toggle,
   cx,
   errorMessage,
   useConfirm,
 } from "../ui";
+import { DataGrid, type GridSort, type PendingRow } from "./DataGrid";
 
-const PAGE = 50;
+export { DataGrid } from "./DataGrid";
 
-const PLACEHOLDER: Record<DatabaseKind, string> = {
-  postgres: "SELECT * FROM users ORDER BY id DESC LIMIT 20;",
-  mysql: "SELECT * FROM users ORDER BY id DESC LIMIT 20;",
-  mongo: 'db.users.find({ active: true }).limit(20).toArray()',
-  redis: "GET session:123\nHGETALL user:1",
-  bucket: "", // bucket은 Bucket 탭을 쓴다(데이터 탭 없음)
-};
+const PAGE_SIZES = [50, 100, 200, 500];
 
 const QUERY_HINT: Record<DatabaseKind, string> = {
   postgres: t("SQL을 실행합니다. 여러 문장은 ;로 나누고, 마지막 SELECT 결과만 표로 보입니다."),
@@ -56,263 +69,80 @@ const QUERY_HINT: Record<DatabaseKind, string> = {
   bucket: "",
 };
 
+const sqlKind = (k: DatabaseKind): SqlKind | null => (k === "postgres" ? "postgres" : k === "mysql" ? "mysql" : null);
+
 /** One-line example for the query bar above the table tiles. */
 function barPlaceholder(kind: DatabaseKind, table: DataTable | null): string {
   if (kind === "redis") return "GET session:123";
   if (kind === "mongo") return table ? `db.${table.name}.find().limit(20).toArray()` : "db.users.find().limit(20).toArray()";
-  if (table) return `SELECT * FROM ${tableLabel(table)} LIMIT 50`;
-  return "SELECT * FROM table_name";
+  const sk = sqlKind(kind);
+  if (table && sk) return buildSelect(sk, { schema: table.schema, name: table.name, limit: 50 });
+  return "SELECT * FROM table_name LIMIT 50;";
 }
 
-function cellText(v: DataCell): string {
-  if (v === null || v === undefined) return "";
-  if (typeof v === "string") return v;
-  return JSON.stringify(v);
-}
-function Cell({ v }: { v: DataCell }) {
-  if (v === null || v === undefined) return <span className="text-gray-400">NULL</span>;
-  const t = cellText(v);
-  const short = t.length > 160 ? `${t.slice(0, 160)}…` : t;
-  return (
-    <span title={t.length > 160 ? t : undefined} className={cx(typeof v !== "string" && "text-pink-600")}>
-      {short}
-    </span>
-  );
-}
-/** Column header: name, optional SQL type and a primary-key marker. */
-function ColumnHead({ name, type, pk }: { name: string; type?: string | null; pk?: boolean }) {
-  return (
-    <th scope="col" className="whitespace-nowrap border-b border-gray-200 px-3 py-2 text-left align-bottom text-xs font-semibold text-gray-600">
-      <span className="flex items-center gap-1">
-        {pk && <KeyRound className="size-3 shrink-0 text-pink-600" aria-label={t("기본 키")} />}
-        {name}
-      </span>
-      {type && <span className="block font-mono text-[11px] font-normal text-gray-400">{type}</span>}
-    </th>
-  );
-}
-/** Accessible result grid (real table markup, sticky header, horizontal scroll). */
-export function DataGrid({
-  columns,
-  rows,
-  caption,
-  types,
-}: {
-  columns: string[];
-  rows: DataCell[][];
-  caption: string;
-  types?: (string | null)[] | null;
-}) {
-  if (columns.length === 0) return <div className="px-4 py-6 text-center text-sm text-gray-500">{t("행이 없습니다.")}</div>;
-  return (
-    <div className="max-h-[480px] overflow-auto rounded-lg border border-gray-200" tabIndex={0} role="region" aria-label={caption}>
-      <table className="w-full min-w-full border-collapse text-sm tabular-nums">
-        <caption className="sr-only">{caption}</caption>
-        <thead className="sticky top-0 z-[1] bg-secondaryBg">
-          <tr>
-            {columns.map((c, i) => (
-              <ColumnHead key={`${c}-${i}`} name={c} type={types?.[i]} />
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length} className="px-3 py-4 text-center text-gray-500">
-                {t("행이 없습니다.")}
-              </td>
-            </tr>
-          ) : (
-            rows.map((r, i) => (
-              <tr key={i} className="odd:bg-gray-50/40 hover:bg-gray-100/60">
-                {r.map((v, j) => (
-                  <td key={j} className="max-w-[420px] truncate border-b border-gray-200/60 px-3 py-1 align-top text-foreground">
-                    <Cell v={v} />
-                  </td>
-                ))}
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 function tableLabel(t: DataTable): string {
   return t.schema && t.schema !== "public" ? `${t.schema}.${t.name}` : t.name;
 }
-function TableList({
-  tables,
-  current,
-  onPick,
-}: {
-  tables: DataTable[];
-  current: DataTable | null;
-  onPick: (t: DataTable) => void;
-}) {
-  if (tables.length === 0) return <div className="px-3 py-4 text-sm text-gray-500">{t("표가 없습니다.")}</div>;
-  return (
-    <ul className="space-y-0.5" aria-label={t("표 목록")}>
-      {tables.map((t) => {
-        const active = current?.schema === t.schema && current?.name === t.name;
-        return (
-          <li key={`${t.schema}.${t.name}`}>
-            <button
-              type="button"
-              aria-current={active ? "true" : undefined}
-              onClick={() => onPick(t)}
-              className={cx(
-                "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors",
-                active ? "bg-pink-100/50 text-foreground" : "text-gray-600 hover:bg-gray-100 hover:text-foreground",
-              )}
-            >
-              <Table2 className="size-3.5 shrink-0 text-gray-400" aria-hidden />
-              <span className="min-w-0 flex-1 truncate font-mono">{tableLabel(t)}</span>
-              {t.kind !== "table" && t.kind !== "collection" && <span className="shrink-0 text-xs text-gray-400">{t.kind === "view" ? "view" : t.kind}</span>}
-              {t.rows != null && <span className="shrink-0 text-xs tabular-nums text-gray-400">~{t.rows.toLocaleString()}</span>}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
+
+/** Explains why a console query needs confirmation (codes from dangerOf). */
+function dangerText(reason: string): string {
+  switch (reason) {
+    case "drop":
+      return t("DROP 문은 표나 데이터베이스 객체를 통째로 지웁니다.");
+    case "truncate":
+      return t("TRUNCATE 문은 표의 모든 행을 지웁니다.");
+    case "delete-all":
+      return t("WHERE 없는 DELETE 문은 표의 모든 행을 지웁니다.");
+    case "update-all":
+      return t("WHERE 없는 UPDATE 문은 표의 모든 행을 바꿉니다.");
+    case "delete":
+      return t("이 쿼리는 데이터를 지웁니다.");
+    case "update":
+      return t("이 쿼리는 행을 바꿉니다.");
+    case "alter":
+      return t("ALTER 문은 표 구조를 바꿉니다.");
+    case "flush":
+      return t("FLUSHALL/FLUSHDB는 데이터베이스의 모든 키를 지웁니다.");
+    case "mongo-drop":
+      return t("drop()은 컬렉션이나 데이터베이스를 통째로 지웁니다.");
+    case "mongo-delete":
+      return t("이 식은 문서를 지웁니다.");
+  }
+  return t("이 쿼리는 데이터를 바꿉니다.");
 }
-type EditingCell = { row: number; col: number; value: string; isNull: boolean };
-/** Grid with inline cell editing and per-row delete (SQL tables with a primary key). */
-function EditableGrid({
-  data,
-  caption,
-  onSave,
-  onDelete,
-}: {
-  data: DataRows;
-  caption: string;
-  onSave: (row: number, column: string, value: string | null) => Promise<void>;
-  onDelete: (row: number) => void;
-}) {
-  const [editing, setEditing] = useState<EditingCell | null>(null);
-  const [saving, setSaving] = useState(false);
-  const pk = new Set(data.primary_key ?? []);
-  const start = (row: number, col: number) => {
-    const v = data.rows[row][col];
-    setEditing({ row, col, value: v === null || v === undefined ? "" : cellText(v), isNull: v === null || v === undefined });
-  };
-  const save = async (value: string | null) => {
-    if (!editing) return;
-    setSaving(true);
-    try {
-      await onSave(editing.row, data.columns[editing.col], value);
-      setEditing(null);
-    } catch {
-      /* onSave shows the error; keep the editor open */
-    } finally {
-      setSaving(false);
-    }
-  };
-  if (data.columns.length === 0) return <div className="px-4 py-6 text-center text-sm text-gray-500">{t("열이 없습니다.")}</div>;
-  return (
-    <div className="max-h-[480px] overflow-auto rounded-lg border border-gray-200" role="region" aria-label={caption}>
-      <table className="w-full min-w-full border-collapse text-sm tabular-nums">
-        <caption className="sr-only">{t("{caption}. 칸을 클릭하거나 Enter를 눌러 편집합니다. Enter나 포커스 이동으로 저장합니다.", { caption })}</caption>
-        <thead className="sticky top-0 z-[1] bg-secondaryBg">
-          <tr>
-            {data.columns.map((c, i) => (
-              <ColumnHead key={`${c}-${i}`} name={c} type={data.column_types?.[i]} pk={pk.has(c)} />
-            ))}
-            <th scope="col" className="border-b border-gray-200 px-2 py-1.5">
-              <span className="sr-only">{t("작업")}</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.rows.length === 0 ? (
-            <tr>
-              <td colSpan={data.columns.length + 1} className="px-3 py-4 text-center text-gray-500">
-                {t("행이 없습니다.")}
-              </td>
-            </tr>
-          ) : (
-            data.rows.map((r, i) => (
-              <tr key={i} className="odd:bg-gray-50/40 hover:bg-gray-100/60">
-                {r.map((v, j) =>
-                  editing?.row === i && editing.col === j ? (
-                    <td key={j} className="border-b border-gray-200/60 px-2 py-1 align-middle">
-                      <input
-                        autoFocus
-                        aria-label={t("{column} 새 값", { column: data.columns[j] })}
-                        value={editing.value}
-                        placeholder={editing.isNull ? "NULL" : ""}
-                        disabled={saving}
-                        onChange={(e) => setEditing({ ...editing, value: e.target.value, isNull: false })}
-                        onKeyDown={(e) => {
-                          if (e.key === "Escape") {
-                            e.preventDefault();
-                            setEditing(null);
-                          } else if (e.key === "Enter") {
-                            e.preventDefault();
-                            void save(editing.isNull ? null : editing.value);
-                          }
-                        }}
-                        onBlur={() => {
-                          const orig = data.rows[i][j];
-                          const same = (orig === null || orig === undefined ? "" : cellText(orig)) === editing.value;
-                          if (same || saving) setEditing(null);
-                          else void save(editing.isNull ? null : editing.value);
-                        }}
-                        className="h-8 w-full min-w-[120px] rounded-md border border-pink-400 bg-transparent px-2 font-mono text-xs text-foreground focus:outline-none"
-                      />
-                    </td>
-                  ) : (
-                    <td
-                      key={j}
-                      tabIndex={0}
-                      aria-label={`${data.columns[j]}: ${v === null || v === undefined ? "NULL" : cellText(v)}`}
-                      title={t("클릭하거나 Enter로 편집")}
-                      onClick={() => start(i, j)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === "F2") {
-                          e.preventDefault();
-                          start(i, j);
-                        }
-                      }}
-                      className="max-w-[420px] cursor-text truncate border-b border-gray-200/60 px-3 py-1 align-top text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500/40"
-                    >
-                      <Cell v={v} />
-                    </td>
-                  ),
-                )}
-                <td className="w-8 border-b border-gray-200/60 px-1 py-0.5 text-right align-middle">
-                  <Menu
-                    label={t("행 {n} 옵션", { n: i + 1 })}
-                    trigger={(p) => (
-                      <button type="button" {...p} title={t("행 옵션")} aria-label={t("행 {n} 옵션", { n: i + 1 })} className="flex size-7 cursor-pointer items-center justify-center rounded-md text-gray-600 hover:bg-gray-100">
-                        <MoreVertical className="size-4" />
-                      </button>
-                    )}
-                  >
-                    {(close) => (
-                      <MenuItem
-                        danger
-                        icon={<Trash2 className="size-3.5" />}
-                        onSelect={() => {
-                          close();
-                          onDelete(i);
-                        }}
-                      >
-                        {t("삭제")}
-                      </MenuItem>
-                    )}
-                  </Menu>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
+
+function download(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-/** Insert dialog: one field per column; blank fields are left out (the database default applies). */
+
+/* ── Query history (per service, this browser only) ─────────────────── */
+
+const historyKey = (sid: string) => `aven.data.history.${sid}`;
+function readHistory(sid: string): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(historyKey(sid)) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 30) : [];
+  } catch {
+    return [];
+  }
+}
+function writeHistory(sid: string, list: string[]) {
+  try {
+    if (list.length) localStorage.setItem(historyKey(sid), JSON.stringify(list));
+    else localStorage.removeItem(historyKey(sid));
+  } catch {
+    /* storage full or blocked */
+  }
+}
+
+/* ── Insert ─────────────────────────────────────────────────────────── */
+
+/** Insert dialog: one field per column; blank fields are left out (the database default applies), NULL is explicit. */
 function AddRowDialog({
   open,
   data,
@@ -324,7 +154,7 @@ function AddRowDialog({
   onClose: () => void;
   onInsert: (set: DataRowValues) => Promise<void>;
 }) {
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string | null>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const close = () => {
@@ -338,7 +168,7 @@ function AddRowDialog({
     setError(null);
     try {
       const set: DataRowValues = {};
-      for (const [k, v] of Object.entries(values)) if (v !== "") set[k] = v;
+      for (const [k, v] of Object.entries(values)) if (v === null || v !== "") set[k] = v;
       await onInsert(set);
       setValues({});
       onClose();
@@ -369,36 +199,96 @@ function AddRowDialog({
         className="space-y-3"
         onSubmit={(e) => {
           e.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <p>{t("비워 둔 열은 데이터베이스 기본값을 씁니다.")}</p>
-        {data.columns.map((c, i) => (
-          <Field key={c} label={c} hint={data.column_types?.[i] ?? undefined}>
-            <Input mono value={values[c] ?? ""} onChange={(e) => setValues({ ...values, [c]: e.target.value })} disabled={busy} className="w-full" />
-          </Field>
-        ))}
+        {data.columns.map((c, i) => {
+          const v = values[c];
+          return (
+            <Field key={c} label={c} hint={data.column_types?.[i] ?? undefined}>
+              <span className="flex items-center gap-2">
+                <Input
+                  mono
+                  value={v ?? ""}
+                  placeholder={v === null ? "NULL" : t("기본값")}
+                  onChange={(e) => setValues({ ...values, [c]: e.target.value })}
+                  disabled={busy}
+                  className="w-full"
+                />
+                <button
+                  type="button"
+                  aria-pressed={v === null}
+                  aria-label={t("{column}을 NULL로", { column: c })}
+                  onClick={() => setValues({ ...values, [c]: v === null ? "" : null })}
+                  className={cx(
+                    "h-[42px] shrink-0 cursor-pointer rounded-md border px-2 font-mono text-xs",
+                    v === null ? "border-pink-400 bg-pink-100 text-pink-600" : "border-gray-200 text-gray-500 hover:bg-gray-100",
+                  )}
+                >
+                  NULL
+                </button>
+              </span>
+            </Field>
+          );
+        })}
         <button type="submit" hidden aria-hidden tabIndex={-1} />
         {error ? <ErrorBox error={error} /> : null}
       </form>
     </Dialog>
   );
 }
-function RowsView({ svc, env, table }: { svc: CanvasService; env: Environment; table: DataTable }) {
+
+/* ── Table rows with staged edits ───────────────────────────────────── */
+
+type Pending = PendingRow & { pk: DataRowValues };
+
+function RowsView({
+  svc,
+  env,
+  table,
+  kind,
+  onDirty,
+  onOpenSql,
+}: {
+  svc: CanvasService;
+  env: Environment;
+  table: DataTable;
+  kind: DatabaseKind;
+  onDirty: (dirty: boolean) => void;
+  onOpenSql: (q: string) => void;
+}) {
+  const canEdit = useCaps(svc.project_id).canEdit;
   const [offset, setOffset] = useState(0);
-  const [prev, setPrev] = useState(table);
+  const [limit, setLimit] = useState(PAGE_SIZES[0]);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<GridSort>(null);
   const [adding, setAdding] = useState(false);
+  const [pending, setPending] = useState<Record<string, Pending>>({});
+  const [saving, setSaving] = useState(false);
   const { confirm, node: confirmNode } = useConfirm();
-  if (prev !== table) {
-    setPrev(table);
-    setOffset(0);
-  }
+  const changes = Object.values(pending).reduce((n, p) => n + Object.keys(p.set).length, 0);
+  const dirty = changes > 0;
+
+  useEffect(() => onDirty(dirty), [dirty, onDirty]);
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
+
   const q = useQuery({
-    queryKey: ["data-rows", svc.id, env.id, table.schema, table.name, offset],
-    queryFn: () => api.dataRows(svc.id, env.id, table, PAGE, offset),
+    queryKey: ["data-rows", svc.id, env.id, table.schema, table.name, limit, offset],
+    queryFn: () => api.dataRows(svc.id, env.id, table, limit, offset),
     placeholderData: (p) => p,
+    // A background refetch must not reshuffle rows under staged edits.
+    refetchOnWindowFocus: !dirty,
   });
   const data = q.data;
+  // Rows from the previous page stay visible while the next one loads; they are never editable.
+  const editable = !!data?.editable && canEdit && !q.isPlaceholderData;
+
   const pkOf = (row: number): DataRowValues => {
     const out: DataRowValues = {};
     for (const k of data?.primary_key ?? []) {
@@ -407,30 +297,78 @@ function RowsView({ svc, env, table }: { svc: CanvasService; env: Environment; t
     }
     return out;
   };
-  const onSave = async (row: number, column: string, value: string | null) => {
-    try {
-      const r = await api.dataRowUpdate(svc.id, env.id, table, pkOf(row), { [column]: value });
-      toast(r.affected === 0 ? t("바뀐 값이 없습니다") : t("{column} 값을 바꿨습니다", { column }));
-      await q.refetch();
-    } catch (e) {
-      toast(errorMessage(e), "error");
-      throw e;
-    }
+  const keyOf = (row: number) => JSON.stringify(pkOf(row));
+
+  /** Runs fn now, or after confirming that staged edits may be thrown away. */
+  const guard = (fn: () => void) => {
+    if (!dirty) return fn();
+    confirm({
+      title: t("저장하지 않은 변경을 버릴까요?"),
+      message: t("저장하지 않은 변경 {count}건이 사라집니다.", { count: changes }),
+      confirmLabel: t("버리고 계속"),
+      danger: true,
+      run: () => {
+        setPending({});
+        fn();
+      },
+    });
   };
+
+  const stage = (row: number, column: string, value: string | null) => {
+    const k = keyOf(row);
+    const pk = pkOf(row);
+    setPending((p) => ({ ...p, [k]: { pk, set: { ...p[k]?.set, [column]: value } } }));
+  };
+  const unstage = (row: number, column: string) => {
+    const k = keyOf(row);
+    setPending((p) => {
+      if (!p[k]) return p;
+      const { [column]: _, ...rest } = p[k].set;
+      const next = { ...p };
+      if (Object.keys(rest).length) next[k] = { ...p[k], set: rest, error: undefined };
+      else delete next[k];
+      return next;
+    });
+  };
+
+  const save = async () => {
+    setSaving(true);
+    let ok = 0;
+    let failed = 0;
+    const next: Record<string, Pending> = {};
+    for (const [k, p] of Object.entries(pending)) {
+      try {
+        const r = await api.dataRowUpdate(svc.id, env.id, table, p.pk, p.set);
+        if (r.affected === 0) throw new Error(t("행을 찾지 못했습니다. 다른 곳에서 바뀌었거나 지워졌을 수 있습니다."));
+        ok++;
+      } catch (e) {
+        failed++;
+        next[k] = { ...p, error: errorMessage(e) };
+      }
+    }
+    setPending(next);
+    setSaving(false);
+    if (failed) toast(t("{ok}개 행을 저장했고 {failed}개 행은 실패했습니다. 실패한 행에 마우스를 올리면 이유가 보입니다.", { ok, failed }), "error");
+    else toast(t("{count}개 행을 저장했습니다", { count: ok }), "success");
+    await q.refetch();
+  };
+
   const onDelete = (row: number) => {
     const pk = pkOf(row);
+    const k = keyOf(row);
     confirm({
       title: t("행을 지울까요?"),
       message: tr("{table}에서 기본 키가 {keys}인 행을 지웁니다. 되돌릴 수 없습니다.", {
         table: <span className="font-mono">{tableLabel(table)}</span>,
-        keys: <span className="font-mono">{Object.entries(pk).map(([k, v]) => `${k}=${v}`).join(", ")}</span>,
+        keys: <span className="break-all font-mono">{Object.entries(pk).map(([c, v]) => `${c}=${v === null ? "NULL" : JSON.stringify(v)}`).join(", ")}</span>,
       }),
       confirmLabel: t("지우기"),
       danger: true,
       run: async () => {
         try {
-          await api.dataRowDelete(svc.id, env.id, table, pk);
-          toast(t("행을 지웠습니다"));
+          const r = await api.dataRowDelete(svc.id, env.id, table, pk);
+          toast(r.affected === 0 ? t("지울 행을 찾지 못했습니다") : t("행을 지웠습니다"));
+          setPending(({ [k]: _, ...rest }) => rest);
           await q.refetch();
         } catch (e) {
           toast(errorMessage(e), "error");
@@ -438,40 +376,150 @@ function RowsView({ svc, env, table }: { svc: CanvasService; env: Environment; t
       },
     });
   };
+
+  const sk = sqlKind(kind);
+  const toSql = () => {
+    if (!sk || !data) return;
+    onOpenSql(
+      buildSelect(sk, {
+        schema: table.schema,
+        name: table.name,
+        sort: sort ? { column: data.columns[sort.col], desc: sort.desc } : null,
+        filter: search.trim() ? { columns: data.columns, value: search } : null,
+        limit,
+      }),
+    );
+  };
+
+  const caption = t("{table} 행 {from}부터", { table: tableLabel(table), from: offset + 1 });
+  const shown = data?.rows.length ?? 0;
   return (
     <div className="min-w-0 space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="mr-auto" />
-        <span className="text-xs tabular-nums text-gray-500" aria-live="polite">
-          {q.data ? (q.data.rows.length ? t("{from}–{to}행", { from: (offset + 1).toLocaleString(), to: (offset + q.data.rows.length).toLocaleString() }) : t("행 없음")) : ""}
-        </span>
-        <IconButton size="sm" label={t("이전 페이지")} disabled={offset === 0 || q.isFetching} onClick={() => setOffset(Math.max(0, offset - PAGE))}>
-          <ChevronLeft className="size-4" />
-        </IconButton>
-        <IconButton size="sm" label={t("다음 페이지")} disabled={!q.data?.has_more || q.isFetching} onClick={() => setOffset(offset + PAGE)}>
-          <ChevronRight className="size-4" />
-        </IconButton>
-        <IconButton size="sm" label={t("새로 고침")} onClick={() => q.refetch()} disabled={q.isFetching}>
-          <RotateCw className={cx("size-3.5", q.isFetching && "animate-spin")} />
-        </IconButton>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[180px] max-w-xs flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 z-20 size-3.5 -translate-y-1/2 text-gray-400" aria-hidden />
+          <Input
+            size="sm"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && search && (e.stopPropagation(), setSearch(""))}
+            placeholder={t("이 페이지에서 찾기")}
+            aria-label={t("이 페이지에서 찾기")}
+            className="!pl-8"
+          />
+        </div>
+        {sk && (sort || search.trim()) && (
+          <Button size="sm" variant="ghost" onClick={toSql} title={t("정렬과 검색을 표 전체에 적용한 SELECT를 실행합니다")}>
+            <Terminal /> {t("표 전체에 적용")}
+          </Button>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-xs tabular-nums text-gray-500" aria-live="polite">
+            {data
+              ? shown
+                ? t("{from}–{to}행", { from: (offset + 1).toLocaleString(), to: (offset + shown).toLocaleString() })
+                : t("행 없음")
+              : ""}
+            {table.rows != null && data && ` · ${t("약 {count}행", { count: table.rows.toLocaleString() })}`}
+          </span>
+          <Select
+            size="sm"
+            aria-label={t("페이지당 행 수")}
+            value={String(limit)}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              guard(() => {
+                setOffset(Math.floor(offset / n) * n);
+                setLimit(n);
+              });
+            }}
+            className="w-[84px]"
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={String(n)}>
+                {t("{n}개", { n })}
+              </option>
+            ))}
+          </Select>
+          <IconButton size="sm" label={t("첫 페이지")} disabled={offset === 0 || q.isFetching} onClick={() => guard(() => setOffset(0))}>
+            <ChevronsLeft className="size-4" />
+          </IconButton>
+          <IconButton size="sm" label={t("이전 페이지")} disabled={offset === 0 || q.isFetching} onClick={() => guard(() => setOffset(Math.max(0, offset - limit)))}>
+            <ChevronLeft className="size-4" />
+          </IconButton>
+          <IconButton size="sm" label={t("다음 페이지")} disabled={!data?.has_more || q.isFetching} onClick={() => guard(() => setOffset(offset + limit))}>
+            <ChevronRight className="size-4" />
+          </IconButton>
+          <IconButton size="sm" label={t("새로 고침")} onClick={() => guard(() => void q.refetch())} disabled={q.isFetching}>
+            <RotateCw className={cx("size-3.5", q.isFetching && "animate-spin motion-reduce:animate-none")} />
+          </IconButton>
+        </div>
       </div>
+      {dirty && (
+        <div role="status" className="sticky top-0 z-[5] flex flex-wrap items-center gap-2 rounded-md border border-yellow-300 bg-warn-surface px-3 py-2 text-sm text-warn">
+          <span className="font-medium">{t("저장하지 않은 변경 {count}건", { count: changes })}</span>
+          <span className="text-xs">{t("{rows}개 행 · 노란 칸이 바뀐 값입니다", { rows: Object.keys(pending).length })}</span>
+          <span className="ml-auto flex gap-2">
+            <Button size="sm" variant="ghost" disabled={saving} onClick={() => setPending({})}>
+              <Undo2 /> {t("모두 버리기")}
+            </Button>
+            <Button size="sm" variant="primary" loading={saving} onClick={save}>
+              {!saving && <Save />} {t("변경 저장")}
+            </Button>
+          </span>
+        </div>
+      )}
       {q.error ? (
         <ErrorBox error={q.error} />
       ) : !data ? (
         <CenterSpinner />
-      ) : data.editable ? (
-        <EditableGrid data={data} caption={t("{table} 행 {from}부터", { table: tableLabel(table), from: offset + 1 })} onSave={onSave} onDelete={onDelete} />
       ) : (
-        <DataGrid columns={data.columns} rows={data.rows} types={data.column_types} caption={t("{table} 행 {from}부터", { table: tableLabel(table), from: offset + 1 })} />
+        <div className={cx(q.isPlaceholderData && "opacity-60 transition-opacity")} aria-busy={q.isFetching}>
+          <DataGrid
+            columns={data.columns}
+            rows={data.rows}
+            types={data.column_types}
+            primaryKey={data.primary_key}
+            caption={caption}
+            firstRow={offset + 1}
+            search={search}
+            sort={sort}
+            onSort={setSort}
+            editable={editable}
+            pending={(i) => pending[keyOf(i)]}
+            onStage={stage}
+            onUnstage={unstage}
+            rowActions={
+              editable
+                ? (i) => (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(i)}
+                      aria-label={t("행 {n} 삭제", { n: offset + i + 1 })}
+                      title={t("행 삭제")}
+                      className="flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-gray-400 opacity-0 hover:bg-danger-surface hover:text-danger focus:opacity-100 group-hover/row:opacity-100"
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  )
+                : undefined
+            }
+          />
+        </div>
       )}
-      {data?.editable && (
-        <Button variant="accent" onClick={() => setAdding(true)}>
-          <Plus /> {t("행")}
-        </Button>
-      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {editable && (
+          <Button variant="accent" onClick={() => setAdding(true)}>
+            <Plus /> {t("행")}
+          </Button>
+        )}
+        {data && sort && <span className="text-xs text-gray-500">{t("정렬과 검색은 지금 페이지의 행에만 적용됩니다.")}</span>}
+        {data?.truncated && <span className="text-xs text-warn">{t("결과가 커서 일부 행만 받았습니다.")}</span>}
+      </div>
       {data?.editable === false && data.column_types && (
         <div className="text-xs text-gray-500">{t("기본 키가 없어 이 표의 행은 여기서 편집할 수 없습니다. 쿼리 탭을 쓰세요.")}</div>
       )}
+      {data?.editable && !canEdit && <div className="text-xs text-gray-500">{t("보기 권한으로는 행을 편집할 수 없습니다.")}</div>}
       {data?.editable && (
         <AddRowDialog
           open={adding}
@@ -488,6 +536,9 @@ function RowsView({ svc, env, table }: { svc: CanvasService; env: Environment; t
     </div>
   );
 }
+
+/* ── Redis ──────────────────────────────────────────────────────────── */
+
 function RedisBrowser({ svc, env, dbs }: { svc: CanvasService; env: Environment; dbs: DataTable[] }) {
   const [db, setDb] = useState(0);
   const [pattern, setPattern] = useState("*");
@@ -641,103 +692,43 @@ function RedisValueView({ type, value }: { type: string; value: unknown }) {
   }
   return <pre className="font-mono text-xs text-foreground">{JSON.stringify(value, null, 2)}</pre>;
 }
-function QueryEditor({ svc, env, kind }: { svc: CanvasService; env: Environment; kind: DatabaseKind }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [res, setRes] = useState<DataQueryResult | null>(null);
-  const [resp3, setResp3] = useState(false);
-  const run = async () => {
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setRes(await api.dataQuery(svc.id, env.id, text, undefined, kind === "redis" && resp3));
-    } catch (e) {
-      setError(e);
-      setRes(null);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      run();
-    }
-  };
-  return (
-    <div className="space-y-3">
-      <div>
-        <label htmlFor={`q-${svc.id}`} className="mb-1.5 block text-sm font-semibold text-gray-600">
-          {t("쿼리")}
-        </label>
-        <Textarea
-          id={`q-${svc.id}`}
-          mono
-          rows={6}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKey}
-          placeholder={PLACEHOLDER[kind]}
-          spellCheck={false}
-          aria-describedby={`q-hint-${svc.id}`}
-        />
-        <div id={`q-hint-${svc.id}`} className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-          <span>{QUERY_HINT[kind]}</span>
-          <span>
-            {tr("{ctrl} + {enter}로 실행 · 최대 1000행, 30초", { ctrl: <Kbd>Ctrl</Kbd>, enter: <Kbd>Enter</Kbd> })}
-          </span>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button variant="primary" size="sm" onClick={run} loading={busy} disabled={!text.trim()}>
-          <Play className="size-3.5" /> {t("실행")}
-        </Button>
-        {kind === "redis" && (
-          <span className="flex items-center gap-1.5 text-xs text-gray-500" title={t("redis-cli -3: map 응답은 key/value 표로 보입니다 (Redis 6+)")}>
-            <Toggle checked={resp3} onChange={setResp3} label="RESP3" />
-            RESP3
-          </span>
-        )}
-        <span className="text-xs text-gray-400">{t("관리자 권한으로 바로 실행됩니다. 실행 기록이 활동에 남습니다.")}</span>
-      </div>
-      {error ? <ErrorBox error={error} /> : null}
-      {res && (
-        <div className="space-y-1.5" aria-live="polite">
-          <div className="text-xs tabular-nums text-gray-500">
-            {res.kind === "table" ? t("{count}행", { count: res.row_count.toLocaleString() }) : t("결과")} · {res.duration_ms}ms
-            {res.truncated && t(" · 결과가 커서 일부만 보여 줍니다")}
-          </div>
-          {res.kind === "table" ? (
-            <DataGrid columns={res.columns} rows={res.rows} caption={t("쿼리 결과")} />
-          ) : (
-            <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap break-all rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-foreground">
-              {res.text}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
+
+/* ── Create table ───────────────────────────────────────────────────── */
+
+type ColDraft = { n: string; t: string; d: string; c: string };
+
+/** CREATE TABLE text for the form. Names are quoted for the engine; type, default and constraint are SQL as typed. */
+function createTableSql(kind: SqlKind, name: string, cols: ColDraft[]): string {
+  const body = cols
+    .filter((c) => c.n.trim())
+    .map((c) => {
+      let s = `${quoteIdent(kind, c.n.trim())} ${c.t.trim() || "text"}`;
+      if (c.d.trim()) s += ` DEFAULT ${c.d.trim()}`;
+      if (c.c.trim()) s += ` ${c.c.trim()}`;
+      return s;
+    })
+    .join(",\n  ");
+  return `CREATE TABLE ${quoteIdent(kind, name.trim())} (\n  ${body}\n);`;
 }
-function CreateTable({ svc, env, onDone, onCancel }: { svc: CanvasService; env: Environment; onDone: () => void; onCancel: () => void }) {
+
+function CreateTable({ svc, env, kind, onDone, onCancel }: { svc: CanvasService; env: Environment; kind: SqlKind; onDone: () => void; onCancel: () => void }) {
   const [name, setName] = useState("");
-  const [cols, setCols] = useState([{ n: "id", t: "serial", d: "", c: "Primary Key" }]);
+  const [cols, setCols] = useState<ColDraft[]>([{ n: "id", t: kind === "mysql" ? "bigint auto_increment" : "serial", d: "", c: "PRIMARY KEY" }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const upd = (i: number, k: "n" | "t" | "d" | "c", v: string) => setCols((cs) => cs.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
+  const upd = (i: number, k: keyof ColDraft, v: string) => setCols((cs) => cs.map((c, j) => (j === i ? { ...c, [k]: v } : c)));
   const lbl = "text-xs font-medium text-gray-600";
+  const named = cols.filter((c) => c.n.trim());
+  const dupes = new Set(named.map((c) => c.n.trim()).filter((n, i, a) => a.indexOf(n) !== i));
+  const valid = !!name.trim() && named.length > 0 && dupes.size === 0;
+  const sql = createTableSql(kind, name || "my_table", cols);
   const create = async () => {
-    const id = (x: string) => `"${x.replace(/"/g, '""')}"`;
-    const body = cols
-      .filter((c) => c.n.trim())
-      .map((c) => `${id(c.n.trim())} ${c.t.trim() || "text"}${c.c ? ` ${c.c.toUpperCase()}` : ""}${c.d ? ` DEFAULT ${c.d}` : ""}`)
-      .join(", ");
+    if (!valid) return;
     setBusy(true);
     setError(null);
     try {
-      await api.dataQuery(svc.id, env.id, `CREATE TABLE ${id(name.trim())} (${body})`);
+      await api.dataQuery(svc.id, env.id, createTableSql(kind, name, cols));
+      toast(t("표 {name}을 만들었습니다", { name: name.trim() }), "success");
       onDone();
     } catch (e) {
       setError(e);
@@ -745,50 +736,63 @@ function CreateTable({ svc, env, onDone, onCancel }: { svc: CanvasService; env: 
       setBusy(false);
     }
   };
+  const types =
+    kind === "mysql"
+      ? ["varchar(255)", "text", "int", "bigint", "bigint auto_increment", "decimal(10,2)", "boolean", "date", "datetime", "timestamp", "json"]
+      : ["text", "varchar(255)", "integer", "bigint", "serial", "bigserial", "numeric", "real", "boolean", "date", "timestamptz", "jsonb", "uuid"];
   return (
     <form
       name="Create Table"
       className="pt-8"
       onSubmit={(e) => {
         e.preventDefault();
-        if (name.trim()) void create();
+        void create();
       }}
     >
       <h3 className="text-[17px] font-semibold leading-6">{t("표 만들기")}</h3>
-      <label className="mb-2 mt-6 block text-xs font-semibold leading-[18px] text-gray-600">{t("표 이름")}</label>
-      <Input className="max-w-xs" value={name} onChange={(e) => setName(e.target.value)} placeholder="my-table" autoFocus />
-      <div className="mt-4 grid grid-cols-[repeat(4,_1fr)_44px] gap-x-2 gap-y-1">
+      <label htmlFor={`ct-name-${svc.id}`} className="mb-2 mt-6 block text-xs font-semibold leading-[18px] text-gray-600">
+        {t("표 이름")}
+      </label>
+      <Input id={`ct-name-${svc.id}`} className="max-w-xs" value={name} onChange={(e) => setName(e.target.value)} placeholder="my_table" autoFocus mono />
+      <div className="mt-4 grid grid-cols-[repeat(4,_minmax(0,1fr))_44px] gap-x-2 gap-y-1">
         <p className={lbl}>{t("열 이름")}</p>
         <p className={lbl}>{t("타입")}</p>
-        <p className={lbl}>{t("기본값")}</p>
+        <p className={lbl} title={t("SQL 식입니다. 문자열은 'text'처럼 작은따옴표로 감싸세요.")}>
+          {t("기본값")}
+        </p>
         <p className={lbl}>{t("제약")}</p>
         <p />
         {cols.map((c, i) => (
           <Fragment key={i}>
-            <Input value={c.n} onChange={(e) => upd(i, "n", e.target.value)} placeholder="my-column" />
-            <Input value={c.t} onChange={(e) => upd(i, "t", e.target.value)} list="pg-types" />
-            <Input value={c.d} onChange={(e) => upd(i, "d", e.target.value)} placeholder={t("기본값 없음")} />
-            <Input value={c.c} onChange={(e) => upd(i, "c", e.target.value)} />
-            <IconButton label={t("열 삭제")} className="self-center" onClick={() => setCols((cs) => cs.filter((_, j) => j !== i))}>
+            <Input value={c.n} onChange={(e) => upd(i, "n", e.target.value)} placeholder="my_column" aria-label={t("열 {n} 이름", { n: i + 1 })} mono invalid={dupes.has(c.n.trim())} />
+            <Input value={c.t} onChange={(e) => upd(i, "t", e.target.value)} list={`sql-types-${svc.id}`} aria-label={t("열 {n} 타입", { n: i + 1 })} mono />
+            <Input value={c.d} onChange={(e) => upd(i, "d", e.target.value)} placeholder={t("기본값 없음")} aria-label={t("열 {n} 기본값", { n: i + 1 })} mono />
+            <Input value={c.c} onChange={(e) => upd(i, "c", e.target.value)} placeholder="NOT NULL" aria-label={t("열 {n} 제약", { n: i + 1 })} mono />
+            <IconButton label={t("열 삭제")} className="self-center" onClick={() => setCols((cs) => cs.filter((_, j) => j !== i))} disabled={cols.length === 1}>
               <X />
             </IconButton>
           </Fragment>
         ))}
       </div>
-      <datalist id="pg-types">
-        {["text", "integer", "bigint", "real", "boolean", "character", "date", "json", "serial", "uuid", "money"].map((t) => (
-          <option key={t} value={t} />
+      <datalist id={`sql-types-${svc.id}`}>
+        {types.map((ty) => (
+          <option key={ty} value={ty} />
         ))}
       </datalist>
       <Button variant="outline" className="mt-3" onClick={() => setCols((cs) => [...cs, { n: "", t: "text", d: "", c: "" }])}>
         <Plus /> {t("열 추가")}
       </Button>
+      {dupes.size > 0 && <p className="mt-2 text-xs text-danger">{t("열 이름이 겹칩니다: {names}", { names: [...dupes].join(", ") })}</p>}
+      <details className="mt-4 text-xs text-gray-500">
+        <summary className="cursor-pointer select-none">{t("실행할 SQL 보기")}</summary>
+        <pre className="mt-2 overflow-auto rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs text-foreground">{sql}</pre>
+      </details>
       {error ? <ErrorBox className="mt-3" error={error} /> : null}
       <div className="mt-6 flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onCancel}>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
           {t("취소")}
         </Button>
-        <Button type="submit" variant="primary" loading={busy} disabled={!name.trim()}>
+        <Button type="submit" variant="primary" loading={busy} disabled={!valid}>
           {t("만들기")}
         </Button>
       </div>
@@ -796,15 +800,73 @@ function CreateTable({ svc, env, onDone, onCancel }: { svc: CanvasService; env: 
   );
 }
 
+/* ── Query result ───────────────────────────────────────────────────── */
+
+function QueryResult({ res, svc, onClose }: { res: DataQueryResult; svc: CanvasService; onClose: () => void }) {
+  return (
+    <div className="space-y-2" aria-live="polite">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold">{t("쿼리 결과")}</span>
+        <span className="text-xs tabular-nums text-gray-500">
+          {res.kind === "table" ? t("{count}행", { count: res.row_count.toLocaleString() }) : t("글자 결과")} · {res.duration_ms}ms
+          {res.truncated && t(" · 결과가 커서 일부만 보여 줍니다")}
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          {res.kind === "table" && res.columns.length > 0 && (
+            <>
+              <Button size="sm" variant="ghost" onClick={() => download(`${svc.name}-query.csv`, toCsv(res.columns, res.rows), "text/csv;charset=utf-8")}>
+                <Download /> CSV
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(JSON.stringify(res.rows.map((r) => Object.fromEntries(res.columns.map((c, i) => [c, r[i] ?? null]))), null, 2))
+                    .then(() => toast(t("JSON으로 복사했습니다")))
+                    .catch(() => {})
+                }
+              >
+                <Copy /> JSON
+              </Button>
+            </>
+          )}
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            <X /> {t("닫기")}
+          </Button>
+        </span>
+      </div>
+      {res.kind === "table" ? (
+        <DataGrid columns={res.columns} rows={res.rows} caption={t("쿼리 결과")} />
+      ) : (
+        <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap break-all rounded-lg border border-gray-200 bg-secondaryBg p-3 font-mono text-xs">{res.text || t("(출력 없음)")}</pre>
+      )}
+    </div>
+  );
+}
+
+/* ── Browser ────────────────────────────────────────────────────────── */
+
 export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment }) {
+  const qc = useQueryClient();
   const kind = svc.database_kind ?? "postgres";
+  const sk = sqlKind(kind);
   const [table, setTable] = useState<DataTable | null>(null);
   const [sql, setSql] = useState("");
   const [res, setRes] = useState<DataQueryResult | null>(null);
   const [qerr, setQerr] = useState<unknown>(null);
+  const [running, setRunning] = useState(false);
+  const [resp3, setResp3] = useState(false);
   const [creating, setCreating] = useState(false);
   const [filter, setFilter] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  const [histPos, setHistPos] = useState(-1);
   const filterInput = useRef<HTMLInputElement>(null);
+  const bar = useRef<HTMLTextAreaElement>(null);
+  const { confirm, node: confirmNode } = useConfirm();
+  useEffect(() => setHistory(readHistory(svc.id)), [svc.id]);
+
   const tables = useQuery({
     queryKey: ["data-tables", svc.id, env.id],
     queryFn: () => api.dataTables(svc.id, env.id),
@@ -825,21 +887,72 @@ export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment
       },
     },
   ]);
-  const run = async () => {
-    if (!sql.trim()) return setRes(null);
+
+  /** Leaves the current table, asking first when it has unsaved edits. */
+  const leave = (fn: () => void) => {
+    if (!dirty) return fn();
+    confirm({
+      title: t("저장하지 않은 변경을 버릴까요?"),
+      message: t("이 표에서 편집한 값이 아직 저장되지 않았습니다. 나가면 사라집니다."),
+      confirmLabel: t("버리고 나가기"),
+      danger: true,
+      run: () => {
+        setDirty(false);
+        fn();
+      },
+    });
+  };
+
+  const exec = async (text: string) => {
     setQerr(null);
+    setRunning(true);
+    const next = pushHistory(history, text);
+    setHistory(next);
+    writeHistory(svc.id, next);
+    setHistPos(-1);
     try {
-      setRes(await api.dataQuery(svc.id, env.id, sql));
+      setRes(await api.dataQuery(svc.id, env.id, text, undefined, kind === "redis" && resp3));
     } catch (e) {
       setQerr(e);
       setRes(null);
+    } finally {
+      setRunning(false);
+      // The query may have changed rows or tables.
+      void qc.invalidateQueries({ queryKey: ["data-tables", svc.id, env.id] });
+      if (!dirty) void qc.invalidateQueries({ queryKey: ["data-rows", svc.id, env.id] });
+      if (kind === "redis") void qc.invalidateQueries({ queryKey: ["data-keys", svc.id, env.id] });
     }
   };
-  if (creating)
+  const run = (text = sql) => {
+    if (running) return;
+    if (!text.trim()) return setRes(null);
+    const d = dangerOf(kind, text);
+    if (!d) return void exec(text);
+    confirm({
+      title: d.level === "severe" ? t("데이터를 크게 바꾸는 쿼리입니다") : t("데이터를 바꾸는 쿼리입니다"),
+      message: (
+        <div className="space-y-3">
+          <p>{dangerText(d.reason)} {t("관리자 권한으로 바로 실행되고 되돌릴 수 없습니다.")}</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md border border-gray-200 bg-gray-50 p-2 font-mono text-xs text-foreground">{text.trim()}</pre>
+        </div>
+      ),
+      confirmLabel: t("실행"),
+      danger: true,
+      run: () => exec(text),
+    });
+  };
+  const openSql = (text: string) => {
+    setSql(text);
+    run(text);
+    bar.current?.focus();
+  };
+
+  if (creating && sk)
     return (
       <CreateTable
         svc={svc}
         env={env}
+        kind={sk}
         onCancel={() => setCreating(false)}
         onDone={() => {
           setCreating(false);
@@ -850,26 +963,30 @@ export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment
   const head = (
     <div className="mb-4 flex items-center gap-3">
       <h3 className="flex min-w-0 items-center gap-2 text-[17px] font-semibold">
-        <button type="button" onClick={() => setTable(null)} className="cursor-pointer hover:text-pink-600">
+        <button type="button" onClick={() => leave(() => setTable(null))} className="cursor-pointer hover:text-pink-600" aria-label={table ? t("{noun} 목록으로", { noun }) : undefined}>
           {noun}
         </button>
         {table && (
           <>
-            <span className="font-normal text-gray-400">/</span>
+            <span className="font-normal text-gray-400" aria-hidden>
+              /
+            </span>
             <span className="truncate font-mono">{tableLabel(table)}</span>
           </>
         )}
       </h3>
-      <IconButton size="sm" label={t("검색 (/)")} onClick={() => setFilter((f) => (f === null ? "" : null))}>
-        <Search />
-      </IconButton>
+      {!table && kind !== "redis" && (
+        <IconButton size="sm" label={t("검색 (/)")} onClick={() => setFilter((f) => (f === null ? "" : null))} aria-pressed={filter !== null}>
+          <Search />
+        </IconButton>
+      )}
       <span className="ml-auto flex items-center gap-2">
         {!table && (
           <IconButton label={t("목록 새로 고침")} className="border border-gray-200" onClick={() => tables.refetch()} disabled={tables.isFetching}>
-            <RotateCw className={cx(tables.isFetching && "animate-spin")} />
+            <RotateCw className={cx(tables.isFetching && "animate-spin motion-reduce:animate-none")} />
           </IconButton>
         )}
-        {!table && kind !== "redis" && kind !== "mongo" && (
+        {!table && sk && (
           <Button variant="accent" onClick={() => setCreating(true)}>
             <Plus /> {t("새 {noun}", { noun })}
           </Button>
@@ -877,51 +994,112 @@ export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment
       </span>
     </div>
   );
+  const onBarKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      run();
+    } else if (e.key === "ArrowUp" && history.length && !el.value.slice(0, el.selectionStart).includes("\n")) {
+      // Up on the first line walks back through the history, like a shell.
+      const pos = Math.min(history.length - 1, histPos + 1);
+      if (pos === histPos) return;
+      e.preventDefault();
+      setHistPos(pos);
+      setSql(history[pos]);
+    } else if (e.key === "ArrowDown" && histPos >= 0 && !el.value.slice(el.selectionEnd).includes("\n")) {
+      e.preventDefault();
+      const pos = histPos - 1;
+      setHistPos(pos);
+      setSql(pos >= 0 ? history[pos] : "");
+    } else if (e.key === "Escape" && res) {
+      e.stopPropagation();
+      setRes(null);
+    }
+  };
   return (
     <section className="pt-8" aria-label={t("데이터")}>
       {head}
-      {filter !== null && (
+      {filter !== null && !table && (
         <Input ref={filterInput} size="sm" autoFocus value={filter} onChange={(e) => setFilter(e.target.value)} onKeyDown={(e) => e.key === "Escape" && (e.stopPropagation(), setFilter(null))} placeholder={t("{noun} 검색", { noun })} aria-label={t("{noun} 검색", { noun })} className="mb-4 !px-3" />
       )}
-      <textarea
-        rows={1}
-        value={sql}
-        onChange={(e) => setSql(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            void run();
-          }
-        }}
-        spellCheck={false}
-        placeholder={barPlaceholder(kind, table)}
-        aria-label={kind === "redis" ? t("redis 명령") : kind === "mongo" ? t("mongosh 식") : "SQL"}
-        aria-describedby={`sql-hint-${svc.id}`}
-        title={`${QUERY_HINT[kind]} ${t("Enter로 실행, Shift+Enter로 줄바꿈.")}`}
-        className="block max-h-[200px] min-h-[42px] w-full resize-none rounded-md border border-gray-200 bg-transparent px-4 py-3 font-mono text-xs leading-4 text-foreground placeholder-gray-500 [field-sizing:content] hover:border-gray-400 focus:border-pink-400 focus:outline-none"
-      />
-      <p id={`sql-hint-${svc.id}`} className="mb-4 mt-1.5 text-xs text-gray-500">
-        {t("Enter로 실행, Shift+Enter로 줄바꿈 · 관리자 권한으로 바로 실행되고 활동 기록에 남습니다.")}
+      <div className="flex items-start gap-1.5">
+        <textarea
+          ref={bar}
+          rows={1}
+          value={sql}
+          onChange={(e) => {
+            setSql(e.target.value);
+            setHistPos(-1);
+          }}
+          onKeyDown={onBarKey}
+          spellCheck={false}
+          placeholder={barPlaceholder(kind, table)}
+          aria-label={kind === "redis" ? t("redis 명령") : kind === "mongo" ? t("mongosh 식") : "SQL"}
+          aria-describedby={`sql-hint-${svc.id}`}
+          title={`${QUERY_HINT[kind]} ${t("Enter로 실행, Shift+Enter로 줄바꿈.")}`}
+          className="block max-h-[240px] min-h-[42px] w-full min-w-0 flex-1 resize-y rounded-md border border-gray-200 bg-transparent px-4 py-3 font-mono text-xs leading-4 text-foreground placeholder-gray-500 [field-sizing:content] hover:border-gray-400 focus:border-pink-400 focus:outline-none"
+        />
+        <Button variant="primary" className="h-[42px] shrink-0" onClick={() => run()} loading={running} disabled={!sql.trim()} aria-label={t("실행")}>
+          {!running && <Play />}
+        </Button>
+        <Menu
+          label={t("쿼리 기록")}
+          trigger={(p) => (
+            <IconButton {...p} label={t("쿼리 기록")} className="h-[42px] w-[42px] shrink-0 border border-gray-200" disabled={!history.length}>
+              <History />
+            </IconButton>
+          )}
+        >
+          {(close) => (
+            <>
+              {history.map((h, i) => (
+                <MenuItem
+                  key={i}
+                  onSelect={() => {
+                    close();
+                    setSql(h);
+                    setHistPos(i);
+                    bar.current?.focus();
+                  }}
+                >
+                  <span className="block max-w-[420px] truncate font-mono text-xs" title={h}>
+                    {h.replace(/\s+/g, " ")}
+                  </span>
+                </MenuItem>
+              ))}
+              <MenuItem
+                danger
+                icon={<Trash2 className="size-3.5" />}
+                onSelect={() => {
+                  close();
+                  setHistory([]);
+                  writeHistory(svc.id, []);
+                }}
+              >
+                {t("기록 지우기")}
+              </MenuItem>
+            </>
+          )}
+        </Menu>
+      </div>
+      <p id={`sql-hint-${svc.id}`} className="mb-4 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+        <span>
+          {tr("{enter}로 실행, {shift}+{enter}로 줄바꿈, {up}으로 이전 쿼리 · 관리자 권한으로 바로 실행되고 활동 기록에 남습니다.", {
+            enter: <Kbd>Enter</Kbd>,
+            shift: <Kbd>Shift</Kbd>,
+            up: <Kbd>↑</Kbd>,
+          })}
+        </span>
+        {kind === "redis" && (
+          <span className="flex items-center gap-1.5" title={t("redis-cli -3: map 응답은 key/value 표로 보입니다 (Redis 6+)")}>
+            <Toggle checked={resp3} onChange={setResp3} label="RESP3" />
+            RESP3
+          </span>
+        )}
       </p>
       {qerr ? <ErrorBox error={qerr} className="mb-4" /> : null}
       {res ? (
-        <div className="space-y-2" aria-live="polite">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold">{t("쿼리 결과")}</span>
-            <span className="text-xs tabular-nums text-gray-500">
-              {res.kind === "table" ? t("{count}행", { count: res.row_count.toLocaleString() }) : t("글자 결과")} · {res.duration_ms}ms
-              {res.truncated && t(" · 결과가 커서 일부만 보여 줍니다")}
-            </span>
-            <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setRes(null)}>
-              <X /> {t("닫기")}
-            </Button>
-          </div>
-          {res.kind === "table" ? (
-            <DataGrid columns={res.columns} rows={res.rows} caption={t("쿼리 결과")} />
-          ) : (
-            <pre className="max-h-[480px] overflow-auto whitespace-pre-wrap break-all rounded-lg border border-gray-200 bg-secondaryBg p-3 font-mono text-xs">{res.text}</pre>
-          )}
-        </div>
+        <QueryResult res={res} svc={svc} onClose={() => setRes(null)} />
       ) : tables.error ? (
         <ErrorBox error={tables.error} />
       ) : tables.isPending ? (
@@ -929,15 +1107,17 @@ export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment
       ) : kind === "redis" ? (
         <RedisBrowser svc={svc} env={env} dbs={tables.data.tables} />
       ) : table ? (
-        <RowsView svc={svc} env={env} table={table} />
+        <RowsView key={`${table.schema}.${table.name}`} svc={svc} env={env} table={table} kind={kind} onDirty={setDirty} onOpenSql={openSql} />
       ) : tables.data.tables.length === 0 ? (
         <EmptyState
           icon={<Table2 className="size-5" />}
           title={kind === "mongo" ? t("{noun}이 없습니다", { noun }) : t("{noun}가 없습니다", { noun })}
           action={
-            <Button variant="primary" onClick={() => setCreating(true)}>
-              {t("{noun} 만들기", { noun })}
-            </Button>
+            sk ? (
+              <Button variant="primary" onClick={() => setCreating(true)}>
+                {t("{noun} 만들기", { noun })}
+              </Button>
+            ) : undefined
           }
         />
       ) : shownTables.length === 0 ? (
@@ -962,6 +1142,7 @@ export function DataBrowser({ svc, env }: { svc: CanvasService; env: Environment
           ))}
         </ul>
       )}
+      {confirmNode}
     </section>
   );
 }

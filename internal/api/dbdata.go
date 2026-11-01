@@ -204,7 +204,7 @@ func (s *Server) dataTables(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch {
 	case dbquery.IsSQL(dc.kind):
-		cmd, err = dc.t.SQL(dbquery.TablesQuery(dc.kind))
+		cmd, err = dc.t.ReadOnlySQL(dbquery.TablesQuery(dc.kind))
 	case dc.kind == "mongo":
 		cmd, err = dc.t.Mongo(dbquery.MongoCollectionsEval)
 	default:
@@ -308,7 +308,7 @@ func (s *Server) dataTableRows(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, err.Error())
 			return
 		}
-		if cmd, err = dc.t.SQL(q); err != nil {
+		if cmd, err = dc.t.ReadOnlySQL(q); err != nil {
 			writeErr(w, 400, err.Error())
 			return
 		}

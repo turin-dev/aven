@@ -92,8 +92,8 @@ func (s *Server) startViewAs(w http.ResponseWriter, r *http.Request) {
 
 // stopViewAs는 보기를 끝낸다. 보기 중에는 주체가 대상 사용자라 owner 전용 라우트를 쓸 수 없으므로 세션 쿠키로 직접 처리한다.
 func (s *Server) stopViewAs(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(cookieName)
-	if err != nil {
+	c, ok := sessionCookieFrom(r)
+	if !ok {
 		writeErr(w, 401, "unauthorized")
 		return
 	}

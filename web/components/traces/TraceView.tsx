@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ChevronDown, ChevronRight, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { AlertCircle, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, X } from "lucide-react";
 import type { ID } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import { fmtSpanMs, isoMs, serviceColor, spanTree, useTrace, type TraceSpan } from "@/lib/tracing";
-import { t } from "@/lib/i18n";
+import { dateLocale, t } from "@/lib/i18n";
 import { CopyButton, ErrorBox, IconButton, Spinner, cx } from "@/components/ui";
 
 function fmtValue(v: unknown): string {
@@ -33,7 +33,23 @@ function AttrTable({ title, attrs }: { title: string; attrs: Record<string, unkn
   );
 }
 
-function SpanDetail({ span, t0, onClose }: { span: TraceSpan; t0: number; onClose: () => void }) {
+/** Wall-clock start of a span with milliseconds, in the UI language. */
+function fmtStart(iso: string): string {
+  const d = new Date(isoMs(iso));
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(dateLocale(), {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+    hour12: false,
+  });
+}
+
+function SpanDetail({ span, t0, parent, onClose, onSelect }: { span: TraceSpan; t0: number; parent: TraceSpan | null; onClose: () => void; onSelect: (id: string) => void }) {
   const offset = isoMs(span.start_time) - t0;
   return (
     <div className="min-h-0 overflow-y-auto border-t border-gray-200 bg-secondaryBg px-5 py-4 lg:border-l lg:border-t-0">
@@ -76,7 +92,15 @@ function SpanDetail({ span, t0, onClose }: { span: TraceSpan; t0: number; onClos
         {span.parent_span_id && (
           <>
             <dt className="text-gray-500">parent</dt>
-            <dd className="text-foreground">{span.parent_span_id}</dd>
+            <dd className="min-w-0 text-foreground">
+              {parent ? (
+                <button type="button" onClick={() => onSelect(parent.span_id)} className="cursor-pointer text-left text-pink-600 hover:underline" title={t("부모 span 보기")}>
+                  {span.parent_span_id} <span className="text-gray-500">· {parent.name || t("(이름 없음)")}</span>
+                </button>
+              ) : (
+                <span title={t("이 trace에 없는 span입니다")}>{span.parent_span_id}</span>
+              )}
+            </dd>
           </>
         )}
         {span.deployment_id && (
@@ -92,7 +116,7 @@ function SpanDetail({ span, t0, onClose }: { span: TraceSpan; t0: number; onClos
           </>
         )}
         <dt className="text-gray-500">start</dt>
-        <dd className="text-foreground">{new Date(span.start_time).toLocaleString()}</dd>
+        <dd className="text-foreground">{fmtStart(span.start_time)}</dd>
       </dl>
       <AttrTable title={t("속성")} attrs={span.attributes} />
       <AttrTable title={t("리소스 속성")} attrs={span.resource_attributes} />
@@ -151,10 +175,18 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
 
   const { t0, total } = useMemo(() => {
     if (!spans.length) return { t0: 0, total: 1 };
-    const s = Math.min(...spans.map((x) => isoMs(x.start_time)));
-    const e = Math.max(...spans.map((x) => isoMs(x.end_time)));
+    // A loop instead of Math.min(...spread): large traces would exceed the argument limit.
+    let s = Infinity;
+    let e = -Infinity;
+    for (const x of spans) {
+      const a = isoMs(x.start_time);
+      s = Math.min(s, a);
+      e = Math.max(e, isoMs(x.end_time), a + x.duration_ms);
+    }
     return { t0: s, total: Math.max(e - s, 0.001) };
   }, [spans]);
+  const tree = useRef<HTMLDivElement>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
 
   // Hide descendants of collapsed spans.
   const visible = useMemo(() => {
@@ -168,6 +200,56 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
     return out;
   }, [rows, collapsed]);
   const selected = spans.find((s) => s.span_id === sel) ?? null;
+  const parentOf = (s: TraceSpan | null) => (s?.parent_span_id ? (spans.find((x) => x.span_id === s.parent_span_id) ?? null) : null);
+  const withKids = useMemo(() => rows.filter((r) => r.hasChildren).map((r) => r.span.span_id), [rows]);
+  const toggle = (id: string, open?: boolean) =>
+    setCollapsed((c) => {
+      const n = new Set(c);
+      const close = open === undefined ? !n.has(id) : !open;
+      if (close) n.add(id);
+      else n.delete(id);
+      return n;
+    });
+  // Roving tabindex: one row is tabbable; arrows move between rows (WAI-ARIA tree pattern).
+  const current = visible.find((r) => r.span.span_id === focusId)?.span.span_id ?? visible[0]?.span.span_id ?? null;
+  const focusRow = (id: string | undefined) => {
+    if (!id) return;
+    setFocusId(id);
+    tree.current?.querySelector<HTMLElement>(`[data-span="${CSS.escape(id)}"]`)?.focus();
+  };
+  const onRowKey = (e: KeyboardEvent, i: number) => {
+    const r = visible[i];
+    const id = r.span.span_id;
+    switch (e.key) {
+      case "ArrowDown":
+        focusRow(visible[i + 1]?.span.span_id);
+        break;
+      case "ArrowUp":
+        focusRow(visible[i - 1]?.span.span_id);
+        break;
+      case "Home":
+        focusRow(visible[0]?.span.span_id);
+        break;
+      case "End":
+        focusRow(visible[visible.length - 1]?.span.span_id);
+        break;
+      case "ArrowRight":
+        if (r.hasChildren && collapsed.has(id)) toggle(id, true);
+        else if (r.hasChildren) focusRow(visible[i + 1]?.span.span_id);
+        break;
+      case "ArrowLeft":
+        if (r.hasChildren && !collapsed.has(id)) toggle(id, false);
+        else focusRow(visible.slice(0, i).reverse().find((x) => x.depth < r.depth)?.span.span_id);
+        break;
+      case "Enter":
+      case " ":
+        setSel(id === sel ? null : id);
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+  };
   const services = useMemo(() => {
     const m = new Map<string, string>();
     for (const s of spans) m.set(s.service_id || s.service_name || s.component, s.service_name || s.component);
@@ -195,7 +277,17 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
             ))}
           </span>
         )}
-        <IconButton label={t("trace 닫기")} size="sm" onClick={onClose} className="ml-auto">
+        {withKids.length > 0 && (
+          <span className="ml-auto flex items-center gap-1">
+            <IconButton label={t("모두 펼치기")} size="sm" onClick={() => setCollapsed(new Set())}>
+              <ChevronsUpDown />
+            </IconButton>
+            <IconButton label={t("모두 접기")} size="sm" onClick={() => setCollapsed(new Set(withKids))}>
+              <ChevronsDownUp />
+            </IconButton>
+          </span>
+        )}
+        <IconButton label={t("trace 닫기")} size="sm" onClick={onClose} className={withKids.length ? undefined : "ml-auto"}>
           <X />
         </IconButton>
       </div>
@@ -215,7 +307,7 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
         </div>
       ) : (
         <div className={cx("grid min-h-0 flex-1", selected ? "grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_400px] lg:grid-rows-1" : "grid-rows-1")}>
-          <div className="min-h-0 overflow-y-auto" role="tree" aria-label={t("span 워터폴")}>
+          <div ref={tree} className="min-h-0 overflow-y-auto" role="tree" aria-label={t("span 워터폴")}>
             <div className="sticky top-0 z-10 flex h-7 items-center border-b border-gray-100 bg-background text-xs text-gray-400">
               <div className="w-[38%] min-w-[220px] shrink-0 px-6">span</div>
               <div className="relative h-full flex-1 pr-6">
@@ -226,7 +318,7 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
                 ))}
               </div>
             </div>
-            {visible.map(({ span, depth, hasChildren }) => {
+            {visible.map(({ span, depth, hasChildren }, i) => {
               const left = ((isoMs(span.start_time) - t0) / total) * 100;
               const width = Math.max((span.duration_ms / total) * 100, 0.3);
               const color = serviceColor(span.service_id || span.service_name || span.component);
@@ -238,14 +330,11 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
                   aria-selected={sel === span.span_id}
                   aria-level={depth + 1}
                   aria-expanded={hasChildren ? !isCollapsed : undefined}
-                  tabIndex={0}
+                  data-span={span.span_id}
+                  tabIndex={span.span_id === current ? 0 : -1}
+                  onFocus={() => setFocusId(span.span_id)}
                   onClick={() => setSel(span.span_id === sel ? null : span.span_id)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      setSel(span.span_id === sel ? null : span.span_id);
-                    }
-                  }}
+                  onKeyDown={(e) => onRowKey(e, i)}
                   className={cx(
                     "flex h-8 cursor-pointer items-center text-xs hover:bg-gray-50 focus:outline-none focus-visible:bg-gray-100",
                     sel === span.span_id && "bg-gray-100",
@@ -255,15 +344,11 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
                     {hasChildren ? (
                       <button
                         type="button"
+                        tabIndex={-1}
                         aria-label={isCollapsed ? t("펼치기") : t("접기")}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setCollapsed((c) => {
-                            const n = new Set(c);
-                            if (n.has(span.span_id)) n.delete(span.span_id);
-                            else n.add(span.span_id);
-                            return n;
-                          });
+                          toggle(span.span_id);
                         }}
                         className="flex size-4 shrink-0 cursor-pointer items-center justify-center rounded text-gray-500 hover:bg-gray-200"
                       >
@@ -279,8 +364,11 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
                     </span>
                     <span className="ml-1 shrink-0 text-gray-400">{span.service_name || span.component}</span>
                   </div>
-                  <div className="relative h-full flex-1 pr-6">
+                  <div className="relative h-full flex-1 pr-6" title={`${span.name || t("(이름 없음)")} · ${fmtSpanMs(span.duration_ms)} · +${fmtSpanMs(isoMs(span.start_time) - t0)}`}>
                     <div className="absolute inset-y-0 left-0 right-6">
+                      {ticks.slice(1, -1).map((f) => (
+                        <span key={f} className="absolute inset-y-0 w-px bg-gray-100" style={{ left: `${f * 100}%` }} aria-hidden="true" />
+                      ))}
                       <div
                         className={cx("absolute top-2 h-4 rounded-sm", span.status === "error" && "ring-1 ring-red-500")}
                         style={{ left: `${left}%`, width: `${width}%`, background: color, opacity: 0.85 }}
@@ -297,7 +385,26 @@ export function TraceView({ eid, traceId, onClose }: { eid: ID | undefined; trac
               );
             })}
           </div>
-          {selected && <SpanDetail span={selected} t0={t0} onClose={() => setSel(null)} />}
+          {selected && (
+            <SpanDetail
+              span={selected}
+              t0={t0}
+              parent={parentOf(selected)}
+              onClose={() => setSel(null)}
+              onSelect={(id) => {
+                // Uncollapse the ancestors so the selected row is visible in the waterfall.
+                const open = new Set(collapsed);
+                const seen = new Set<string>();
+                for (let p = parentOf(spans.find((x) => x.span_id === id) ?? null); p && !seen.has(p.span_id); p = parentOf(p)) {
+                  seen.add(p.span_id);
+                  open.delete(p.span_id);
+                }
+                setCollapsed(open);
+                setSel(id);
+                setFocusId(id);
+              }}
+            />
+          )}
         </div>
       )}
     </div>

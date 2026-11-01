@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -462,6 +463,40 @@ func portOf(s string) int {
 	return n
 }
 
+// maxExposeRange는 expose 범위("9000-9100")에서 후보로 쓰는 최대 포트 수다.
+const maxExposeRange = 16
+
+// exposePorts는 expose 항목("8080", "8080/tcp", "9000-9002")의 포트다. udp면 포트 없이 udp=true.
+func exposePorts(e string) (ports []int, udp bool) {
+	e = strings.TrimSpace(e)
+	if spec, proto, ok := strings.Cut(e, "/"); ok {
+		switch strings.ToLower(proto) {
+		case "tcp":
+			e = spec
+		case "udp":
+			return nil, true
+		default:
+			return nil, false
+		}
+	}
+	lo, hi, isRange := strings.Cut(e, "-")
+	a := portOf(lo)
+	if !isRange {
+		if a == 0 {
+			return nil, false
+		}
+		return []int{a}, false
+	}
+	b := portOf(hi)
+	if a == 0 || b == 0 || b < a {
+		return nil, false
+	}
+	for p := a; p <= b && len(ports) < maxExposeRange; p++ {
+		ports = append(ports, p)
+	}
+	return ports, false
+}
+
 func convertService(plan *Plan, proj *types.Project, in Input, name string, svc types.ServiceConfig, customNets map[string]bool) *ServicePlan {
 	sp := &ServicePlan{ComposeName: name, SourceType: "image", Icon: "docker", EnvKeys: []string{}, Volumes: []VolumePlan{}, Aliases: []string{},
 		DependsOn: []store.Dependency{}, DomainCandidates: []DomainCandidate{}, TCPCandidates: []int{}, Issues: []Issue{}, Variables: map[string]string{}}
@@ -736,7 +771,13 @@ func convertService(plan *Plan, proj *types.Project, in Input, name string, svc 
 		addPort(int(p.Target), "ports")
 	}
 	for _, e := range svc.Expose {
-		addPort(portOf(e), "expose")
+		ps, udp := exposePorts(e)
+		if udp {
+			warnf("udp_port", "udp port %s is ignored", e)
+		}
+		for _, p := range ps {
+			addPort(p, "expose")
+		}
 	}
 	if tport > 0 && !seenPort[tport] {
 		if knownTCPPorts[tport] {
@@ -999,7 +1040,11 @@ func relEnvName(in Input, p string) string {
 	return filepath.Base(p)
 }
 
+// maxEnvFileSize는 저장소에서 읽는 env_file 크기 상한이다.
+const maxEnvFileSize = 1 << 20
+
 // readEnvFile은 env_file 내용을 찾는다: 직접 준 EnvFiles, 아니면 저장소 안의 파일.
+// 저장소 파일은 심볼릭 링크를 풀어도 저장소 안이어야 한다(커밋된 링크로 서버 파일을 변수로 읽지 않게).
 func readEnvFile(in Input, p string) (string, bool) {
 	keys := []string{relEnvName(in, p), filepath.Base(p), p}
 	for _, k := range keys {
@@ -1014,8 +1059,24 @@ func readEnvFile(in Input, p string) (string, bool) {
 	if rel, err := filepath.Rel(in.RepoDir, abs); err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return "", false
 	}
-	b, err := os.ReadFile(abs)
+	repo, err := filepath.EvalSymlinks(in.RepoDir)
 	if err != nil {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil || (real != repo && !strings.HasPrefix(real, repo+string(filepath.Separator))) {
+		return "", false
+	}
+	f, err := os.Open(real)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
+		return "", false
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxEnvFileSize+1))
+	if err != nil || len(b) > maxEnvFileSize {
 		return "", false
 	}
 	return string(b), true

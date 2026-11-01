@@ -319,3 +319,42 @@ func TestMongoErrorMessage(t *testing.T) {
 		t.Errorf("plain: %q", m)
 	}
 }
+
+// 탐색 쿼리는 읽기 전용 세션으로 연다(postgres GUC, mysql --init-command). 사용자의 쿼리 탭은 그대로다.
+func TestReadOnlySQL(t *testing.T) {
+	vars := map[string]string{"POSTGRES_PASSWORD": "pw", "MYSQL_ROOT_PASSWORD": "pw"}
+	pg := Target{Kind: "postgres", Vars: vars}
+	ro, err := pg.ReadOnlySQL("SELECT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !envHas(ro.Env, "PGOPTIONS", "default_transaction_read_only=on") || !envHas(ro.Env, "PGOPTIONS", "statement_timeout=") {
+		t.Errorf("pg read-only env: %v", ro.Env)
+	}
+	rw, _ := pg.SQL("SELECT 1")
+	if envHas(rw.Env, "PGOPTIONS", "read_only") {
+		t.Errorf("query tab must stay writable: %v", rw.Env)
+	}
+	if pg.ReadOnly {
+		t.Error("ReadOnlySQL must not change the target")
+	}
+	my := Target{Kind: "mysql", Vars: vars}
+	ro, _ = my.ReadOnlySQL("SELECT 1")
+	script := ro.Cmd[len(ro.Cmd)-1]
+	if !envHas(ro.Env, "DBINIT", "SET SESSION TRANSACTION READ ONLY") || !strings.Contains(script, `"--init-command=$DBINIT"`) {
+		t.Errorf("mysql read-only: %v\n%s", ro.Env, script)
+	}
+	rw, _ = my.SQL("SELECT 1")
+	if envHas(rw.Env, "DBINIT", "") {
+		t.Errorf("mysql query tab must stay writable: %v", rw.Env)
+	}
+}
+
+func envHas(env []string, key, sub string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, key+"=") && strings.Contains(e[len(key)+1:], sub) {
+			return true
+		}
+	}
+	return false
+}

@@ -17,11 +17,31 @@ const QUICK_LABEL: Record<MetricRange, string> = { "1h": t("1시간"), "6h": t("
 const CHART_H = 300;
 const CARD = "flex flex-col group p-4 pb-3 transition-colors ease-out bg-background dark:bg-secondaryBg border border-gray-200 rounded-lg";
 
-export function ChartCard({ title, aside, children, footer }: { title: string; aside?: ReactNode; children: ReactNode; footer?: ReactNode }) {
+export function ChartCard({
+  title,
+  aside,
+  children,
+  footer,
+  summary,
+}: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
+  /** Latest and peak value under the title, so the number is readable without hovering. */
+  summary?: { now: string; peak: string } | null;
+}) {
   return (
     <div className={cx(CARD, "min-w-0 gap-2")}>
-      <div className="flex items-center justify-between">
-        <p className="text-h6 font-semibold">{title}</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-h6 font-semibold">{title}</p>
+          {summary && (
+            <p className="mt-0.5 truncate text-xs tabular-nums text-gray-500">
+              {t("현재 {now} · 최대 {peak}", { now: summary.now, peak: summary.peak })}
+            </p>
+          )}
+        </div>
         {aside}
       </div>
       <div style={{ height: CHART_H }}>
@@ -66,6 +86,14 @@ function SumLegend({ replicas }: { replicas: number }) {
   );
 }
 
+/** Last and highest value of a series, formatted. */
+function summarize(points: { v: number }[], format: (v: number) => string): { now: string; peak: string } | null {
+  if (!points.length) return null;
+  let peak = points[0].v;
+  for (const p of points) if (p.v > peak) peak = p.v;
+  return { now: format(points[points.length - 1].v), peak: format(peak) };
+}
+
 const fmtVcpu = (v: number) => `${v.toFixed(v !== 0 && Math.abs(v) < 0.1 ? 2 : 1)} vCPU`;
 
 const ListIcon = () => (
@@ -102,6 +130,12 @@ export function MetricsTab({ svc, env }: { svc: CanvasService; env: Environment 
     { name: t("송신"), color: "var(--yellow-400)", points: rate(ps, (p) => p.net_tx_bytes) },
     { name: t("수신"), color: "var(--blue-500)", points: rate(ps, (p) => p.net_rx_bytes) },
   ];
+  const cpu = pts(ps, (p) => p.cpu_percent / 100);
+  const mem = pts(ps, (p) => p.memory_bytes);
+  const disk = pts(ps, (p) => p.disk_bytes);
+  const netSummary = net[0].points.length
+    ? { now: `↑ ${fmtRate(net[0].points[net[0].points.length - 1].v)}  ↓ ${fmtRate(net[1].points[net[1].points.length - 1]?.v ?? 0)}`, peak: fmtRate(Math.max(...net.flatMap((s) => s.points.map((p) => p.v)))) }
+    : null;
   const step = data ? (data.step_s >= 60 ? t("{n}분", { n: Math.round(data.step_s / 60) }) : t("{n}초", { n: data.step_s })) : null;
   const offline = svc.instance.status === "offline" || !svc.instance.current_deployment_id;
   const emptyMsg = offline ? t("서비스가 실행되면 지표가 여기에 나옵니다") : t("이 기간에 수집된 지표가 없습니다");
@@ -113,7 +147,12 @@ export function MetricsTab({ svc, env }: { svc: CanvasService; env: Environment 
     <div className="flex h-full flex-col pb-12">
       <div className="flex flex-col space-y-8">
         <div className="flex w-full items-center justify-end space-x-2">
-          <div role="radiogroup" aria-label={t("차트 배치")}className="hidden max-w-max rounded-md text-gray-300 md:flex">
+          {!live && (
+            <span className="mr-auto flex items-center gap-1.5 text-xs text-gray-500" role="status">
+              <Pause className="size-3.5" aria-hidden /> {t("일시정지됨 · 화면의 값이 갱신되지 않습니다")}
+            </span>
+          )}
+          <div role="radiogroup" aria-label={t("차트 배치")} className="hidden max-w-max rounded-md text-gray-300 md:flex">
             {(
               [
                 ["list", t("한 줄에 하나"), <ListIcon key="l" />],
@@ -203,27 +242,27 @@ export function MetricsTab({ svc, env }: { svc: CanvasService; env: Environment 
               </>
             ) : (
               <>
-                <ChartCard title="CPU" aside={<SumLegend replicas={replicas} />}>
+                <ChartCard title="CPU" aside={<SumLegend replicas={replicas} />} summary={summarize(cpu, fmtVcpu)}>
                   <LineChart
-                    series={[{ name: "CPU", color: "var(--blue-500)", points: pts(ps, (p) => p.cpu_percent / 100) }]}
+                    series={[{ name: "CPU", color: "var(--blue-500)", points: cpu }]}
                     format={fmtVcpu}
                     minMax={1}
                     step
                     height={CHART_H}
                   />
                 </ChartCard>
-                <ChartCard title={t("메모리")} aside={<SumLegend replicas={replicas} />}>
-                  <LineChart series={[{ name: t("메모리"),color: "var(--pink-500)", points: pts(ps, (p) => p.memory_bytes) }]} format={fmtMem} minMax={50e6} step height={CHART_H} />
+                <ChartCard title={t("메모리")} aside={<SumLegend replicas={replicas} />} summary={summarize(mem, fmtMem)}>
+                  <LineChart series={[{ name: t("메모리"), color: "var(--pink-500)", points: mem }]} format={fmtMem} minMax={50e6} step height={CHART_H} />
                 </ChartCard>
-                <ChartCard title={t("네트워크 트래픽")} footer={<Legend series={net} className="px-4 pb-2 pt-4" />}>
+                <ChartCard title={t("네트워크 트래픽")} summary={netSummary} footer={<Legend series={net} className="px-4 pb-2 pt-4" />}>
                   <LineChart series={net} format={fmtRate} minMax={1000} step grid={false} height={CHART_H - 31} />
                 </ChartCard>
               </>
             )}
             {!m.isPending &&
               (vol && ps.some((p) => p.disk_bytes !== null) ? (
-                <ChartCard title={t("볼륨")} aside={<span className="truncate text-xs text-gray-500">{vol.mount_path}</span>}>
-                  <LineChart series={[{ name: vol.name, color: "var(--pink-500)", points: pts(ps, (p) => p.disk_bytes) }]} format={fmtMem} minMax={50e6} step height={CHART_H} />
+                <ChartCard title={t("볼륨")} aside={<span className="truncate text-xs text-gray-500">{vol.mount_path}</span>} summary={summarize(disk, fmtMem)}>
+                  <LineChart series={[{ name: vol.name, color: "var(--pink-500)", points: disk }]} format={fmtMem} minMax={50e6} step height={CHART_H} />
                 </ChartCard>
               ) : (
                 <EmptyCard title={t("볼륨")} heading={t("볼륨 지표가 없습니다")}>

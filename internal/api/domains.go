@@ -8,6 +8,7 @@ import (
 	"github.com/turin-dev/aven/internal/compat"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -506,6 +507,27 @@ func (s *Server) usedHosts(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
+// maxDomainsPerInstance는 서비스 인스턴스 하나에 붙일 수 있는 도메인 수다(proxy 설정과 DNS 확인이 끝없이 커지지 않게).
+const maxDomainsPerInstance = 100
+
+// reservedHosts는 일반 서비스가 새로 가져갈 수 없는 호스트와 그 이유다. aven-server 자신의 공개 호스트를 서비스 도메인으로
+// 쓰면 proxy가 대시보드 라우트를 빼고 그 서비스로 보낸다(세션 쿠키와 로그인이 그 서비스로 간다).
+// self 서비스(aven-server를 배포한 것)만 예외다.
+func (s *Server) reservedHosts(in *store.Instance) map[string]string {
+	out := map[string]string{}
+	if s.Deploy == nil || (in != nil && s.Deploy.IsSelfService(in.ServiceID)) {
+		return out
+	}
+	const dashboard = "it is the public host of this Aven server"
+	if h := s.Deploy.Cfg.SelfHost; h != "" {
+		out[strings.ToLower(h)] = dashboard
+	}
+	if u, err := url.Parse(s.PublicURL); err == nil && u.Hostname() != "" {
+		out[strings.ToLower(u.Hostname())] = dashboard
+	}
+	return out
+}
+
 // normalizeDomains는 PATCH로 받은 도메인 목록을 검증하고 kind를 채운다.
 func (s *Server) normalizeDomains(ctx context.Context, in *store.Instance, doms []store.Domain) ([]store.Domain, error) {
 	out, err := s.checkDomains(ctx, in, doms)
@@ -525,15 +547,27 @@ func (s *Server) checkDomains(ctx context.Context, in *store.Instance, doms []st
 		return nil, err
 	}
 	seen := map[string]bool{}
+	had := map[string]bool{}
+	for _, d := range in.Domains {
+		had[d.Host] = true
+	}
+	reserved := s.reservedHosts(in)
 	out := []store.Domain{}
+	if len(doms) > maxDomainsPerInstance {
+		return nil, fmt.Errorf("too many domains (max %d per service)", maxDomainsPerInstance)
+	}
 	for _, d := range doms {
 		d.Host = strings.ToLower(strings.TrimSpace(d.Host))
 		if seen[d.Host] {
 			continue
 		}
 		seen[d.Host] = true
-		if !domainRe.MatchString(d.Host) {
+		if len(d.Host) > 253 || !domainRe.MatchString(d.Host) {
 			return nil, fmt.Errorf("invalid domain: %s", d.Host)
+		}
+		// 이미 붙어 있던 호스트는 그대로 둔다(예전에 저장된 설정의 다른 도메인을 고칠 수 있게).
+		if why := reserved[d.Host]; why != "" && !had[d.Host] {
+			return nil, fmt.Errorf("domain %s is reserved: %s", d.Host, why)
 		}
 		if rest, ok := strings.CutPrefix(d.Host, "*."); ok && !strings.Contains(rest, ".") {
 			return nil, fmt.Errorf("invalid domain: %s (a wildcard needs at least two labels after *., e.g. *.example.com)", d.Host)

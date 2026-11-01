@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type KeyboardEvent, type ReactNode, type Ref, type SyntheticEvent } from "react";
 import { Braces } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { cx } from "../ui";
@@ -19,15 +19,20 @@ export const REF_POPUP_CLS =
 
 const OPEN_RE = /\$\{\{\s*([A-Za-z0-9_.-]*)$/;
 
+export type VarInputElement = HTMLInputElement | HTMLTextAreaElement;
+
 /**
  * Value input with Railway-style reference autocomplete: typing `${{` lists shared variables,
  * other services' variables and keel-provided variables.
  *
  * ARIA combobox pattern: focus stays in the input, the popup is a grouped listbox, the active option is exposed with
  * aria-activedescendant. ↑/↓ move, Enter/Tab insert, Escape closes.
+ *
+ * Multi-line values (PEM keys, JSON) switch to a textarea: a single-line input would silently drop the line breaks.
+ * Pasting text with line breaks switches too. In the textarea Enter adds a line and ⌘/Ctrl+Enter submits.
  */
 export const VarInput = forwardRef<
-  HTMLInputElement,
+  VarInputElement,
   {
     value: string;
     onChange: (v: string) => void;
@@ -43,7 +48,7 @@ export const VarInput = forwardRef<
     refButton?: boolean;
   }
 >(function VarInput({ value, onChange, suggestions, onEnter, placeholder, ariaLabel, autoFocus, className, id, invalid, describedBy, refButton }, fwd) {
-  const ref = useRef<HTMLInputElement>(null);
+  const ref = useRef<VarInputElement>(null);
   useImperativeHandle(fwd, () => ref.current!);
   const uid = useId();
   const listId = `${uid}-list`;
@@ -52,6 +57,22 @@ export const VarInput = forwardRef<
   const [active, setActive] = useState(0);
   const [dismissed, setDismissed] = useState(false);
 
+  const multiline = value.includes("\n");
+  // Keep the caret where it was when the input turns into a textarea (or back).
+  const wasMulti = useRef(multiline);
+  /** Set by the user's own edits: only those move focus to the swapped element. */
+  const typed = useRef(false);
+  useEffect(() => {
+    if (wasMulti.current === multiline) return;
+    wasMulti.current = multiline;
+    const el = ref.current;
+    if (el && typed.current && document.activeElement !== el) {
+      el.focus();
+      el.setSelectionRange(caret, caret);
+    }
+    typed.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [multiline]);
   const before = value.slice(0, caret);
   const m = OPEN_RE.exec(before);
   const partial = m?.[1] ?? null;
@@ -125,72 +146,96 @@ export const VarInput = forwardRef<
     });
   };
 
+  const fieldProps = {
+    id,
+    value,
+    autoFocus,
+    spellCheck: false,
+    autoComplete: "off",
+    "aria-label": ariaLabel,
+    placeholder,
+    role: "combobox",
+    "aria-expanded": open,
+    "aria-haspopup": "listbox" as const,
+    "aria-controls": listId,
+    "aria-autocomplete": "list" as const,
+    "aria-activedescendant": open ? optId(idx) : undefined,
+    "aria-invalid": invalid || undefined,
+    "aria-describedby": describedBy,
+    onChange: (e: ChangeEvent<VarInputElement>) => {
+      typed.current = true;
+      onChange(e.target.value);
+      setCaret(e.target.selectionStart ?? e.target.value.length);
+      setActive(0);
+      setDismissed(false);
+    },
+    onSelect: (e: SyntheticEvent<VarInputElement>) => setCaret(e.currentTarget.selectionStart ?? 0),
+    onBlur: () => setTimeout(() => setDismissed(true), 120),
+    onFocus: () => setDismissed(false),
+    onPaste: (e: ClipboardEvent<VarInputElement>) => {
+      // A single-line input drops line breaks from pasted text; insert it ourselves so the value stays intact.
+      if (multiline) return;
+      const text = e.clipboardData.getData("text").replace(/\r\n/g, "\n");
+      if (!text.includes("\n")) return;
+      e.preventDefault();
+      typed.current = true;
+      const el = e.currentTarget;
+      const a = el.selectionStart ?? value.length;
+      const b = el.selectionEnd ?? a;
+      onChange(value.slice(0, a) + text + value.slice(b));
+      setCaret(a + text.length);
+    },
+    onKeyDown: (e: KeyboardEvent<VarInputElement>) => {
+      // 한글 IME 조합 중의 Enter는 글자 확정용이다. 여기서 제출하면 마지막 글자가 빠진다.
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+      if (open) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setActive((a) => Math.min(list.length - 1, a + 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setActive((a) => Math.max(0, a - 1));
+          return;
+        }
+        if (e.key === "Home" || e.key === "End") {
+          e.preventDefault();
+          setActive(e.key === "Home" ? 0 : list.length - 1);
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          insert(list[idx]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setDismissed(true);
+          return;
+        }
+      }
+      if (e.key === "Enter" && onEnter && (!multiline || e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        onEnter();
+      }
+    },
+  };
+
   return (
     <div className={cx("relative min-w-0 flex-1", className)}>
-      <input
-        ref={ref}
-        id={id}
-        value={value}
-        autoFocus={autoFocus}
-        spellCheck={false}
-        autoComplete="off"
-        aria-label={ariaLabel}
-        placeholder={placeholder}
-        role="combobox"
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={open ? optId(idx) : undefined}
-        aria-invalid={invalid || undefined}
-        aria-describedby={describedBy}
-        onChange={(e) => {
-          onChange(e.target.value);
-          setCaret(e.target.selectionStart ?? e.target.value.length);
-          setActive(0);
-          setDismissed(false);
-        }}
-        onSelect={(e) => setCaret((e.target as HTMLInputElement).selectionStart ?? 0)}
-        onBlur={() => setTimeout(() => setDismissed(true), 120)}
-        onFocus={() => setDismissed(false)}
-        onKeyDown={(e) => {
-          // 한글 IME 조합 중의 Enter는 글자 확정용이다. 여기서 제출하면 마지막 글자가 빠진다.
-          if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (open) {
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              setActive((a) => Math.min(list.length - 1, a + 1));
-              return;
-            }
-            if (e.key === "ArrowUp") {
-              e.preventDefault();
-              setActive((a) => Math.max(0, a - 1));
-              return;
-            }
-            if (e.key === "Home" || e.key === "End") {
-              e.preventDefault();
-              setActive(e.key === "Home" ? 0 : list.length - 1);
-              return;
-            }
-            if (e.key === "Enter" || e.key === "Tab") {
-              e.preventDefault();
-              insert(list[idx]);
-              return;
-            }
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              setDismissed(true);
-              return;
-            }
-          }
-          if (e.key === "Enter" && onEnter) {
-            e.preventDefault();
-            onEnter();
-          }
-        }}
-        className={cx(VAR_INPUT_CLS, refButton && "!pr-9", invalid && "!border-red-500")}
-      />
+      {multiline ? (
+        <textarea
+          ref={ref as Ref<HTMLTextAreaElement>}
+          rows={Math.min(8, value.split("\n").length)}
+          wrap="off"
+          {...fieldProps}
+          className={cx(VAR_INPUT_CLS, "!h-auto resize-y whitespace-pre", refButton && "!pr-9", invalid && "!border-red-500")}
+        />
+      ) : (
+        <input ref={ref as Ref<HTMLInputElement>} {...fieldProps} className={cx(VAR_INPUT_CLS, refButton && "!pr-9", invalid && "!border-red-500")} />
+      )}
       {refButton && (
         <button
           type="button"

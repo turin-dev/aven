@@ -118,9 +118,13 @@ func (s *Schedule) Match(t time.Time) bool {
 	if s.minute&(1<<uint(t.Minute())) == 0 || s.hour&(1<<uint(t.Hour())) == 0 || s.month&(1<<uint(t.Month())) == 0 {
 		return false
 	}
+	return s.dayMatch(t)
+}
+
+// dayMatch는 t의 날짜(일, 요일)가 일정에 맞는지다. 표준 cron: 일/요일이 둘 다 제한되면 OR, 아니면 AND.
+func (s *Schedule) dayMatch(t time.Time) bool {
 	domOK := s.dom&(1<<uint(t.Day())) != 0
 	dowOK := s.dow&(1<<uint(t.Weekday())) != 0
-	// 표준 cron: 일/요일이 둘 다 제한되면 OR, 아니면 AND
 	if !s.domStar && !s.dowStar {
 		return domOK || dowOK
 	}
@@ -134,6 +138,11 @@ func (s *Schedule) Next(after time.Time) time.Time {
 	for t.Before(end) {
 		if s.month&(1<<uint(t.Month())) == 0 {
 			t = time.Date(t.Year(), t.Month()+1, 1, 0, 0, 0, 0, time.UTC)
+			continue
+		}
+		if !s.dayMatch(t) {
+			// 맞지 않는 날은 통째로 건너뛴다(2월 30일처럼 드문 일정도 5년을 분 단위로 훑지 않게).
+			t = time.Date(t.Year(), t.Month(), t.Day()+1, 0, 0, 0, 0, time.UTC)
 			continue
 		}
 		if s.Match(t) {

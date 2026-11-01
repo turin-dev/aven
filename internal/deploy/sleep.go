@@ -139,11 +139,20 @@ func (m *Manager) Sleep(ctx context.Context, in *store.Instance) error {
 		return nil
 	}
 	// 먼저 상태를 바꿔 crash 감시와 reconcile이 멈춘 컨테이너를 건드리지 않게 한다.
-	if err := m.Store.SetInstanceStatus(ctx, in.ID, store.InstSleeping, nil); err != nil {
+	// 그사이 배포가 시작됐거나(deploying) 중지됐으면 재우지 않는다(확인과 변경은 배포 시작과 같은 잠금 안에서 한다).
+	unlock := m.instLock(in.ID)
+	fresh, err := m.Store.GetInstance(ctx, in.ID)
+	if err != nil || fresh.Status != store.InstOnline || fresh.CurrentDeploymentID == nil || *fresh.CurrentDeploymentID != d.ID {
+		unlock()
+		return err
+	}
+	err = m.Store.SetInstanceStatus(ctx, in.ID, store.InstSleeping, nil)
+	unlock()
+	if err != nil {
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
-		if restoreErr := m.Store.SetInstanceStatus(ctx, in.ID, store.InstOnline, nil); restoreErr != nil {
+		if restoreErr := m.setInstanceStatusIf(ctx, in.ID, store.InstSleeping, store.InstOnline); restoreErr != nil {
 			return errors.Join(fmt.Errorf("sleep proxy sync: %w", err), restoreErr)
 		}
 		return fmt.Errorf("sleep proxy sync: %w", err)
@@ -253,12 +262,28 @@ func (m *Manager) wake(ctx context.Context, instanceID string) error {
 	}
 	m.markAwake(in.ID)
 	m.HTTPLogs.Touch(in.ID)
-	if err := m.Store.SetInstanceStatus(ctx, in.ID, store.InstOnline, nil); err != nil {
+	// 깨우는 동안 중지됐거나 새 배포가 시작됐으면 그 상태를 덮어쓰지 않는다.
+	unlock := m.instLock(in.ID)
+	fresh, err := m.Store.GetInstance(ctx, in.ID)
+	if err != nil {
+		unlock()
+		return err
+	}
+	if fresh.Status != store.InstSleeping {
+		unlock()
+		if fresh.Status == store.InstOffline {
+			return errors.New("service was stopped while waking up")
+		}
+		return nil
+	}
+	err = m.Store.SetInstanceStatus(ctx, in.ID, store.InstOnline, nil)
+	unlock()
+	if err != nil {
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
 		// wake 라우트가 살아 있어 재시도를 허용한다.
-		if restoreErr := m.Store.SetInstanceStatus(ctx, in.ID, store.InstSleeping, nil); restoreErr != nil {
+		if restoreErr := m.setInstanceStatusIf(ctx, in.ID, store.InstOnline, store.InstSleeping); restoreErr != nil {
 			return errors.Join(fmt.Errorf("wake proxy sync: %w", err), restoreErr)
 		}
 		return fmt.Errorf("wake proxy sync: %w", err)
@@ -359,4 +384,15 @@ func (m *Manager) upstreamFor(ctx context.Context, instanceID, host string) (*ur
 		}
 	}
 	return nil, errors.New("no running replica")
+}
+
+// setInstanceStatusIf는 인스턴스 상태가 아직 from일 때만 to로 바꾼다(되돌리는 사이 시작된 배포·중지를 덮어쓰지 않는다).
+func (m *Manager) setInstanceStatusIf(ctx context.Context, instanceID, from, to string) error {
+	unlock := m.instLock(instanceID)
+	defer unlock()
+	cur, err := m.Store.GetInstance(ctx, instanceID)
+	if err != nil || cur.Status != from {
+		return err
+	}
+	return m.Store.SetInstanceStatus(ctx, instanceID, to, nil)
 }

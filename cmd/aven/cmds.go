@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/turin-dev/aven/internal/compat"
 	"net/url"
 	"os"
 	"os/exec"
@@ -111,7 +111,7 @@ func confirm(yes bool, prompt string) {
 		die("%s: pass -y to confirm in non-interactive use", prompt)
 	}
 	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
-	s, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	s, _ := readLine()
 	if a := strings.ToLower(strings.TrimSpace(s)); a != "y" && a != "yes" {
 		die("aborted")
 	}
@@ -120,38 +120,47 @@ func confirm(yes bool, prompt string) {
 // ---- status / init / environment / service / add ----
 
 type instanceView struct {
-	Status              string  `json:"status"`
-	CurrentDeploymentID *string `json:"current_deployment_id"`
-	PrivateDomain       string  `json:"private_domain"`
-	Domains             []struct {
-		Host   string `json:"host"`
-		Kind   string `json:"kind"`
-		Status string `json:"status"`
-	} `json:"domains"`
-	TCPProxy *struct {
+	Status              string           `json:"status"`
+	CurrentDeploymentID *string          `json:"current_deployment_id"`
+	PrivateDomain       string           `json:"private_domain"`
+	Domains             []instanceDomain `json:"domains"`
+	TCPProxy            *struct {
 		ContainerPort int `json:"container_port"`
 		PublicPort    int `json:"public_port"`
 	} `json:"tcp_proxy"`
-	PendingChanges []string `json:"pending_changes"`
+	PendingChanges []string `json:"pending_changes,omitempty"`
+}
+
+type instanceDomain struct {
+	Host   string `json:"host"`
+	Kind   string `json:"kind"`
+	Status string `json:"status"`
 }
 
 type deploymentView struct {
-	ID            string    `json:"id"`
-	Status        string    `json:"status"`
-	Trigger       string    `json:"trigger"`
-	CommitSHA     *string   `json:"commit_sha"`
-	CommitMessage *string   `json:"commit_message"`
-	Error         *string   `json:"error"`
-	CreatedAt     time.Time `json:"created_at"`
-	Replicas      []struct {
-		Name     string `json:"name"`
-		Status   string `json:"status"`
-		Restarts int    `json:"restarts"`
-	} `json:"replicas"`
+	ID            string        `json:"id"`
+	Status        string        `json:"status"`
+	Trigger       string        `json:"trigger"`
+	CommitSHA     *string       `json:"commit_sha"`
+	CommitMessage *string       `json:"commit_message"`
+	Error         *string       `json:"error"`
+	CreatedAt     time.Time     `json:"created_at"`
+	Replicas      []replicaView `json:"replicas,omitempty"`
 }
 
-func ago(t time.Time) string {
-	d := time.Since(t).Round(time.Second)
+type replicaView struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Restarts int    `json:"restarts"`
+}
+
+func ago(t time.Time) string { return agoFrom(time.Now(), t) }
+
+func agoFrom(now, t time.Time) string {
+	d := now.Sub(t).Round(time.Second)
+	if d < 0 {
+		d = 0
+	}
 	switch {
 	case d < time.Minute:
 		return fmt.Sprintf("%ds ago", int(d.Seconds()))
@@ -164,58 +173,93 @@ func ago(t time.Time) string {
 }
 
 func cmdStatus(c *config, args []string) {
-	fl := flag.NewFlagSet("status", flag.ExitOnError)
+	fl := newFlagSet("status")
 	tf := addTargetFlags(fl)
+	asJSON := fl.Bool("json", false, "print JSON")
 	fl.Parse(args)
 	l := tf.resolve(c)
 	pname := l.Project
 	if pname == "" {
 		pname = c.project(l.ProjectID).Name
 	}
-	fmt.Printf("Project:      %s\nEnvironment:  %s\n", pname, l.Environment)
-	if l.ServiceID == "" {
-		fmt.Println("Service:      (none; run: aven service use <name>)")
+	st := statusReport{Project: pname, ProjectID: l.ProjectID, Environment: l.Environment, EnvironmentID: l.EnvironmentID,
+		Service: l.Service, ServiceID: l.ServiceID}
+	if l.ServiceID != "" {
+		var in instanceView
+		if err := c.call("GET", l.instPath(), nil, &in); err != nil {
+			die("%v", err)
+		}
+		st.Instance = &in
+		var deps []deploymentView
+		if err := c.call("GET", l.instPath()+"/deployments?limit=1", nil, &deps); err == nil && len(deps) > 0 {
+			st.Deployment = &deps[0]
+		}
+	}
+	if *asJSON {
+		printJSON(st)
 		return
 	}
-	fmt.Printf("Service:      %s\n", l.Service)
-	var in instanceView
-	if err := c.call("GET", l.instPath(), nil, &in); err != nil {
-		die("%v", err)
+	fmt.Print(formatStatus(st, time.Now()))
+}
+
+// statusReport is the output of aven status (--json prints it as is).
+type statusReport struct {
+	Project       string          `json:"project"`
+	ProjectID     string          `json:"project_id"`
+	Environment   string          `json:"environment"`
+	EnvironmentID string          `json:"environment_id"`
+	Service       string          `json:"service,omitempty"`
+	ServiceID     string          `json:"service_id,omitempty"`
+	Instance      *instanceView   `json:"instance,omitempty"`
+	Deployment    *deploymentView `json:"deployment,omitempty"`
+}
+
+func formatStatus(st statusReport, now time.Time) string {
+	var b strings.Builder
+	row := func(k, v string) { fmt.Fprintf(&b, "%s %s\n", pad(out(styleDim, k+":"), k+":", 13), v) }
+	row("Project", out(styleBold, st.Project))
+	row("Environment", st.Environment)
+	if st.ServiceID == "" {
+		row("Service", "(none; run: aven service use <name>)")
+		return b.String()
 	}
-	fmt.Printf("Status:       %s\n", in.Status)
-	var deps []deploymentView
-	c.call("GET", l.instPath()+"/deployments?limit=1", nil, &deps)
-	if len(deps) > 0 {
-		d := deps[0]
-		line := fmt.Sprintf("%s (%s, %s, %s)", d.ID, d.Status, d.Trigger, ago(d.CreatedAt))
+	row("Service", out(styleBold, st.Service))
+	in := st.Instance
+	if in == nil {
+		return b.String()
+	}
+	row("Status", outStatus(in.Status))
+	if d := st.Deployment; d != nil {
+		line := fmt.Sprintf("%s (%s, %s, %s)", d.ID, outStatus(d.Status), d.Trigger, agoFrom(now, d.CreatedAt))
 		if d.CommitSHA != nil && len(*d.CommitSHA) >= 7 {
 			line += " " + (*d.CommitSHA)[:7]
 			if d.CommitMessage != nil {
 				line += " " + firstLine(*d.CommitMessage)
 			}
 		}
-		fmt.Printf("Deployment:   %s\n", line)
+		row("Deployment", line)
 		if d.Error != nil {
-			fmt.Printf("Error:        %s\n", firstLine(*d.Error))
+			row("Error", out(styleRed, firstLine(*d.Error)))
 		}
 		for _, r := range d.Replicas {
-			fmt.Printf("Replica:      %s %s (restarts %d)\n", r.Name, r.Status, r.Restarts)
+			row("Replica", fmt.Sprintf("%s %s (restarts %d)", r.Name, outStatus(r.Status), r.Restarts))
 		}
 	} else {
-		fmt.Println("Deployment:   (none)")
+		row("Deployment", "(none; deploy with: aven up)")
 	}
 	for _, d := range in.Domains {
-		fmt.Printf("Domain:       https://%s (%s, %s)\n", d.Host, d.Kind, d.Status)
+		row("Domain", fmt.Sprintf("https://%s (%s, %s)", d.Host, d.Kind, outStatus(d.Status)))
 	}
 	if in.PrivateDomain != "" {
-		fmt.Printf("Private:      %s\n", in.PrivateDomain)
+		row("Private", in.PrivateDomain)
 	}
 	if in.TCPProxy != nil {
-		fmt.Printf("TCP proxy:    :%d → %d\n", in.TCPProxy.PublicPort, in.TCPProxy.ContainerPort)
+		row("TCP proxy", fmt.Sprintf(":%d → %d", in.TCPProxy.PublicPort, in.TCPProxy.ContainerPort))
 	}
 	if len(in.PendingChanges) > 0 {
-		fmt.Printf("Pending:      %s (apply with: aven redeploy or aven variables --deploy)\n", strings.Join(in.PendingChanges, ", "))
+		row("Pending", out(styleYellow, strings.Join(in.PendingChanges, ", "))+" (apply with: aven redeploy or aven variables --deploy)")
 	}
+	return b.String()
 }
 
 func firstLine(s string) string {
@@ -232,7 +276,7 @@ func (c *config) saveLink(l *link) {
 }
 
 func cmdInit(c *config, args []string) {
-	fl := flag.NewFlagSet("init", flag.ExitOnError)
+	fl := newFlagSet("init")
 	desc := fl.String("description", "", "project description")
 	workspace := fl.String("workspace", "", "workspace ID")
 	fl.Parse(args)
@@ -265,11 +309,28 @@ func cmdEnvironment(c *config, args []string) {
 	l := c.linked()
 	switch sub {
 	case "list", "ls":
+		asJSON := len(args) == 1 && args[0] == "--json"
+		if len(args) > 0 && !asJSON {
+			die("usage: aven environment list [--json]")
+		}
 		p := c.project(l.ProjectID)
+		if asJSON {
+			type envOut struct {
+				envRef
+				Default bool `json:"default"`
+				Linked  bool `json:"linked"`
+			}
+			list := []envOut{}
+			for _, e := range p.Environments {
+				list = append(list, envOut{e, e.ID == p.DefaultEnvironmentID, e.ID == l.EnvironmentID})
+			}
+			printJSON(list)
+			return
+		}
 		for _, e := range p.Environments {
 			mark := " "
 			if e.ID == l.EnvironmentID {
-				mark = "*"
+				mark = out(stylePurple, "*")
 			}
 			def := ""
 			if e.ID == p.DefaultEnvironmentID {
@@ -281,7 +342,7 @@ func cmdEnvironment(c *config, args []string) {
 			fmt.Printf("%s %s%s\n", mark, e.Name, def)
 		}
 	case "new", "create":
-		fl := flag.NewFlagSet("environment new", flag.ExitOnError)
+		fl := newFlagSet("environment new")
 		from := fl.String("copy-from", "", "environment to copy settings and variables from")
 		fl.Parse(reorderFlags(args))
 		if fl.NArg() != 1 {
@@ -314,7 +375,7 @@ func cmdEnvironment(c *config, args []string) {
 		c.saveLink(l)
 		fmt.Printf("using environment %s\n", e.Name)
 	case "delete", "rm":
-		fl := flag.NewFlagSet("environment delete", flag.ExitOnError)
+		fl := newFlagSet("environment delete")
 		yes := fl.Bool("y", false, "don't ask for confirmation")
 		fl.Parse(reorderFlags(args))
 		if fl.NArg() != 1 {
@@ -418,7 +479,7 @@ func formatSyncPlan(p *syncPlan) string {
 }
 
 func cmdEnvironmentSync(c *config, l *link, args []string) {
-	fl := flag.NewFlagSet("environment sync", flag.ExitOnError)
+	fl := newFlagSet("environment sync")
 	from := fl.String("from", "", "environment to copy changes from")
 	deploy := fl.Bool("deploy", false, "deploy the changed services after applying")
 	yes := fl.Bool("y", false, "don't ask for confirmation")
@@ -509,23 +570,43 @@ var valueFlag = map[string]bool{"copy-from": true, "from": true, "name": true, "
 
 func cmdService(c *config, args []string) {
 	sub := "list"
-	if len(args) > 0 {
+	if len(args) > 0 && args[0] != "--json" {
 		sub, args = args[0], args[1:]
 	}
 	l := c.linked()
 	switch sub {
 	case "list", "ls":
+		asJSON := len(args) == 1 && args[0] == "--json"
+		if len(args) > 0 && !asJSON {
+			die("usage: aven service list [--json]")
+		}
 		p := c.project(l.ProjectID)
+		if asJSON {
+			type svcOut struct {
+				svcRef
+				Linked bool `json:"linked"`
+			}
+			list := []svcOut{}
+			for _, s := range p.Services {
+				list = append(list, svcOut{s, s.ID == l.ServiceID})
+			}
+			printJSON(list)
+			return
+		}
+		if len(p.Services) == 0 {
+			fmt.Println("no services yet (add one: aven add --repo <url> | --image <img> | --database postgres)")
+			return
+		}
 		for _, s := range p.Services {
 			mark := " "
 			if s.ID == l.ServiceID {
-				mark = "*"
+				mark = out(stylePurple, "*")
 			}
 			kind := s.SourceType
 			if s.DatabaseKind != nil {
 				kind += ":" + *s.DatabaseKind
 			}
-			fmt.Printf("%s %-24s %s\n", mark, s.Name, kind)
+			fmt.Printf("%s %-24s %s\n", mark, s.Name, out(styleDim, kind))
 		}
 	case "use", "link":
 		if len(args) != 1 {
@@ -707,7 +788,7 @@ func runLocal(env []string, name string, args ...string) int {
 }
 
 func cmdRun(c *config, args []string) {
-	fl := flag.NewFlagSet("run", flag.ExitOnError)
+	fl := newFlagSet("run")
 	tf := addTargetFlags(fl)
 	fl.Parse(args)
 	rest := fl.Args()
@@ -720,10 +801,13 @@ func cmdRun(c *config, args []string) {
 }
 
 func cmdShell(c *config, args []string) {
-	fl := flag.NewFlagSet("shell", flag.ExitOnError)
+	fl := newFlagSet("shell")
 	tf := addTargetFlags(fl)
 	fl.Parse(args)
 	l := tf.service(c)
+	if compat.Env("SHELL") == "1" {
+		warnf("already inside an aven shell (of %s); this opens another one inside it", compat.Env("SERVICE_NAME"))
+	}
 	vars := c.resolvedVars(l)
 	sh := os.Getenv("SHELL")
 	if runtime.GOOS == "windows" {
@@ -787,7 +871,7 @@ func dbClient(kind, raw string) (bin string, args, env []string, err error) {
 }
 
 func cmdConnect(c *config, args []string) {
-	fl := flag.NewFlagSet("connect", flag.ExitOnError)
+	fl := newFlagSet("connect")
 	enable := fl.Bool("enable-proxy", false, "enable the TCP proxy if it is off")
 	envf := fl.String("e", "", "environment name or id (default: linked)")
 	fl.StringVar(envf, "environment", "", "environment name or id (default: linked)")
@@ -837,7 +921,7 @@ func cmdConnect(c *config, args []string) {
 // aven domain은 domain.go, aven tcp-proxy와 aven networking은 tcpproxy.go에 있다.
 
 func cmdRedeploy(c *config, args []string) {
-	fl := flag.NewFlagSet("redeploy", flag.ExitOnError)
+	fl := newFlagSet("redeploy")
 	yes := fl.Bool("y", false, "don't ask for confirmation")
 	fl.BoolVar(yes, "yes", false, "don't ask for confirmation")
 	forceBuild := fl.Bool("force-build", false, "build the latest commit without reusing a retained image")
@@ -869,7 +953,7 @@ func cmdRedeploy(c *config, args []string) {
 }
 
 func cmdDown(c *config, args []string) {
-	fl := flag.NewFlagSet("down", flag.ExitOnError)
+	fl := newFlagSet("down")
 	yes := fl.Bool("y", false, "don't ask for confirmation")
 	fl.BoolVar(yes, "yes", false, "don't ask for confirmation")
 	tf := addTargetFlags(fl)
@@ -883,7 +967,7 @@ func cmdDown(c *config, args []string) {
 }
 
 func cmdRestart(c *config, args []string) {
-	fl := flag.NewFlagSet("restart", flag.ExitOnError)
+	fl := newFlagSet("restart")
 	tf := addTargetFlags(fl)
 	fl.Parse(args)
 	l := tf.service(c)
@@ -908,7 +992,7 @@ func dashboardURL(base string, l *link) string {
 }
 
 func cmdOpen(c *config, args []string) {
-	fl := flag.NewFlagSet("open", flag.ExitOnError)
+	fl := newFlagSet("open")
 	printOnly := fl.Bool("print", false, "only print the URL")
 	tf := addTargetFlags(fl)
 	fl.Parse(args)
@@ -975,7 +1059,10 @@ func tokenEnvName() string {
 	return ""
 }
 
-func cmdWhoami(c *config, _ []string) {
+func cmdWhoami(c *config, args []string) {
+	fl := newFlagSet("whoami")
+	asJSON := fl.Bool("json", false, "print JSON")
+	fl.Parse(args)
 	var me meInfo
 	if err := c.call("GET", "/auth/me", nil, &me); err != nil {
 		die("%v", err)
@@ -983,6 +1070,11 @@ func cmdWhoami(c *config, _ []string) {
 	how := "session"
 	if name := tokenEnvName(); name != "" {
 		how = name
+	}
+	if *asJSON {
+		printJSON(map[string]any{"user": me.User, "email": me.Email, "role": me.Role, "totp_enabled": me.TOTPEnabled,
+			"token": me.Token, "server": c.URL, "auth": how})
+		return
 	}
 	fmt.Println(whoamiLine(me, c.URL, how))
 }
@@ -998,7 +1090,7 @@ type apiToken struct {
 	Role          string  `json:"role"`
 	ExpiresAt     *string `json:"expires_at"`
 	LastUsedAt    *string `json:"last_used_at"`
-	Token         string  `json:"token"`
+	Token         string  `json:"token,omitempty"`
 }
 
 // cmdTokens: aven tokens [list] | create --name n [--project p] [--environment e] [--role r] [--expires-days n] | revoke <id>
@@ -1009,9 +1101,22 @@ func cmdTokens(c *config, args []string) {
 	}
 	switch sub {
 	case "list", "ls":
+		fl := newFlagSet("tokens list")
+		asJSON := fl.Bool("json", false, "print JSON")
+		fl.Parse(args)
 		var ts []apiToken
 		if err := c.call("GET", "/tokens", nil, &ts); err != nil {
 			die("%v", err)
+		}
+		if *asJSON {
+			for i := range ts {
+				ts[i].Token = "" // never part of a list, but keep it out of the output regardless
+			}
+			if ts == nil {
+				ts = []apiToken{}
+			}
+			printJSON(ts)
+			return
 		}
 		if len(ts) == 0 {
 			fmt.Println("no API tokens")
@@ -1032,7 +1137,7 @@ func cmdTokens(c *config, args []string) {
 		}
 		tw.Flush()
 	case "create", "new":
-		fl := flag.NewFlagSet("tokens create", flag.ExitOnError)
+		fl := newFlagSet("tokens create")
 		name := fl.String("name", "", "token name (required)")
 		wsid := fl.String("workspace", "", "workspace ID (workspace-scoped token)")
 		instanceToken := fl.Bool("instance", false, "instance operations only (instance admin required)")
@@ -1148,15 +1253,25 @@ func cmdLogout(c *config, _ []string) {
 	}
 }
 
-func cmdVersion(c *config, _ []string) {
-	fmt.Println("aven CLI", version)
-	if c.URL == "" {
+func cmdVersion(c *config, args []string) {
+	fl := newFlagSet("version")
+	asJSON := fl.Bool("json", false, "print JSON")
+	fl.Parse(args)
+	v := map[string]string{"cli": version, "os": runtime.GOOS, "arch": runtime.GOARCH}
+	if c.URL != "" {
+		var sys struct {
+			Version string `json:"version"`
+		}
+		if err := c.call("GET", "/system", nil, &sys); err == nil {
+			v["server"], v["url"] = sys.Version, c.URL
+		}
+	}
+	if *asJSON {
+		printJSON(v)
 		return
 	}
-	var sys struct {
-		Version string `json:"version"`
-	}
-	if err := c.call("GET", "/system", nil, &sys); err == nil {
-		fmt.Println("aven-server", sys.Version, "at", c.URL)
+	fmt.Println("aven CLI", version, "("+runtime.GOOS+"/"+runtime.GOARCH+")")
+	if v["server"] != "" {
+		fmt.Println("aven-server", v["server"], "at", c.URL)
 	}
 }

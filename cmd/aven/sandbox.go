@@ -85,9 +85,9 @@ func setActiveSandbox(envID, id string) {
 	} else {
 		m[envID] = id
 	}
-	os.MkdirAll(filepath.Dir(activeSandboxPath()), 0o700)
-	b, _ := json.MarshalIndent(m, "", "  ")
-	os.WriteFile(activeSandboxPath(), b, 0o600)
+	if err := writeFileAtomic(activeSandboxPath(), m); err != nil {
+		warnf("could not remember the active sandbox: %v", err)
+	}
 }
 
 // ---- flags ----
@@ -249,7 +249,7 @@ func cmdSandboxes(c *config, args []string) {
 }
 
 func cmdSandboxCreate(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox create", flag.ExitOnError)
+	fl := newFlagSet("sandbox create")
 	tf := addTargetFlags(fl)
 	image := fl.String("image", "", "container image (default ubuntu:24.04; needs /bin/sh)")
 	checkpoint := fl.String("checkpoint", "", "create from a named checkpoint")
@@ -271,7 +271,7 @@ func cmdSandboxCreate(c *config, args []string) {
 }
 
 func cmdSandboxFork(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox fork", flag.ExitOnError)
+	fl := newFlagSet("sandbox fork")
 	tf := addTargetFlags(fl)
 	idFlag := fl.String("id", "", "source sandbox ID (default: active)")
 	cf := addSandboxCreateFlags(fl)
@@ -295,7 +295,7 @@ func cmdSandboxFork(c *config, args []string) {
 }
 
 func cmdSandboxList(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox list", flag.ExitOnError)
+	fl := newFlagSet("sandbox list")
 	tf := addTargetFlags(fl)
 	jsonOut := fl.Bool("json", false, "print JSON")
 	fl.Parse(reorderFlags(args))
@@ -337,7 +337,7 @@ func sandboxExecArgv(pos []string) map[string]any {
 }
 
 func cmdSandboxExec(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox exec", flag.ExitOnError)
+	fl := newFlagSet("sandbox exec")
 	tf := addTargetFlags(fl)
 	idFlag := fl.String("id", "", "sandbox ID (default: active)")
 	timeout := fl.Int("timeout", 0, "deadline in seconds (max 110; default 110). Exits 124 when it expires")
@@ -392,7 +392,7 @@ func sandboxExitCode(r sandboxExecResult) int {
 }
 
 func cmdSandboxSSH(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox ssh", flag.ExitOnError)
+	fl := newFlagSet("sandbox ssh")
 	tf := addTargetFlags(fl)
 	idFlag := fl.String("id", "", "sandbox ID (default: active)")
 	fl.Parse(reorderFlags(args))
@@ -487,7 +487,7 @@ func runShellSocket(c *config, u string) int {
 }
 
 func cmdSandboxDestroy(c *config, args []string) {
-	fl := flag.NewFlagSet("sandbox destroy", flag.ExitOnError)
+	fl := newFlagSet("sandbox destroy")
 	tf := addTargetFlags(fl)
 	idFlag := fl.String("id", "", "sandbox ID (default: active)")
 	fl.Parse(reorderFlags(args))

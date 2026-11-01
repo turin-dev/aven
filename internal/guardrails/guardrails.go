@@ -114,6 +114,13 @@ func GitHubOwner(repo string) (string, bool) {
 	if len(parts) < 2 || parts[0] == "" || strings.TrimSuffix(parts[1], ".git") == "" {
 		return "", false
 	}
+	// git(curl)은 경로의 ./..를 정규화하므로 github.com/acme/../evil/app은 evil/app을 받는다. 승인된 조직처럼
+	// 보이게 하는 우회를 막으려고 점 세그먼트와 역슬래시는 거부한다.
+	for _, part := range parts {
+		if part == "." || part == ".." || strings.Contains(part, "\\") {
+			return "", false
+		}
+	}
 	return strings.ToLower(parts[0]), true
 }
 

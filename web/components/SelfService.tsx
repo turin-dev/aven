@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type SelfServerInfo } from "@/lib/api";
+import { api, type Deployment, type SelfServerInfo } from "@/lib/api";
 import { canvasHref } from "@/lib/nav";
-import { qk } from "@/lib/queries";
+import { qk, useDeployments } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import { t, tr } from "@/lib/i18n";
-import { AvenMark, Button, useConfirm } from "./ui";
-import { RefreshCw } from "lucide-react";
+import { AvenMark, Button, cx, useConfirm } from "./ui";
+import { STATUS_LABEL } from "./StatusBadge";
+import { CheckCircle2, ExternalLink, Loader2, RefreshCw, Undo2 } from "lucide-react";
 import { fmtRelative } from "@/lib/format";
 
 // Aven on Aven: aven-server 자신을 캔버스의 서비스로 다룬다(GET/POST/DELETE /api/owner/self-service, docs/selfhost.md).
@@ -80,6 +81,7 @@ function UpdateStatus({ svcId, envId }: { svcId: string; envId: string }) {
   const qc = useQueryClient();
   const query = useQuery({ queryKey: qk.selfService, queryFn: api.selfService });
   const [busy, setBusy] = useState<"" | "check" | "deploy">("");
+  const { confirm, node } = useConfirm();
   const u = query.data?.update;
   if (!u) return null;
   const check = async () => {
@@ -93,6 +95,18 @@ function UpdateStatus({ svcId, envId }: { svcId: string; envId: string }) {
       setBusy("");
     }
   };
+  const askDeploy = () => confirm({
+    title: t("aven-server 업데이트"),
+    confirmLabel: t("업데이트 시작"),
+    message: (
+      <div className="space-y-2">
+        <p>{u.behind ? t("저장소의 새 커밋 {count}개로 aven-server를 빌드해 이 서버를 바꿉니다.", { count: u.behind }) : t("저장소의 최신 커밋으로 aven-server를 빌드해 이 서버를 바꿉니다.")}</p>
+        <p>{t("바꾸는 몇 초 동안 대시보드와 API가 끊깁니다. 새 서버가 4분 안에 정상이 되지 않으면 이전 버전으로 자동으로 되돌립니다. 실행 중인 다른 서비스는 영향을 받지 않습니다.")}</p>
+        <p className="text-xs text-gray-500">{t("업데이트 전에 Owner · DB 백업에서 백업을 받아 두면 안전합니다.")}</p>
+      </div>
+    ),
+    run: deploy,
+  });
   const deploy = async () => {
     setBusy("deploy");
     try {
@@ -134,12 +148,28 @@ function UpdateStatus({ svcId, envId }: { svcId: string; envId: string }) {
             {t("지금 확인")}
           </Button>
           {u.available && (
-            <Button size="sm" variant="primary" loading={busy === "deploy"} disabled={!!busy} onClick={() => void deploy()}>
+            <Button size="sm" variant="primary" loading={busy === "deploy"} disabled={!!busy} onClick={askDeploy}>
               {t("업데이트")}
             </Button>
           )}
         </span>
       </div>
+      <UpgradeState svcId={svcId} envId={envId} />
+      {(compare || repo) && (
+        <div className="mt-2 flex flex-wrap gap-x-4 text-xs">
+          {u.available && compare && (
+            <a href={compare} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-purple-700 hover:underline dark:text-purple-300">
+              {t("바뀐 내용 비교")}<ExternalLink className="size-3" aria-hidden />
+            </a>
+          )}
+          {/^[\w.-]+\/[\w.-]+$/.test(repo) && (
+            <a href={`https://github.com/${repo}/releases`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-gray-500 hover:underline">
+              {t("릴리스 노트")}<ExternalLink className="size-3" aria-hidden />
+            </a>
+          )}
+        </div>
+      )}
+      {node}
       {u.available && shown.length > 0 && (
         <ul className="mt-2 grid gap-1">
           {shown.map((c) => (
@@ -160,6 +190,48 @@ function UpdateStatus({ svcId, envId }: { svcId: string; envId: string }) {
       )}
     </div>
   );
+}
+
+const IN_PROGRESS: Deployment["status"][] = ["waiting", "queued", "initializing", "building", "deploying", "healthchecking", "pre_deploy"];
+
+/** State of the latest aven-server deployment: running upgrade, rolled back (failed) or live. */
+function UpgradeState({ svcId, envId }: { svcId: string; envId: string }) {
+  const deps = useDeployments(svcId, envId);
+  const d = deps.data?.[0];
+  if (!d) return null;
+  const when = fmtRelative(d.finished_at ?? d.started_at ?? d.created_at);
+  const sha = d.commit_sha ? d.commit_sha.slice(0, 7) : null;
+  if (IN_PROGRESS.includes(d.status)) {
+    return (
+      <p className="mt-2 flex items-center gap-2 text-xs text-foreground" role="status">
+        <Loader2 className="size-3.5 animate-spin text-pink-600" aria-hidden />
+        {t("업데이트 진행 중: {status}", { status: STATUS_LABEL[d.status] })}
+        {sha && <span className="font-mono text-gray-500">{sha}</span>}
+      </p>
+    );
+  }
+  if (d.status === "failed" || d.status === "crashed") {
+    return (
+      <div className="mt-2 rounded-md bg-danger-surface px-3 py-2 text-xs text-danger" role="alert">
+        <p className="flex items-center gap-2 font-medium">
+          <Undo2 className="size-3.5" aria-hidden />
+          {t("마지막 업데이트가 실패했습니다. 서버는 이전 버전으로 돌고 있습니다 · {when}", { when })}
+          {sha && <span className="font-mono">{sha}</span>}
+        </p>
+        {d.error && <p className="mt-1 break-words">{d.error}</p>}
+      </div>
+    );
+  }
+  if (d.status === "live") {
+    return (
+      <p className={cx("mt-2 flex items-center gap-2 text-xs text-gray-500")}>
+        <CheckCircle2 className="size-3.5 text-success" aria-hidden />
+        {t("마지막 업데이트 {when} 적용됨", { when })}
+        {sha && <span className="font-mono">{sha}</span>}
+      </p>
+    );
+  }
+  return null;
 }
 
 /** 어드민 › 초기 설정의 "Aven을 캔버스에서 관리" 항목 버튼. */

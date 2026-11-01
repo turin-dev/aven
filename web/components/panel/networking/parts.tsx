@@ -11,6 +11,7 @@ import type { CanvasService, Environment, ID } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { Button, cx } from "../../ui";
 import { t } from "@/lib/i18n";
+import { isPort } from "./validate";
 
 
 /**
@@ -198,6 +199,7 @@ export function SuffixInput({
   invalid,
   pl4,
   className,
+  describedBy,
 }: {
   label: string;
   name: string;
@@ -211,6 +213,8 @@ export function SuffixInput({
   /** DNS name input (`pl-4`). */
   pl4?: boolean;
   className?: string;
+  /** id of the help/error text for this input. */
+  describedBy?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -236,6 +240,8 @@ export function SuffixInput({
             placeholder={placeholder}
             spellCheck={false}
             autoComplete="off"
+            aria-invalid={invalid || undefined}
+            aria-describedby={describedBy}
             onChange={(e) => onChange?.(e.target.value)}
             className={cx(disabled ? INPUT_DISABLED : INPUT, "border-none", pl4 && "pl-4")}
           />
@@ -256,6 +262,7 @@ export function PanelFooter({
   submitLabel = t("업데이트"),
   canSubmit,
   busy,
+  live,
 }: {
   message: ReactNode;
   tone?: "info" | "ok" | "bad";
@@ -264,6 +271,8 @@ export function PanelFooter({
   submitLabel?: string;
   canSubmit: boolean;
   busy?: boolean;
+  /** Announce message changes (live validation) to screen readers. */
+  live?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between space-x-4">
@@ -271,7 +280,9 @@ export function PanelFooter({
         <span aria-hidden="true" className="icon-container icon-md shrink-0 text-2xl text-current">
           {icon ?? <Info />}
         </span>
-        <p className="text-sm">{message}</p>
+        <p className="text-sm" aria-live={live ? "polite" : undefined}>
+          {message}
+        </p>
       </div>
       <div className="flex shrink-0 items-center space-x-2">
         <Button variant="outline" className="dark:text-white" onClick={onCancel}>
@@ -315,4 +326,4 @@ export function useNetRun(svc: CanvasService, env: Environment) {
 
 export type NetCtx = { svc: CanvasService; env: Environment; sid: ID; eid: ID };
 
-export const portOk = (value: string) => /^\d{1,5}$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
+export const portOk = isPort;

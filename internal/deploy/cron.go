@@ -27,8 +27,14 @@ func (m *Manager) CronLoop(ctx context.Context) {
 }
 
 func (m *Manager) cronTick(ctx context.Context, now time.Time) {
+	// 사용자 cron 작업을 먼저 시작한다(정각에 맞아야 한다). 백업 일정 확인이 느려도 늦지 않게.
+	m.cronInstancesTick(ctx, now)
 	m.dbBackupTick(ctx, now)
 	m.pitrTick(ctx, now)
+	m.volumeBackupTick(ctx, now)
+}
+
+func (m *Manager) cronInstancesTick(ctx context.Context, now time.Time) {
 	insts, err := m.Store.ListInstances(ctx)
 	if err != nil {
 		return
@@ -49,6 +55,9 @@ func (m *Manager) cronTick(ctx context.Context, now time.Time) {
 			m.Log.Warn("cron run", "instance", in.ID, "err", err)
 		}
 	}
+}
+
+func (m *Manager) volumeBackupTick(ctx context.Context, now time.Time) {
 	vols, err := m.Store.ListVolumes(ctx)
 	if err != nil {
 		return
@@ -66,6 +75,15 @@ func (m *Manager) cronTick(ctx context.Context, now time.Time) {
 }
 
 var ErrCronBusy = errors.New("a run of this cron job is still in progress")
+
+// cronRunLabel은 cron 실행 컨테이너에 붙이는 실행 기록 ID 라벨이다.
+const cronRunLabel = "keel.cronrun"
+
+// cron 실행 로그에 남기는 앞·뒤 항목 수.
+const (
+	cronLogHead = 1000
+	cronLogTail = 5000
+)
 
 // RunCron은 cron 인스턴스의 현재 배포 이미지를 `docker run --rm`처럼 한 번 실행한다(비동기).
 func (m *Manager) RunCron(ctx context.Context, in *store.Instance) (*store.CronRun, error) {
@@ -110,9 +128,13 @@ func (m *Manager) execCron(t *Target, d *store.Deployment, run *store.CronRun) {
 		delete(m.cronBusy, t.Instance.ID)
 		m.mu.Unlock()
 	}()
+	// 출력은 앞 cronLogHead개와 마지막 cronLogTail개만 남긴다(24시간 도는 작업의 출력을 모두 메모리에 들고 있지 않게).
 	var lines []LogEntry
+	lim := newLineLimiter(func(e LogEntry) { lines = append(lines, e) }, func(n int) LogEntry {
+		return LogEntry{T: time.Now().UTC().Format(time.RFC3339Nano), Replica: run.Container, Stream: "stderr", Msg: "aven: " + omittedMsg(n)}
+	}, cronLogHead, cronLogTail)
 	logf := func(stream, msg string) {
-		lines = append(lines, LogEntry{T: time.Now().UTC().Format(time.RFC3339Nano), Replica: run.Container, Stream: stream, Msg: msg})
+		lim.Add(LogEntry{T: time.Now().UTC().Format(time.RFC3339Nano), Replica: run.Container, Stream: stream, Msg: truncateLine(msg)})
 	}
 	code := -1
 	err := m.ensureEnvNetwork(ctx, t.Env, d.NodeID)
@@ -120,15 +142,16 @@ func (m *Manager) execCron(t *Target, d *store.Deployment, run *store.CronRun) {
 		spec := m.runSpec(t, d, 0)
 		spec.Name = run.Container
 		spec.Labels[node.LabelRole] = node.RoleCron
-		spec.Labels["keel.cronrun"] = run.ID
+		spec.Labels[cronRunLabel] = run.ID
 		spec.Aliases = nil
 		// 실행 시간 제한: 24시간
 		rctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 		code, err = m.driverFor(d).RunToCompletion(rctx, spec, logf)
 		cancel()
 	}
+	lim.Flush()
 	if err != nil {
-		logf("stderr", "aven: "+err.Error())
+		lines = append(lines, LogEntry{T: time.Now().UTC().Format(time.RFC3339Nano), Replica: run.Container, Stream: "stderr", Msg: "aven: " + err.Error()})
 	}
 	writeJSONL(m.cronLogPath(run.ID), lines)
 	run.ExitCode = &code

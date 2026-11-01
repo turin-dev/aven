@@ -153,7 +153,7 @@ function TabIndicator({ cur, tabs }: { cur: string; tabs: string }) {
 export function escCloses(root: HTMLElement | null): boolean {
   const a = typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null;
   if (!a || !root?.contains(a)) return true;
-  if (a.closest(".xterm")) return false;
+  if (a.closest(".xterm, [data-terminal]")) return false;
   const tag = a.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || a.isContentEditable) {
     a.blur();

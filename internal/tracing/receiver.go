@@ -50,15 +50,11 @@ type Receiver struct {
 	ProxyToken string
 	Log        *slog.Logger
 
-	mu      sync.Mutex
-	windows map[string]*rateWindow
-	envs    map[string]envCacheEntry
-	now     func() time.Time
-}
-
-type rateWindow struct {
-	start time.Time
-	n     int
+	mu       sync.Mutex
+	windows  map[string]*usage // 서비스/환경/replica
+	services map[string]*usage // 서비스/환경
+	envs     map[string]envCacheEntry
+	now      func() time.Time
 }
 
 type envCacheEntry struct {
@@ -176,6 +172,10 @@ func (h *Receiver) serveGRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := frame[5:]
+	if frame[0] > 1 {
+		fail(3, "invalid gRPC frame flags")
+		return
+	}
 	if frame[0] == 1 {
 		if !strings.EqualFold(r.Header.Get("Grpc-Encoding"), "gzip") {
 			fail(12, "unsupported grpc-encoding")
@@ -254,6 +254,10 @@ func (h *Receiver) export(ctx context.Context, token string, payload []byte, isJ
 	}
 	var rejected int64
 	var msg string
+	spans, rejected = dropFuture(spans, h.clock().Add(MaxClockSkew))
+	if rejected > 0 {
+		msg = "spans starting in the future were dropped (check the clock)"
+	}
 	if isProxy {
 		kept := spans[:0]
 		for _, sp := range spans {
@@ -264,12 +268,14 @@ func (h *Receiver) export(ctx context.Context, token string, payload []byte, isJ
 			}
 		}
 		spans = kept
-		if rejected > 0 {
+		if rejected > 0 && msg == "" {
 			msg = "spans for unknown environments were dropped"
 		}
 	} else {
-		spans, rejected = h.limit(spans)
-		if rejected > 0 {
+		var limited int64
+		spans, limited = h.limit(spans)
+		if limited > 0 {
+			rejected += limited
 			msg = fmt.Sprintf("rate limit: %d spans per %s per replica", ReplicaSpanLimit, RateWindow)
 		}
 	}
@@ -284,35 +290,51 @@ func (h *Receiver) export(ctx context.Context, token string, payload []byte, isJ
 	return rejected, msg, nil
 }
 
-// limit은 replica별 고정 창 속도 제한을 적용한다.
+// limit은 서비스별·replica별 고정 창 속도 제한(span 수와 크기)을 적용한다.
 func (h *Receiver) limit(spans []store.TraceSpan) ([]store.TraceSpan, int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.windows == nil {
-		h.windows = map[string]*rateWindow{}
+		h.windows = map[string]*usage{}
+		h.services = map[string]*usage{}
 	}
 	now := h.clock()
-	if len(h.windows) > 10000 { // 오래된 창 정리
-		for k, w := range h.windows {
-			if now.Sub(w.start) >= RateWindow {
-				delete(h.windows, k)
+	if len(h.windows) > 10000 || len(h.services) > 10000 { // 오래된 창 정리
+		for _, m := range []map[string]*usage{h.windows, h.services} {
+			for k, w := range m {
+				if now.Sub(w.start) >= RateWindow {
+					delete(m, k)
+				}
 			}
 		}
 	}
 	kept := spans[:0]
 	var rejected int64
-	for _, sp := range spans {
-		key := sp.ServiceID + "/" + sp.EnvironmentID + "/" + sp.ReplicaID
-		w := h.windows[key]
-		if w == nil || now.Sub(w.start) >= RateWindow {
-			w = &rateWindow{start: now}
-			h.windows[key] = w
+	for i := range spans {
+		sp := spans[i]
+		size := spanBytes(&sp)
+		skey := sp.ServiceID + "/" + sp.EnvironmentID
+		svc := h.services[skey]
+		if svc == nil {
+			svc = &usage{start: now}
+			h.services[skey] = svc
 		}
-		if w.n >= ReplicaSpanLimit {
+		if !svc.fits(now, size, ServiceSpanLimit, ServiceByteLimit) {
 			rejected++
 			continue
 		}
-		w.n++
+		key := skey + "/" + sp.ReplicaID
+		w := h.windows[key]
+		if w == nil {
+			w = &usage{start: now}
+			h.windows[key] = w
+		}
+		if !w.fits(now, size, ReplicaSpanLimit, ReplicaByteLimit) {
+			rejected++
+			continue
+		}
+		w.spans, w.bytes = w.spans+1, w.bytes+size
+		svc.spans, svc.bytes = svc.spans+1, svc.bytes+size
 		kept = append(kept, sp)
 	}
 	return kept, rejected
@@ -378,6 +400,9 @@ func convertRequest(req []otlpResourceSpans, identity *store.TraceIdentity, isPr
 				if id.ServiceName == "" {
 					id.ServiceName = stringValue(resource["service.name"])
 				}
+				id.ServiceName = truncateUTF8(id.ServiceName, maxIdentBytes)
+				id.DeploymentID = truncateUTF8(id.DeploymentID, maxIdentBytes)
+				id.ReplicaID = truncateUTF8(id.ReplicaID, maxIdentBytes)
 				if id.Component == "" {
 					id.Component = "service"
 				}

@@ -7,7 +7,8 @@ import { api, type ID, type OAuthApp, type OAuthAuthorizedApp, type OAuthClientS
 import { useProjects } from "@/lib/queries";
 import { fmtRelative } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { Button, Card, CopyField, Dialog, EmptyState, ErrorBox, Field, Input, Notice, RowList, Select, Textarea, useConfirm } from "@/components/ui";
+import { Button, Card, CopyField, Dialog, EmptyState, ErrorBox, Field, Input, Notice, RowList, Select, Spinner, Textarea, errorMessage, useConfirm } from "@/components/ui";
+import { toast } from "@/lib/uiState";
 
 const appsKey = ["oauth-apps"] as const;
 const secretsKey = (id: string) => ["oauth-client-secrets", id] as const;
@@ -26,6 +27,40 @@ export const OAUTH_SCOPE_LABELS: Record<string, string> = {
 };
 
 const splitLines = (v: string) => v.split("\n").map((s) => s.trim()).filter(Boolean);
+
+const MAX_REDIRECTS = 10;
+const BLOCKED_SCHEMES = new Set(["javascript", "data", "file", "vbscript", "blob", "about"]);
+const isLoopback = (host: string) => host === "localhost" || /^127(\.\d{1,3}){3}$/.test(host) || host === "[::1]" || host === "::1";
+
+/** Client-side mirror of the server's redirect URI rules (internal/api/oauth_apps.go validateOAuthRedirectURIs). */
+export function redirectProblem(raw: string, clientType: OAuthApp["client_type"]): string | null {
+  if (/[\s#*]/.test(raw) || raw.length > 2048) return t("공백, #, *는 쓸 수 없습니다: {uri}", { uri: raw });
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return t("절대 URI가 아닙니다: {uri}", { uri: raw });
+  }
+  if (u.username || u.password) return t("사용자 정보가 든 URI는 쓸 수 없습니다: {uri}", { uri: raw });
+  const scheme = u.protocol.slice(0, -1).toLowerCase();
+  if (scheme === "https") return u.hostname ? null : t("HTTPS redirect URI에 호스트가 필요합니다: {uri}", { uri: raw });
+  if (scheme === "http") return isLoopback(u.hostname.toLowerCase()) ? null : t("HTTP는 localhost 또는 loopback 주소만 쓸 수 있습니다: {uri}", { uri: raw });
+  if (BLOCKED_SCHEMES.has(scheme)) return t("허용하지 않는 scheme입니다: {uri}", { uri: raw });
+  if (clientType !== "public" || !scheme.includes(".")) return t("사용자 지정 scheme은 네이티브 앱에서 역도메인 형식(com.example.app:/callback)만 쓸 수 있습니다: {uri}", { uri: raw });
+  return null;
+}
+
+function redirectsProblem(text: string, clientType: OAuthApp["client_type"]): string | null {
+  const list = splitLines(text);
+  if (list.length === 0) return t("redirect URI를 하나 이상 입력하세요.");
+  if (list.length > MAX_REDIRECTS) return t("redirect URI는 최대 {n}개입니다.", { n: MAX_REDIRECTS });
+  if (new Set(list).size !== list.length) return t("같은 redirect URI가 두 번 있습니다.");
+  for (const uri of list) {
+    const p = redirectProblem(uri, clientType);
+    if (p) return p;
+  }
+  return null;
+}
 
 function ScopeChips({ scopes }: { scopes: string[] }) {
   return (
@@ -57,6 +92,8 @@ function Endpoints() {
     ["Authorization", d.data?.authorization_endpoint],
     ["Token", d.data?.token_endpoint],
     ["Userinfo", d.data?.userinfo_endpoint],
+    ["JWKS", d.data?.jwks_uri],
+    ["Revocation", d.data?.revocation_endpoint],
   ];
   return (
     <Card title={t("엔드포인트")} description={t("OAuth 2.0 / OpenID Connect 라이브러리에는 Issuer(또는 Discovery URL)만 넣으면 됩니다. 토큰을 받으려면 PKCE(S256)를 쓰세요.")}>
@@ -64,7 +101,7 @@ function Endpoints() {
       <div className="grid gap-3">
         {rows.map(([label, value]) => (
           <Field key={label} label={label}>
-            {value ? <CopyField value={value} /> : <div className="h-11 animate-pulse rounded-md bg-gray-100" />}
+            {value ? <CopyField value={value} label={label} /> : d.error ? <div className="h-11 rounded-md border border-dashed border-gray-200" /> : <div className="h-11 animate-pulse rounded-md bg-gray-100 motion-reduce:animate-none" />}
           </Field>
         ))}
       </div>
@@ -109,7 +146,9 @@ export function OAuthAppsSection() {
         }
       >
         <ErrorBox error={apps.error} className="mb-4" />
-        {apps.isPending ? null : !apps.data?.length ? (
+        {apps.isPending ? (
+          <Spinner />
+        ) : apps.error ? null : !apps.data?.length ? (
           <EmptyState icon={<AppWindow className="size-5" />} title={t("등록한 OAuth 앱이 없습니다")}>
             {t("앱을 등록하면 client ID와 (웹 앱이면) client secret이 발급됩니다.")}
           </EmptyState>
@@ -150,7 +189,11 @@ function CreateOAuthAppDialog({ open, onClose, onCreated }: { open: boolean; onC
     setRedirects("");
     setError(null);
   }, [open]);
+  const problem = redirects.trim() ? redirectsProblem(redirects, clientType) : null;
   const submit = async () => {
+    if (!name.trim()) return;
+    const p = redirectsProblem(redirects, clientType);
+    if (p) return setError(p);
     setBusy(true);
     setError(null);
     try {
@@ -173,7 +216,7 @@ function CreateOAuthAppDialog({ open, onClose, onCreated }: { open: boolean; onC
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {t("취소")}
           </Button>
-          <Button variant="primary" loading={busy} disabled={!name.trim() || !splitLines(redirects).length} onClick={submit}>
+          <Button variant="primary" loading={busy} disabled={!name.trim() || !splitLines(redirects).length || !!problem} onClick={submit}>
             {t("앱 만들기")}
           </Button>
         </>
@@ -209,8 +252,11 @@ function CreateOAuthAppDialog({ open, onClose, onCreated }: { open: boolean; onC
             value={redirects}
             onChange={(e) => setRedirects(e.target.value)}
             placeholder={clientType === "public" ? "http://127.0.0.1:8765/callback\ncom.example.app:/oauth/callback" : "https://app.example.com/auth/callback\nhttp://localhost:3000/auth/callback"}
+            aria-invalid={!!problem}
           />
         </Field>
+        {problem && <p className="-mt-2 text-xs text-danger">{problem}</p>}
+        <button type="submit" className="hidden" aria-hidden tabIndex={-1} />
         <ErrorBox error={error} />
       </form>
     </Dialog>
@@ -248,6 +294,22 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
     }
   };
   const active = (secrets.data ?? []).filter((s) => !s.revoked_at);
+  const editProblem = editing ? redirectsProblem(redirects, app.client_type) : null;
+  const stopEditing = () => {
+    setEditing(false);
+    setName(app.name);
+    setDescription(app.description);
+    setRedirects(app.redirect_uris.join("\n"));
+    setError(null);
+  };
+  // Confirm callbacks: show the failure instead of an unhandled rejection when the dialog closes.
+  const guarded = (f: () => Promise<unknown>) => async () => {
+    try {
+      await f();
+    } catch (e) {
+      setError(e);
+    }
+  };
 
   return (
     <article className="rounded-lg border border-gray-200 bg-secondaryBg p-4">
@@ -259,7 +321,7 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
             {confidential ? t("웹 앱") : t("네이티브 앱")} · {t("생성 {time}", { time: fmtRelative(app.created_at) })}
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setEditing((v) => !v)}>
+        <Button size="sm" variant="outline" onClick={() => (editing ? stopEditing() : setEditing(true))}>
           {editing ? t("편집 닫기") : t("편집")}
         </Button>
       </div>
@@ -286,6 +348,7 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
             className="space-y-3 border-t border-gray-200 pt-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (editProblem || !name.trim()) return;
               run(async () => {
                 await api.updateOAuthApp(app.id, { name: name.trim(), description: description.trim(), redirect_uris: splitLines(redirects) });
                 setEditing(false);
@@ -300,11 +363,17 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
               <Input value={description} onChange={(e) => setDescription(e.target.value)} maxLength={1000} />
             </Field>
             <Field label="Redirect URI" hint={t("한 줄에 하나씩, 최대 10개.")}>
-              <Textarea rows={3} mono className="w-full" value={redirects} onChange={(e) => setRedirects(e.target.value)} required />
+              <Textarea rows={3} mono className="w-full" value={redirects} onChange={(e) => setRedirects(e.target.value)} required aria-invalid={!!editProblem} />
             </Field>
-            <Button type="submit" variant="primary" size="sm" loading={busy}>
-              {t("변경 저장")}
-            </Button>
+            {editProblem && <p className="text-xs text-danger">{editProblem}</p>}
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary" size="sm" loading={busy} disabled={!!editProblem || !name.trim()}>
+                {t("변경 저장")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={stopEditing} disabled={busy}>
+                {t("취소")}
+              </Button>
+            </div>
           </form>
         )}
         {confidential && (
@@ -336,10 +405,10 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
                           message: t("이 secret으로 하는 토큰 요청은 즉시 실패합니다. 다른 secret을 먼저 배포했는지 확인하세요."),
                           confirmLabel: t("폐기"),
                           danger: true,
-                          run: async () => {
+                          run: guarded(async () => {
                             await api.revokeOAuthClientSecret(app.id, secret.id);
                             await qc.invalidateQueries({ queryKey: secretsKey(app.id) });
-                          },
+                          }),
                         })
                       }
                     >
@@ -378,10 +447,10 @@ function OAuthAppRow({ app }: { app: OAuthApp }) {
                 message: t("{name}을(를) 삭제합니다. 되돌릴 수 없고, 발급된 모든 access token과 refresh token이 즉시 폐기됩니다.", { name: app.name }),
                 confirmLabel: t("앱 삭제"),
                 danger: true,
-                run: async () => {
+                run: guarded(async () => {
                   await api.deleteOAuthApp(app.id);
                   await qc.invalidateQueries({ queryKey: appsKey });
-                },
+                }),
               })
             }
           >
@@ -402,7 +471,9 @@ export function AuthorizedAppsSection() {
       description={t("Aven 계정으로 로그인을 허용한 앱입니다. 접근을 폐기하면 그 앱의 모든 토큰이 즉시 무효가 됩니다. 다시 연결하면 새로 동의를 받습니다.")}
     >
       <ErrorBox error={apps.error} className="mb-4" />
-      {apps.isPending ? null : !apps.data?.length ? (
+      {apps.isPending ? (
+        <Spinner />
+      ) : apps.error ? null : !apps.data?.length ? (
         <EmptyState icon={<ShieldCheck className="size-5" />} title={t("승인된 앱이 없습니다")} />
       ) : (
         <div className="space-y-4">
@@ -444,8 +515,13 @@ function AuthorizedAppRow({ app }: { app: OAuthAuthorizedApp }) {
               confirmLabel: t("접근 폐기"),
               danger: true,
               run: async () => {
-                await api.revokeOAuthGrant(app.grant_id);
-                await qc.invalidateQueries({ queryKey: grantsKey });
+                try {
+                  await api.revokeOAuthGrant(app.grant_id);
+                } catch (e) {
+                  toast(errorMessage(e), "error");
+                } finally {
+                  await qc.invalidateQueries({ queryKey: grantsKey });
+                }
               },
             })
           }

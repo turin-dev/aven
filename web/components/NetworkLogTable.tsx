@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, Info } from "lucide-react";
 import type { DNSLogLine, NetworkCaptureStatus, NetworkFlowLogLine } from "@/lib/api";
 import type { StreamState } from "@/lib/useLogStream";
@@ -8,6 +8,7 @@ import { fmtBytes } from "@/lib/format";
 import { t, tr } from "@/lib/i18n";
 import { LogEmpty, type LogLine } from "./LogTable";
 import { cx } from "./ui";
+import { useTailWindow } from "./useTailWindow";
 
 export type NetworkLogRecord = DNSLogLine | NetworkFlowLogLine;
 
@@ -65,7 +66,7 @@ function Pill({ bad, children }: { bad: boolean; children: ReactNode }) {
 }
 const DNSRow = memo(function DNSRow({ r, service, showService }: { r: DNSLogLine; service: string; showService: boolean }) {
   return (
-    <div role="row" className="flex min-h-[26px] items-center gap-3 px-6 font-mono text-xs hover:bg-gray-50" title={`${t("리졸버 {resolver}", { resolver: r.resolver })} · ${fmtMs(r.duration_ms)}${r.replica ? ` · ${r.replica}` : ""}`}>
+    <div role="row" className="flex h-[26px] items-center gap-3 overflow-hidden px-6 font-mono text-xs hover:bg-gray-50" title={`${t("리졸버 {resolver}", { resolver: r.resolver })} · ${fmtMs(r.duration_ms)}${r.replica ? ` · ${r.replica}` : ""}`}>
       <span className="w-[140px] shrink-0 tabular-nums text-neutral-secondary">{fmtTime(r.t)}</span>
       {showService && <span className="hidden w-[110px] shrink-0 truncate text-gray-600 md:block">{service}</span>}
       <span className={cx("w-[60px] shrink-0", r.zone === "internal" ? "text-blue-600" : "text-gray-500")}>{r.zone === "internal" ? t("내부") : t("외부")}</span>
@@ -86,7 +87,7 @@ const FlowRow = memo(function FlowRow({ r, service, showService }: { r: NetworkF
   return (
     <div
       role="row"
-      className="flex min-h-[26px] items-center gap-3 px-6 font-mono text-xs hover:bg-gray-50"
+      className="flex h-[26px] items-center gap-3 overflow-hidden px-6 font-mono text-xs hover:bg-gray-50"
       title={`${PEER_KIND_LABEL[r.peer_kind] ?? r.peer_kind} · ${t("패킷 {count}", { count: r.packets })} · ${t("지속 {duration}", { duration: fmtMs(r.duration_ms) })}${r.flow_state === "active" ? t(" · 아직 열린 연결") : ""}${r.replica ? ` · ${r.replica}` : ""}`}
     >
       <span className="w-[140px] shrink-0 tabular-nums text-neutral-secondary">{fmtTime(r.t)}</span>
@@ -129,15 +130,9 @@ export function NetworkLogTable({
   showService?: boolean;
   className?: string;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [stick, setStick] = useState(true);
-  const shown = records.filter((r) => r.kind === kind);
-  const failures = shown.filter(failed).length;
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && stick) el.scrollTop = el.scrollHeight;
-  }, [shown.length, stick]);
+  const shown = useMemo(() => records.filter((r) => r.kind === kind), [records, kind]);
+  const failures = useMemo(() => shown.filter(failed).length, [shown]);
+  const win = useTailWindow(shown.length, 26);
 
   const head = "relative flex shrink-0 items-center gap-3 bg-secondaryBg px-6 py-1.5 text-xs font-medium text-neutral-secondary after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']";
   const offline = capture && capture.inactive_nodes > 0;
@@ -188,14 +183,13 @@ export function NetworkLogTable({
         )}
       </div>
       <div
-        ref={ref}
+        ref={win.ref}
         role="log"
+        aria-live="off"
+        tabIndex={0}
         data-noscroll
-        onScroll={() => {
-          const el = ref.current;
-          if (el) setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 32);
-        }}
-        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={win.onScroll}
+        className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-pink-500/40"
       >
         {shown.length === 0 ? (
           <LogEmpty
@@ -203,24 +197,23 @@ export function NetworkLogTable({
             sub={state === "connecting" ? t("로그를 가져오는 동안 잠시 기다려 주세요.") : emptyText}
           />
         ) : (
-          shown.map((r) => {
-            const service = serviceNames?.get(r.service_id) ?? r.service ?? r.service_id;
-            return r.kind === "dns" ? (
-              <DNSRow key={r.id} r={r} service={service} showService={showService} />
-            ) : (
-              <FlowRow key={r.id} r={r} service={service} showService={showService} />
-            );
-          })
+          <div style={{ paddingTop: win.padTop, paddingBottom: win.padBottom }}>
+            {shown.slice(win.first, win.end).map((r) => {
+              const service = serviceNames?.get(r.service_id) ?? r.service ?? r.service_id;
+              return r.kind === "dns" ? (
+                <DNSRow key={r.id} r={r} service={service} showService={showService} />
+              ) : (
+                <FlowRow key={r.id} r={r} service={service} showService={showService} />
+              );
+            })}
+          </div>
         )}
       </div>
       <div className="absolute bottom-4 right-4 flex flex-col gap-2">
         <button
           type="button"
           aria-label={t("맨 위로")}
-          onClick={() => {
-            setStick(false);
-            ref.current?.scrollTo({ top: 0 });
-          }}
+          onClick={win.toTop}
           className="flex size-9 cursor-pointer items-center justify-center rounded-md border border-gray-200 bg-secondaryBg text-gray-600 hover:border-gray-300 hover:text-foreground"
         >
           <ArrowUp className="size-4" />
@@ -228,10 +221,10 @@ export function NetworkLogTable({
         <button
           type="button"
           aria-label={t("맨 아래로")}
-          onClick={() => setStick(true)}
+          onClick={win.follow}
           className={cx(
             "flex size-9 cursor-pointer items-center justify-center rounded-md border bg-secondaryBg hover:text-foreground",
-            stick ? "border-gray-200 text-gray-600" : "border-pink-500 text-pink-600",
+            win.stick ? "border-gray-200 text-gray-600" : "border-pink-500 text-pink-600",
           )}
         >
           <ArrowDown className="size-4" />

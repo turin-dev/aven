@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -62,7 +63,16 @@ func (l *localStorage) Put(ctx context.Context, key string, r io.Reader) (int64,
 		os.Remove(tmp)
 		return n, err
 	}
-	return n, os.Rename(tmp, p)
+	if err := os.Rename(tmp, p); err != nil {
+		os.Remove(tmp)
+		return n, err
+	}
+	// 이름 바꾸기가 디스크에 남아야 전원이 꺼져도 "완료"로 기록한 백업 파일이 있다.
+	if d, err := os.Open(filepath.Dir(p)); err == nil {
+		d.Sync()
+		d.Close()
+	}
+	return n, nil
 }
 
 func (l *localStorage) Get(ctx context.Context, key string) (io.ReadCloser, error) {
@@ -238,6 +248,49 @@ func (m *Manager) toolSpec(dt *dbTarget, name string, tool *dbTool) node.RunSpec
 	}
 }
 
+// dbSecrets는 오류 메시지에서 가릴 비밀번호 표현들이다(그대로, URL 인코딩, mongo URI의 userinfo 인코딩).
+func dbSecrets(kind string, vars map[string]string) []string {
+	pw := dbCreds(kind, vars).Password
+	if len(pw) < 3 {
+		return nil // 너무 짧으면 메시지의 아무 글자나 가리게 된다
+	}
+	out := []string{pw, url.QueryEscape(pw), url.PathEscape(pw)}
+	if u := url.UserPassword("u", pw).String(); strings.HasPrefix(u, "u:") {
+		out = append(out, strings.TrimPrefix(u, "u:"))
+	}
+	return out
+}
+
+func redactSecrets(s string, secrets []string) string {
+	for _, sec := range secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "[redacted]")
+		}
+	}
+	return s
+}
+
+// redactedErr는 메시지에서 비밀번호를 가린 오류다(errors.Is/As는 원래 오류로 이어진다).
+type redactedErr struct {
+	err error
+	msg string
+}
+
+func (e *redactedErr) Error() string { return e.msg }
+func (e *redactedErr) Unwrap() error { return e.err }
+
+// scrub은 도구 출력(stderr)이 담긴 오류에서 이 DB의 비밀번호를 가린다. 오류는 DB 기록, 이벤트, 로그에 남는다.
+func (dt *dbTarget) scrub(err error) error {
+	if err == nil || dt == nil {
+		return err
+	}
+	msg := err.Error()
+	if r := redactSecrets(msg, dbSecrets(dt.kind, dt.vars)); r != msg {
+		return &redactedErr{err: err, msg: r}
+	}
+	return err
+}
+
 type tailBuf struct {
 	mu    sync.Mutex
 	lines []string
@@ -282,13 +335,17 @@ func (m *Manager) CreateDBBackup(ctx context.Context, in *store.Instance, trigge
 		unlockInstance(in.ID)
 		return nil, err
 	}
-	b.FileName = fmt.Sprintf("%s-%s.%s", b.CreatedAt.Format("20060102T150405Z"), strings.TrimPrefix(b.ID, "dbb_"), tool.Ext)
+	b.FileName = fmt.Sprintf("%s-%s.%s", b.CreatedAt.UTC().Format("20060102T150405Z"), strings.TrimPrefix(b.ID, "dbb_"), tool.Ext)
 	b.ObjectKey = fmt.Sprintf("%s-%s/%s", dt.t.Service.Name, dt.t.Env.Name, b.FileName)
 	m.Store.ExecDBBackupKey(ctx, b)
+	// 돌려준 b는 호출자가 직렬화한다: 작업은 복사본을 고친다(경합 방지).
+	job := *b
 	go func() {
+		b := &job
 		defer unlockInstance(in.ID)
 		bg := context.Background()
 		size, err := m.runDump(bg, dt, tool, st, b)
+		err = dt.scrub(err)
 		now := time.Now().UTC()
 		b.FinishedAt = &now
 		b.SizeBytes = size
@@ -320,6 +377,7 @@ func (m *Manager) runDump(ctx context.Context, dt *dbTarget, tool *dbTool, st Ba
 	defer cancel()
 	pr, pw := io.Pipe()
 	tail := &tailBuf{}
+	produced := make(chan error, 1)
 	go func() {
 		var w io.Writer = pw
 		var gz *gzip.Writer
@@ -335,10 +393,18 @@ func (m *Manager) runDump(ctx context.Context, dt *dbTarget, tool *dbTool, st Ba
 			err = gz.Close()
 		}
 		pw.CloseWithError(err)
+		produced <- err
 	}()
 	size, err := st.Put(ctx, b.ObjectKey, pr)
-	pr.CloseWithError(err) // Put이 먼저 실패하면 덤프 쪽 쓰기도 풀어 준다
-	cancel()
+	// Put이 스트림 끝(EOF)까지 읽지 않고 돌아왔으면 덤프 쪽 쓰기를 풀어 준다(실패면 덤프 컨테이너도 멈춘다).
+	pr.CloseWithError(errDumpUnread)
+	if err != nil {
+		cancel()
+	}
+	// 덤프 쪽이 끝난 뒤에 돌아간다: 호출자가 실패한 파일을 지울 때 덤프가 아직 쓰고 있지 않게 한다.
+	if perr := <-produced; err == nil && perr != nil {
+		err = perr // 저장소는 성공이라 했지만 덤프가 끝까지 전달되지 않았다
+	}
 	if err != nil {
 		return size, err
 	}
@@ -347,6 +413,9 @@ func (m *Manager) runDump(ctx context.Context, dt *dbTarget, tool *dbTool, st Ba
 	}
 	return size, nil
 }
+
+// errDumpUnread는 저장소가 덤프 스트림을 끝까지 읽지 않고 돌아왔을 때 덤프 쪽에 알리는 오류다.
+var errDumpUnread = errors.New("backup storage stopped reading the dump")
 
 // pruneDBBackups는 성공한 백업을 최신 retention개만 남기고 지운다(저장소의 파일도 지운다). 실패 기록은 10개만 남긴다.
 func (m *Manager) pruneDBBackups(ctx context.Context, instanceID string) {
@@ -358,42 +427,80 @@ func (m *Manager) pruneDBBackups(ctx context.Context, instanceID string) {
 	if err != nil {
 		return
 	}
+	for _, b := range pruneDBBackupPlan(bs, cfg.Retention) {
+		if b.Status == "done" {
+			if err := m.deleteDBBackupFiles(ctx, b); err != nil {
+				continue // 기록을 남겨 다음 정리 때 다시 지운다(저장소에 주인 없는 파일을 남기지 않는다)
+			}
+		}
+		m.Store.DeleteDBBackup(ctx, b.ID)
+	}
+}
+
+// failedBackupsKept는 정리 때 남기는 실패 기록 수다.
+const failedBackupsKept = 10
+
+// pruneDBBackupPlan은 정리할 백업을 고른다(bs는 최신순). 성공한 백업은 최신 retention개(0이면 모두),
+// 실패 기록은 최신 failedBackupsKept개를 남긴다. 진행 중인 백업과 지금 복원에 쓰는 백업은 건드리지 않는다.
+func pruneDBBackupPlan(bs []*store.DBBackup, retention int) []*store.DBBackup {
+	var out []*store.DBBackup
 	done, failed := 0, 0
-	for _, b := range bs { // 최신순
+	for _, b := range bs {
 		switch b.Status {
 		case "done":
 			done++
-			if cfg.Retention > 0 && done > cfg.Retention {
-				m.deleteDBBackupFiles(ctx, b)
-				m.Store.DeleteDBBackup(ctx, b.ID)
+			if retention > 0 && done > retention && !restoreRunning(b.ID) {
+				out = append(out, b)
 			}
 		case "failed":
 			failed++
-			if failed > 10 {
-				m.Store.DeleteDBBackup(ctx, b.ID)
+			if failed > failedBackupsKept {
+				out = append(out, b)
 			}
 		}
 	}
+	return out
 }
 
-func (m *Manager) deleteDBBackupFiles(ctx context.Context, b *store.DBBackup) {
+// restoreRunning은 이 백업으로 복원하는 작업이 진행 중인지 알려준다.
+func restoreRunning(backupID string) bool {
+	r := LastRestore(backupID)
+	return r != nil && r.Status == "running"
+}
+
+// ErrBackupInUse는 복원에 쓰는 중인 백업을 지우려 할 때다.
+var ErrBackupInUse = errors.New("this backup is being restored; wait for the restore to finish")
+
+// deleteDBBackupFiles는 저장소의 백업 파일을 지운다. 목적지 설정이 지워졌으면 지울 파일도 찾을 수 없으므로 nil이다.
+func (m *Manager) deleteDBBackupFiles(ctx context.Context, b *store.DBBackup) error {
 	st, err := m.BackupStorageFor(ctx, b.DestinationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
 	if err != nil {
 		m.Log.Warn("delete db backup: storage", "backup", b.ID, "err", err)
-		return
+		return err
+	}
+	if b.ObjectKey == "" {
+		return nil
 	}
 	if err := st.Delete(ctx, b.ObjectKey); err != nil {
 		m.Log.Warn("delete db backup file", "backup", b.ID, "err", err)
+		return err
 	}
+	return nil
 }
 
-// DeleteDBBackup은 백업 기록과 저장소의 파일을 지운다.
+// DeleteDBBackup은 백업 기록과 저장소의 파일을 지운다. 진행 중인 백업이나 복원에 쓰는 백업은 지우지 않는다.
 func (m *Manager) DeleteDBBackup(ctx context.Context, b *store.DBBackup) error {
-	st, err := m.BackupStorageFor(ctx, b.DestinationID)
-	if err == nil {
-		if err := st.Delete(ctx, b.ObjectKey); err != nil {
-			return fmt.Errorf("delete backup file: %w", err)
-		}
+	if restoreRunning(b.ID) {
+		return ErrBackupInUse
+	}
+	if b.Status == "running" {
+		return ErrDBBusy
+	}
+	if err := m.deleteDBBackupFiles(ctx, b); err != nil {
+		return fmt.Errorf("delete backup file: %w", err)
 	}
 	return m.Store.DeleteDBBackup(ctx, b.ID)
 }
@@ -414,6 +521,12 @@ func (m *Manager) RestoreDBBackup(ctx context.Context, b *store.DBBackup, target
 	}
 	dt, err := m.dbTargetFor(ctx, target)
 	if err != nil {
+		return err
+	}
+	// 다른 프로젝트의 DB를 덮어쓰지 않는다(권한은 백업이 속한 프로젝트로만 확인한다).
+	if env, err := m.Store.GetEnvironment(ctx, b.EnvironmentID); err != nil {
+		return fmt.Errorf("backup environment: %w", err)
+	} else if err := checkRestoreProject(env.ProjectID, dt.t.Project.ID); err != nil {
 		return err
 	}
 	if !SameDBFamily(b.Kind, dt.kind) {
@@ -448,7 +561,7 @@ func (m *Manager) RestoreDBBackup(ctx context.Context, b *store.DBBackup, target
 	go func() {
 		defer unlockInstance(target.ID)
 		bg := context.Background()
-		err := m.runRestore(bg, dt, tool, vol, b, target)
+		err := dt.scrub(m.runRestore(bg, dt, tool, vol, b, target))
 		now := time.Now().UTC()
 		dbJobs.Lock()
 		rs.FinishedAt = &now
@@ -467,17 +580,83 @@ func (m *Manager) RestoreDBBackup(ctx context.Context, b *store.DBBackup, target
 	return nil
 }
 
+// verifyDBBackup은 백업 파일을 끝까지 읽어 기록한 크기와 같은지, gzip이면 압축이 온전한지(CRC) 확인한다.
+func (m *Manager) verifyDBBackup(ctx context.Context, b *store.DBBackup, gz bool) error {
+	src, err := m.OpenDBBackup(ctx, b)
+	if err != nil {
+		return fmt.Errorf("open backup: %w", err)
+	}
+	defer src.Close()
+	return checkBackupStream(src, b.SizeBytes, gz)
+}
+
+func checkBackupStream(r io.Reader, size int64, gz bool) error {
+	if size > 0 {
+		r = &exactReader{r: r, want: size}
+	}
+	if gz {
+		zr, err := gzip.NewReader(r)
+		if err != nil {
+			return fmt.Errorf("backup is not gzip: %w", err)
+		}
+		if _, err := io.Copy(io.Discard, zr); err != nil {
+			return fmt.Errorf("backup is damaged: %w", err)
+		}
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return fmt.Errorf("backup is damaged: %w", err)
+	}
+	return nil
+}
+
+// exactReader는 r이 정확히 want바이트인지 확인한다: 짧게 끝나거나 더 길면 오류다(백업 기록의 크기와 다르다).
+type exactReader struct {
+	r    io.Reader
+	want int64
+	n    int64
+}
+
+func (e *exactReader) Read(p []byte) (int, error) {
+	n, err := e.r.Read(p)
+	e.n += int64(n)
+	if e.n > e.want {
+		return n, fmt.Errorf("backup file is larger than recorded (%d bytes)", e.want)
+	}
+	if err == io.EOF && e.n != e.want {
+		return n, fmt.Errorf("backup file is truncated: read %d of %d bytes", e.n, e.want)
+	}
+	return n, err
+}
+
+// ErrRestoreOtherProject는 백업을 다른 프로젝트의 데이터베이스에 복원하려 할 때다.
+var ErrRestoreOtherProject = errors.New("a backup can only be restored into a database of the same project")
+
+func checkRestoreProject(backupProject, targetProject string) error {
+	if backupProject == "" || backupProject != targetProject {
+		return ErrRestoreOtherProject
+	}
+	return nil
+}
+
 func (m *Manager) runRestore(ctx context.Context, dt *dbTarget, tool *dbTool, vol *store.Volume, b *store.DBBackup, target *store.Instance) error {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Hour)
 	defer cancel()
+	// 복원 도구는 스트림이 잘려도 그때까지 받은 것을 이미 적용했다(대상 데이터를 지운 뒤일 수도 있다).
+	// 대상을 건드리기 전에 파일 전체를 한 번 읽어 크기와 gzip CRC를 확인한다.
+	if err := m.verifyDBBackup(ctx, b, tool.Gzip); err != nil {
+		return err
+	}
 	src, err := m.OpenDBBackup(ctx, b)
 	if err != nil {
 		return fmt.Errorf("open backup: %w", err)
 	}
 	defer src.Close()
 	var in io.Reader = src
+	if b.SizeBytes > 0 {
+		in = &exactReader{r: src, want: b.SizeBytes} // 잘리거나 바뀐 파일을 복원 도구에 끝까지 넣지 않는다
+	}
 	if tool.Gzip {
-		gz, err := gzip.NewReader(src)
+		gz, err := gzip.NewReader(in)
 		if err != nil {
 			return fmt.Errorf("backup is not gzip: %w", err)
 		}
@@ -496,16 +675,11 @@ func (m *Manager) runRestore(ctx context.Context, dt *dbTarget, tool *dbTool, vo
 			m.mu.Unlock()
 		}()
 		if dt.cur != nil {
-			for _, c := range dt.cur.Containers {
-				m.markDrain(c)
-				dt.drv.Stop(ctx, c, 30)
+			// 실행 중인 redis가 남아 있으면 종료할 때 복원한 dump.rdb를 덮어쓴다: 하나라도 못 멈추면 복원하지 않는다.
+			if err := m.stopForRestore(ctx, dt.drv, dt.cur.Containers); err != nil {
+				return err
 			}
-			defer func() {
-				for _, c := range dt.cur.Containers {
-					dt.drv.Start(context.WithoutCancel(ctx), c)
-					m.undrain(c)
-				}
-			}()
+			defer m.startAfterRestore(context.WithoutCancel(ctx), dt.drv, dt.cur.Containers)
 		}
 	}
 	tail := &tailBuf{}
@@ -517,6 +691,28 @@ func (m *Manager) runRestore(ctx context.Context, dt *dbTarget, tool *dbTool, vo
 		return fmt.Errorf("%s restore exited with code %d: %s", dt.kind, code, tail.String())
 	}
 	return nil
+}
+
+// stopForRestore는 데이터 볼륨에 직접 쓰기 전에 DB 컨테이너를 멈춘다. 하나라도 멈추지 못하면(이미 없는 컨테이너는
+// 괜찮다) 멈춘 것을 다시 켜고 오류를 돌려준다: 실행 중인 DB의 데이터 디렉터리를 덮어쓰면 데이터가 깨진다.
+func (m *Manager) stopForRestore(ctx context.Context, drv Driver, containers []string) error {
+	for i, c := range containers {
+		m.markDrain(c)
+		if err := drv.Stop(ctx, c, 30); err != nil && !strings.Contains(err.Error(), "No such container") {
+			m.startAfterRestore(context.WithoutCancel(ctx), drv, containers[:i+1])
+			return fmt.Errorf("stop %s before restore: %w", c, err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) startAfterRestore(ctx context.Context, drv Driver, containers []string) {
+	for _, c := range containers {
+		if err := drv.Start(ctx, c); err != nil && m.Log != nil {
+			m.Log.Warn("restore: start database", "container", c, "err", err)
+		}
+		m.undrain(c)
+	}
 }
 
 // ---------------- 일정 ----------------

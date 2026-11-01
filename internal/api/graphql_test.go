@@ -7,13 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/graphql-go/graphql"
 
 	"github.com/turin-dev/aven/internal/deploy"
 	"github.com/turin-dev/aven/internal/events"
+	"github.com/turin-dev/aven/internal/logbook"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -72,6 +76,7 @@ func dig(v any, path string) any {
 }
 
 type gqlFixture struct {
+	mgr   *deploy.Manager
 	st    *store.Store
 	h     http.Handler
 	owner func(*http.Request)
@@ -108,7 +113,7 @@ func newGQLFixture(t *testing.T) *gqlFixture {
 	}
 	owner := testUser(t, st, "graphql-owner@example.com", store.RoleOwner)
 	cookie := testSessionCookie(t, s, owner)
-	return &gqlFixture{st: st, h: s.Handler(), owner: withCookie(cookie), p: p, env: env, svc: svc}
+	return &gqlFixture{mgr: mgr, st: st, h: s.Handler(), owner: withCookie(cookie), p: p, env: env, svc: svc}
 }
 
 func TestGraphQLIntrospectionAndQueries(t *testing.T) {
@@ -336,16 +341,99 @@ func TestGraphQLRequiresAuthAndEnforcesRBAC(t *testing.T) {
 
 func TestGraphQLRESTCallLimit(t *testing.T) {
 	f := newGQLFixture(t)
-	// 별칭으로 같은 필드를 많이 부르면 내부 호출 상한에 걸린다.
+	// 별칭마다 내부 REST 호출이 둘(인스턴스, 최근 배포)이라 필드 수 상한 안에서 호출 상한을 넘는다.
 	var b strings.Builder
 	b.WriteString("{")
-	for i := 0; i < maxGraphQLRESTCalls+5; i++ {
-		b.WriteString(" p" + itoa(i) + `: project(id: "` + f.p.ID + `") { id }`)
+	for i := 0; i < maxGraphQLRESTCalls/2+5; i++ {
+		b.WriteString(" s" + itoa(i) + `: serviceInstance(serviceId: "` + f.svc.ID + `", environmentId: "` + f.env.ID + `") { latestDeployment { id } }`)
 	}
 	b.WriteString("}")
 	out := gql(t, f.h, f.owner, b.String(), nil)
 	if len(out.Errors) == 0 || out.Errors[0].Extensions["code"] != "RATE_LIMITED" {
 		t.Fatalf("expected call limit error, got %d errors", len(out.Errors))
+	}
+}
+
+// gqlRaw는 상태 코드와 함께 응답을 돌려준다(400 응답을 보는 테스트용).
+func gqlRaw(t *testing.T, h http.Handler, auth func(*http.Request), body string) (int, gqlResult, map[string]any) {
+	t.Helper()
+	w := req(h, http.MethodPost, "/graphql/v2", body, auth)
+	var out gqlResult
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode %q: %v", w.Body.String(), err)
+	}
+	json.Unmarshal(w.Body.Bytes(), &raw)
+	return w.Code, out, raw
+}
+
+func TestGraphQLRequestErrorsUseRailwayCodes(t *testing.T) {
+	f := newGQLFixture(t)
+	q := func(query string, vars map[string]any, op string) string {
+		b, _ := json.Marshal(map[string]any{"query": query, "variables": vars, "operationName": op})
+		return string(b)
+	}
+	deep := "{ project(id: \"x\") " + strings.Repeat("{ services { edges { node { project ", 4) + "{ id }" + strings.Repeat(" } } } }", 4) + " }"
+	wide := strings.Builder{}
+	wide.WriteString("{ me {")
+	for i := 0; i < maxGraphQLFields+1; i++ {
+		wide.WriteString(" e" + itoa(i) + ": email")
+	}
+	wide.WriteString(" } }")
+	// fragment를 겹겹이 펼치면 필드 수가 2^20이 된다. 계산은 fragment마다 한 번이어야 한다.
+	bomb := strings.Builder{}
+	bomb.WriteString("{ me { ...F0 } }\n fragment F20 on User { id }\n")
+	for i := 19; i >= 0; i-- {
+		bomb.WriteString("fragment F" + itoa(i) + " on User { ...F" + itoa(i+1) + " ...F" + itoa(i+1) + " }\n")
+	}
+	for _, tc := range []struct {
+		name, body, code, msg string
+		status                int
+	}{
+		{"not json", `[{"query":"{ me { id } }"}]`, "BAD_USER_INPUT", "invalid GraphQL request body", 400},
+		{"empty query", `{"query":"  "}`, "BAD_USER_INPUT", "query is required", 400},
+		{"syntax", q("{ me { id ", nil, ""), "GRAPHQL_PARSE_FAILED", "Syntax Error", 400},
+		{"unknown field", q("{ nope }", nil, ""), "GRAPHQL_VALIDATION_FAILED", `Cannot query field "nope" on type "Query"`, 400},
+		{"missing argument", q("{ project { id } }", nil, ""), "GRAPHQL_VALIDATION_FAILED", `argument "id"`, 400},
+		{"bad variable", q("query($n: Int!) { projects(first: $n) { totalCount } }", map[string]any{"n": "many"}, ""), "BAD_USER_INPUT", `Variable "$n"`, 400},
+		{"missing variable", q("query($id: String!) { project(id: $id) { id } }", nil, ""), "BAD_USER_INPUT", `Variable "$id"`, 400},
+		{"unknown operation", q("query A { me { id } } query B { me { id } }", nil, "C"), "BAD_USER_INPUT", `Unknown operation named "C"`, 400},
+		{"too deep", q(deep, nil, ""), "GRAPHQL_VALIDATION_FAILED", "levels deep", 400},
+		{"too many fields", q(wide.String(), nil, ""), "GRAPHQL_VALIDATION_FAILED", "more than 1000 fields", 400},
+		{"fragment bomb", q(bomb.String(), nil, ""), "GRAPHQL_VALIDATION_FAILED", "more than 1000 fields", 400},
+		{"query too large", q("{ me { id } }"+strings.Repeat(" ", maxGraphQLQueryBytes), nil, ""), "GRAPHQL_VALIDATION_FAILED", "larger than", 400},
+		{"resolver error", q(`{ project(id: "prj_missing") { id } }`, nil, ""), "NOT_FOUND", "not found", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, out, raw := gqlRaw(t, f.h, f.owner, tc.body)
+			if status != tc.status || len(out.Errors) == 0 || out.Errors[0].Extensions["code"] != tc.code || !strings.Contains(out.Errors[0].Message, tc.msg) {
+				t.Fatalf("status %d, errors %+v; want %d %s %q", status, out.Errors, tc.status, tc.code, tc.msg)
+			}
+			if _, ok := raw["data"]; !ok {
+				t.Fatalf("response must always carry data (null on request errors): %v", raw)
+			}
+		})
+	}
+	if w := req(f.h, http.MethodPost, "/graphql/v2", `{"query":"`+strings.Repeat("a", maxGraphQLRequestBytes)+`"}`, f.owner); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body: %d", w.Code)
+	}
+}
+
+// 표준 introspection 쿼리(GraphiQL·codegen이 보내는 것)는 깊이·크기 제한에 걸리지 않아야 한다.
+func TestGraphQLIntrospectionQueryFitsLimits(t *testing.T) {
+	f := newGQLFixture(t)
+	const introspection = `query IntrospectionQuery { __schema { queryType { name } mutationType { name } subscriptionType { name }
+		types { ...FullType } directives { name description locations args { ...InputValue } } } }
+	fragment FullType on __Type { kind name description
+		fields(includeDeprecated: true) { name description args { ...InputValue } type { ...TypeRef } isDeprecated deprecationReason }
+		inputFields { ...InputValue } interfaces { ...TypeRef }
+		enumValues(includeDeprecated: true) { name description isDeprecated deprecationReason } possibleTypes { ...TypeRef } }
+	fragment InputValue on __InputValue { name description type { ...TypeRef } defaultValue }
+	fragment TypeRef on __Type { kind name ofType { kind name ofType { kind name ofType { kind name ofType { kind name
+		ofType { kind name ofType { kind name ofType { kind name } } } } } } } }`
+	data := mustGQL(t, f.h, f.owner, introspection, nil)
+	if dig(data, "__schema.queryType.name") != "Query" {
+		t.Fatalf("introspection: %v", data)
 	}
 }
 
@@ -376,7 +464,8 @@ func TestGraphQLRESTMapping(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/domains"):
 			writeJSON(w, 201, map[string]any{"host": "x.example.net", "kind": "custom", "target_port": 3000, "status": "pending_dns",
-				"dns": []any{map[string]any{"type": "A", "name": "x.example.net", "value": "203.0.113.1"}}})
+				"dns":          []any{map[string]any{"type": "A", "name": "x.example.net", "value": "203.0.113.1"}},
+				"verification": map[string]any{"txt": map[string]any{"name": "_aven.x.example.net", "value": "aven-verify=abc"}}})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/deployments/"):
 			writeJSON(w, 200, map[string]any{"id": "dep_1", "service_id": "svc_1", "environment_id": "env_1", "status": "live"})
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/deployments"):
@@ -404,13 +493,14 @@ func TestGraphQLRESTMapping(t *testing.T) {
 	}
 
 	data := run(`mutation { customDomainCreate(input: {serviceId: "svc_1", environmentId: "env_1", domain: "x.example.net", targetPort: 3000}) {
-		id domain targetPort status { verified dnsRecords { recordType requiredValue status } } } }`)
+		id domain targetPort status { verified verificationToken verificationDnsHost dnsRecords { recordType requiredValue status } } } }`)
 	if len(calls) != 1 || calls[0].path != "/api/services/svc_1/instances/env_1/domains" || !strings.Contains(calls[0].body, `"host":"x.example.net"`) ||
 		!strings.Contains(calls[0].body, `"target_port":3000`) {
 		t.Fatalf("customDomainCreate calls: %+v", calls)
 	}
 	if dig(data, "customDomainCreate.status.dnsRecords.0.status") != "PENDING" || dig(data, "customDomainCreate.status.dnsRecords.0.recordType") != "A" ||
-		dig(data, "customDomainCreate.status.verified") != false {
+		dig(data, "customDomainCreate.status.verified") != false || dig(data, "customDomainCreate.status.verificationToken") != "aven-verify=abc" ||
+		dig(data, "customDomainCreate.status.verificationDnsHost") != "_aven.x.example.net" {
 		t.Fatalf("customDomainCreate: %v", data)
 	}
 	id := dig(data, "customDomainCreate.id").(string)
@@ -429,6 +519,10 @@ func TestGraphQLRESTMapping(t *testing.T) {
 		t.Fatalf("serviceDomainCreate must not send a host: %+v", calls)
 	}
 
+	run(`mutation { environmentTriggersDeploy(input: {environmentId: "env_1", projectId: "prj_1", serviceId: "svc_1"}) }`)
+	if len(calls) != 1 || calls[0].method != http.MethodPost || calls[0].path != "/api/services/svc_1/instances/env_1/deploy" {
+		t.Fatalf("environmentTriggersDeploy calls: %+v", calls)
+	}
 	run(`mutation { deploymentRestart(id: "dep_1") }`)
 	if len(calls) != 2 || calls[1].path != "/api/services/svc_1/instances/env_1/restart" {
 		t.Fatalf("deploymentRestart calls: %+v", calls)
@@ -457,5 +551,206 @@ func TestDomainIDRoundTrip(t *testing.T) {
 		if _, _, _, err := parseDomainID(bad); err == nil {
 			t.Errorf("parseDomainID(%q) accepted", bad)
 		}
+	}
+}
+
+func TestGraphQLDeploymentsRailwayFields(t *testing.T) {
+	ctx := context.Background()
+	f := newGQLFixture(t)
+	in, err := f.st.GetInstanceFor(ctx, f.svc.ID, f.env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := "nginx:1"
+	mk := func(status store.DeployStatus, image *string) *store.Deployment {
+		d := &store.Deployment{ServiceID: f.svc.ID, EnvironmentID: f.env.ID, InstanceID: in.ID, Trigger: "manual", Image: image}
+		if err := f.st.CreateDeployment(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.SetDeploymentStatus(ctx, d.ID, status); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	live := mk(store.DepLive, &img)
+	cancelled := mk(store.DepCancelled, nil)
+	failed := mk(store.DepFailed, &img)
+	vars := map[string]any{"sid": f.svc.ID, "eid": f.env.ID}
+
+	data := mustGQL(t, f.h, f.owner, `query($sid: String!, $eid: String!) {
+		deployments(input: {serviceId: $sid, environmentId: $eid}) { edges { node { id status canRedeploy canRollback url staticUrl projectId
+			service { name } environment { id } } } }
+		serviceInstance(serviceId: $sid, environmentId: $eid) { serviceName region }
+	}`, vars)
+	byID := map[string]any{}
+	for _, e := range dig(data, "deployments.edges").([]any) {
+		byID[dig(e, "node.id").(string)] = dig(e, "node")
+	}
+	if n := byID[cancelled.ID]; dig(n, "status") != "REMOVED" || dig(n, "canRedeploy") != false || dig(n, "canRollback") != false {
+		t.Errorf("cancelled: %v", n)
+	}
+	if n := byID[live.ID]; dig(n, "status") != "SUCCESS" || dig(n, "canRollback") != true || dig(n, "staticUrl") != "web.aven.example.com" ||
+		dig(n, "url") != "https://web.aven.example.com" || dig(n, "projectId") != f.p.ID || dig(n, "service.name") != "web" ||
+		dig(n, "environment.id") != f.env.ID {
+		t.Errorf("live: %v", n)
+	}
+	if n := byID[failed.ID]; dig(n, "canRedeploy") != true || dig(n, "canRollback") != false {
+		t.Errorf("failed: %v", n)
+	}
+	if dig(data, "serviceInstance.serviceName") != "web" || dig(data, "serviceInstance.region") != nil {
+		t.Errorf("serviceInstance: %v", data["serviceInstance"])
+	}
+
+	count := func(status string) []string {
+		t.Helper()
+		data := mustGQL(t, f.h, f.owner, `query($sid: String!, $eid: String!) { deployments(input: {serviceId: $sid, environmentId: $eid, status: `+status+`}) { edges { node { status } } } }`, vars)
+		out := []string{}
+		for _, e := range dig(data, "deployments.edges").([]any) {
+			out = append(out, dig(e, "node.status").(string))
+		}
+		return out
+	}
+	if got := strings.Join(count(`{successfulOnly: true}`), ","); got != "SUCCESS" {
+		t.Errorf("successfulOnly: %s", got)
+	}
+	if got := count(`{in: ["FAILED", "REMOVED"]}`); len(got) != 2 {
+		t.Errorf("in: %v", got)
+	}
+	if got := strings.Join(count(`{notIn: ["FAILED", "REMOVED"]}`), ","); got != "SUCCESS" {
+		t.Errorf("notIn: %v", got)
+	}
+}
+
+func TestGraphQLDeploymentLogs(t *testing.T) {
+	ctx := context.Background()
+	f := newGQLFixture(t)
+	dir := t.TempDir()
+	reg, err := logbook.NewRegistry(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mgr.Logs = reg
+	in, _ := f.st.GetInstanceFor(ctx, f.svc.ID, f.env.ID)
+	d := &store.Deployment{ServiceID: f.svc.ID, EnvironmentID: f.env.ID, InstanceID: in.ID, Trigger: "manual"}
+	if err := f.st.CreateDeployment(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	book, err := reg.Open(d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC().Add(time.Second).Format("15:04:05")
+	book.Line(at + " step 1/2 : FROM node")
+	book.Line(at + " error: missing script")
+	book.Line("plain line")
+
+	writeCronLogs(t, f, d, "boot ok", "GET /health 200", "error: db down", "GET /health 200", "done")
+
+	vars := map[string]any{"id": d.ID}
+	data := mustGQL(t, f.h, f.owner, `query($id: String!) {
+		build: buildLogs(deploymentId: $id) { timestamp message severity }
+		errs: buildLogs(deploymentId: $id, filter: "err") { message }
+		runtime: deploymentLogs(deploymentId: $id, limit: 2) { message }
+		filtered: deploymentLogs(deploymentId: $id, filter: "-health", limit: 2) { message severity attributes { key value } }
+		ranged: deploymentLogs(deploymentId: $id, startDate: "2026-01-02T03:04:01Z", endDate: "2026-01-02T03:04:02Z") { message }
+	}`, vars)
+	if dig(data, "build.0.message") != "step 1/2 : FROM node" || !strings.HasSuffix(dig(data, "build.0.timestamp").(string), "T"+at+"Z") ||
+		dig(data, "build.1.severity") != "error" || dig(data, "build.2.message") != "plain line" {
+		t.Errorf("buildLogs: %v", data["build"])
+	}
+	if l := data["errs"].([]any); len(l) != 1 || dig(l, "0.message") != "error: missing script" {
+		t.Errorf("buildLogs filter: %v", l)
+	}
+	if l := data["runtime"].([]any); len(l) != 2 || dig(l, "1.message") != "done" {
+		t.Errorf("deploymentLogs limit keeps the newest lines: %v", l)
+	}
+	// 필터는 tail을 자르기 전에 적용한다: 마지막 두 줄 중 하나만 맞지만 결과는 두 줄이다.
+	if l := data["filtered"].([]any); len(l) != 2 || dig(l, "0.message") != "error: db down" || dig(l, "0.severity") != "error" ||
+		dig(l, "0.attributes.0.key") != "replica" {
+		t.Errorf("deploymentLogs filter: %v", l)
+	}
+	if l := data["ranged"].([]any); len(l) != 2 || dig(l, "0.message") != "GET /health 200" || dig(l, "1.message") != "error: db down" {
+		t.Errorf("deploymentLogs date range: %v", l)
+	}
+
+	out := gql(t, f.h, f.owner, `query($id: String!) { deploymentLogs(deploymentId: $id, limit: 0) { message } }`, vars)
+	if len(out.Errors) != 1 || out.Errors[0].Extensions["code"] != "BAD_USER_INPUT" {
+		t.Errorf("limit 0: %+v", out.Errors)
+	}
+	out = gql(t, f.h, f.owner, `query($id: String!) { deploymentLogs(deploymentId: $id, startDate: "yesterday") { message } }`, vars)
+	if len(out.Errors) != 1 || out.Errors[0].Extensions["code"] != "BAD_USER_INPUT" {
+		t.Errorf("bad startDate: %+v", out.Errors)
+	}
+	// 프로젝트 멤버가 아니면 로그도 없다.
+	outsider := testUser(t, f.st, "graphql-logs-outsider@example.com", store.RoleViewer)
+	out = gql(t, f.h, withCookie(testSessionCookie(t, &Server{Store: f.st}, outsider)), `query($id: String!) { buildLogs(deploymentId: $id) { message } }`, vars)
+	if len(out.Errors) != 1 || out.Data["buildLogs"] != nil {
+		t.Errorf("outsider logs: %+v", out)
+	}
+}
+
+func TestGraphQLRailwayInputsAndSafety(t *testing.T) {
+	ctx := context.Background()
+	f := newGQLFixture(t)
+	vars := map[string]any{"sid": f.svc.ID, "eid": f.env.ID}
+	// serviceDelete(environmentId)는 모든 환경에서 지우지 않고 거부한다.
+	out := gql(t, f.h, f.owner, `mutation($sid: String!, $eid: String!) { serviceDelete(id: $sid, environmentId: $eid) }`, vars)
+	if len(out.Errors) != 1 || out.Errors[0].Extensions["code"] != "BAD_USER_INPUT" {
+		t.Fatalf("serviceDelete with environmentId: %+v", out)
+	}
+	if _, err := f.st.GetService(ctx, f.svc.ID); err != nil {
+		t.Fatal("serviceDelete with environmentId deleted the service")
+	}
+	for _, q := range []string{
+		`mutation($sid: String!, $eid: String!) { serviceInstanceDeployV2(serviceId: $sid, environmentId: $eid, commitSha: "abc123") }`,
+		`mutation($sid: String!, $eid: String!) { serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: {buildCommand: "make"}) }`,
+	} {
+		if out := gql(t, f.h, f.owner, q, vars); len(out.Errors) != 1 || out.Errors[0].Extensions["code"] != "BAD_USER_INPUT" {
+			t.Errorf("%s: %+v", q, out)
+		}
+	}
+	// Railway 전용 입력은 받는다(region, isPublic, stageInitialChanges).
+	data := mustGQL(t, f.h, f.owner, `mutation($sid: String!, $eid: String!) {
+		serviceInstanceUpdate(serviceId: $sid, environmentId: $eid, input: {region: "us-west1", numReplicas: 2}) }`, vars)
+	if data["serviceInstanceUpdate"] != true {
+		t.Fatalf("region: %v", data)
+	}
+	data = mustGQL(t, f.h, f.owner, `mutation {
+		projectCreate(input: {name: "railway-style", isPublic: false, prDeploys: true, defaultEnvironmentName: "prod"}) {
+			id name environments { edges { node { name } } } } }`, nil)
+	if dig(data, "projectCreate.name") != "railway-style" || dig(data, "projectCreate.environments.edges.0.node.name") != "prod" {
+		t.Fatalf("projectCreate: %v", data)
+	}
+	pid := dig(data, "projectCreate.id").(string)
+	if p, err := f.st.GetProject(ctx, pid); err != nil || !p.PREnvironments.Enabled {
+		t.Fatalf("prDeploys not applied: %+v %v", p, err)
+	}
+	data = mustGQL(t, f.h, f.owner, `mutation($pid: String!) { projectUpdate(id: $pid, input: {prDeploys: false, isPublic: true}) { id } }`, map[string]any{"pid": pid})
+	if p, _ := f.st.GetProject(ctx, pid); p.PREnvironments.Enabled {
+		t.Fatalf("projectUpdate prDeploys: %v", data)
+	}
+	data = mustGQL(t, f.h, f.owner, `{ projects { edges { node { updatedAt } } } }`, nil)
+	if dig(data, "projects.edges.0.node.updatedAt") != nil {
+		t.Errorf("updatedAt: %v", data)
+	}
+}
+
+// writeCronLogs는 컨테이너 없는 배포의 런타임 로그(cron 실행 기록)를 만든다. 시각은 2026-01-02T03:04:0i다.
+func writeCronLogs(t *testing.T, f *gqlFixture, d *store.Deployment, msgs ...string) {
+	t.Helper()
+	ctx := context.Background()
+	run := &store.CronRun{DeploymentID: d.ID, InstanceID: d.InstanceID, StartedAt: time.Now(), Status: "succeeded"}
+	if err := f.st.CreateCronRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	logDir := filepath.Join(f.mgr.Cfg.DataDir, "logs", "cron")
+	os.MkdirAll(logDir, 0o755)
+	var jsonl strings.Builder
+	for i, msg := range msgs {
+		b, _ := json.Marshal(deploy.LogEntry{T: time.Date(2026, 1, 2, 3, 4, i, 0, time.UTC).Format(time.RFC3339Nano), Replica: "r1", Stream: "stdout", Msg: msg})
+		jsonl.Write(append(b, '\n'))
+	}
+	if err := os.WriteFile(filepath.Join(logDir, run.ID+".jsonl"), []byte(jsonl.String()), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

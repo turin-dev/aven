@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -274,8 +276,17 @@ func (s *Server) iacOwners(ctx context.Context, env *store.Environment, svcs []*
 }
 
 type iacPlanInput struct {
-	Definition iac.Definition `json:"definition"`
-	ShowValues bool           `json:"show_values"`
+	Definition json.RawMessage `json:"definition"`
+	ShowValues bool            `json:"show_values"`
+}
+
+// decodeIACDefinition은 요청의 definition을 CLI와 같은 엄격한 규칙(모르는 키 거부, 오류 경로 표시)으로 읽는다.
+// 오류는 plan.Errors로 돌려준다(예전의 Validate 오류와 같다).
+func decodeIACDefinition(raw json.RawMessage) (*iac.Definition, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, errors.New("definition: is required")
+	}
+	return iac.DecodeJSON(raw)
 }
 
 func (s *Server) planIACConfig(w http.ResponseWriter, r *http.Request) {
@@ -287,7 +298,8 @@ func (s *Server) planIACConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	plan, _, err := s.buildIACPlan(r.Context(), p, env, &input.Definition, input.ShowValues && canSeeSecrets(r))
+	d, defErr := decodeIACDefinition(input.Definition)
+	plan, _, err := s.buildIACPlan(r.Context(), p, env, d, defErr, input.ShowValues && canSeeSecrets(r))
 	if err != nil {
 		s.storeErr(w, err)
 		return
@@ -295,10 +307,14 @@ func (s *Server) planIACConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, plan)
 }
 
-// buildIACPlan은 정의와 현재 상태를 비교한다(아무것도 쓰지 않는다). 정의 오류는 plan.Errors에 담는다.
-func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.Environment, d *iac.Definition, showValues bool) (*iacPlan, []*iacItem, error) {
-	plan := &iacPlan{EnvironmentID: env.ID, Environment: env.Name, Partial: d.Partial,
+// buildIACPlan은 정의와 현재 상태를 비교한다(아무것도 쓰지 않는다). 정의 오류(defErr 포함)는 plan.Errors에 담는다.
+// 오류는 정의 안의 경로로 시작한다(services[1] (web): settings.replicas: ...).
+func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.Environment, d *iac.Definition, defErr error, showValues bool) (*iacPlan, []*iacItem, error) {
+	plan := &iacPlan{EnvironmentID: env.ID, Environment: env.Name,
 		Changes: []iacChange{}, Claims: []string{}, Errors: []string{}, Warnings: []string{}}
+	if d != nil {
+		plan.Partial = d.Partial
+	}
 	svcs, insts, err := s.iacServices(ctx, p, env)
 	if err != nil {
 		return nil, nil, err
@@ -310,8 +326,11 @@ func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.
 	if plan.ConfigETag, err = s.iacETag(ctx, p, env, owners); err != nil {
 		return nil, nil, err
 	}
-	if err := d.Validate(); err != nil {
-		plan.Errors = append(plan.Errors, err.Error())
+	if defErr == nil {
+		defErr = d.Validate()
+	}
+	if defErr != nil {
+		plan.Errors = append(plan.Errors, defErr.Error())
 		return plan, nil, nil
 	}
 	canonical, err := json.Marshal(d)
@@ -343,18 +362,18 @@ func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.
 	items := []*iacItem{}
 	declared := map[string]bool{}
 	hosts := map[string]string{}
-	for _, decl := range d.Services {
+	for i, decl := range d.Services {
 		declared[decl.Name] = true
 		addr := decl.Address()
 		fail := func(format string, a ...any) {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("service %q: ", decl.Name)+fmt.Sprintf(format, a...))
+			plan.Errors = append(plan.Errors, fmt.Sprintf("services[%d] (%s): ", i, decl.Name)+fmt.Sprintf(format, a...))
 		}
 		if !nameRe.MatchString(decl.Name) || decl.Name == "shared" {
-			fail("name must be lowercase letters, digits and '-' (max 40), and not 'shared'")
+			fail("name: must be lowercase letters, digits and '-' (max 40), and not 'shared'")
 			continue
 		}
 		if owner := owners[addr]; owner != "" && owner != d.Partial {
-			plan.Errors = append(plan.Errors, fmt.Sprintf("cannot manage service %q: already managed by partial %q", decl.Name, owner))
+			fail("cannot manage service %q: already managed by partial %q", decl.Name, owner)
 			continue
 		}
 		svc := byName[decl.Name]
@@ -368,11 +387,11 @@ func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.
 		}
 		if svc != nil {
 			if decl.SourceType != "" && decl.SourceType != svc.SourceType && !(decl.SourceType == catalog.BucketKind && svc.DatabaseKind != nil && *svc.DatabaseKind == catalog.BucketKind) {
-				fail("source_type cannot be changed (%s → %s); remove and recreate the service instead", svc.SourceType, decl.SourceType)
+				fail("source_type: cannot be changed (%s → %s); remove and recreate the service instead", svc.SourceType, decl.SourceType)
 				continue
 			}
 			if decl.DatabaseKind != "" && (svc.DatabaseKind == nil || decl.DatabaseKind != *svc.DatabaseKind) {
-				fail("database_kind cannot be changed")
+				fail("database_kind: cannot be changed")
 				continue
 			}
 		}
@@ -383,7 +402,7 @@ func (s *Server) buildIACPlan(ctx context.Context, p *store.Project, env *store.
 		}
 		for _, dom := range it.spec.Domains {
 			if other, ok := hosts[dom.Host]; ok && other != decl.Name {
-				fail("domain %s is also declared by service %q", dom.Host, other)
+				fail("settings.domains: %s is also declared by service %q", dom.Host, other)
 			}
 			hosts[dom.Host] = decl.Name
 		}
@@ -457,7 +476,7 @@ func (s *Server) iacServiceDef(d iac.Service) (catalog.ServiceDef, *string, stri
 	case "repo":
 		u := str("repo_url")
 		if !s.validRepoURL(u) {
-			return def, nil, "", errors.New("new repo services need settings.repo_url (an https://, ssh:// or git@ URL)")
+			return def, nil, "", errors.New("settings.repo_url: new repo services need a repository URL (https://, ssh:// or git@)")
 		}
 		repo = &u
 		if b := str("branch"); b != "" {
@@ -467,7 +486,7 @@ func (s *Server) iacServiceDef(d iac.Service) (catalog.ServiceDef, *string, stri
 	case "image":
 		img := str("image")
 		if img != "" && !regexpMatch(imageRe, img) {
-			return def, nil, "", errors.New("invalid image (e.g. nginx:alpine)")
+			return def, nil, "", errors.New("settings.image: invalid image (e.g. nginx:alpine)")
 		}
 		def = catalog.ServiceDef{Name: d.Name, Icon: "docker", SourceType: "image", Image: img}
 	case "database", catalog.BucketKind:
@@ -476,20 +495,20 @@ func (s *Server) iacServiceDef(d iac.Service) (catalog.ServiceDef, *string, stri
 			kind = catalog.BucketKind
 		}
 		if kind == "" {
-			return def, nil, "", errors.New("new database services need database_kind (postgres, mysql, redis, mongo, bucket)")
+			return def, nil, "", errors.New("database_kind: new database services need one of postgres, mysql, redis, mongo, bucket")
 		}
 		var ok bool
 		if def, ok = catalog.DatabaseService(kind); !ok {
-			return def, nil, "", fmt.Errorf("unknown database_kind %q", kind)
+			return def, nil, "", fmt.Errorf("database_kind: unknown kind %q (postgres, mysql, redis, mongo, bucket)", kind)
 		}
 		def.Name = d.Name
 	case "function":
 		def = functionDef()
 		def.Name = d.Name
 	case "":
-		return def, nil, "", errors.New("new services need source_type (repo, image, database, bucket or function)")
+		return def, nil, "", errors.New("source_type: new services need one of repo, image, database, bucket or function")
 	default:
-		return def, nil, "", fmt.Errorf("unknown source_type %q", d.SourceType)
+		return def, nil, "", fmt.Errorf("source_type: unknown type %q (repo, image, database, bucket or function)", d.SourceType)
 	}
 	return def, repo, branch, nil
 }
@@ -537,7 +556,8 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 	}
 	addr := decl.Address()
 	changes := []iacChange{}
-	if !it.create {
+	// 새 서비스도 설정 줄을 보여 준다: 대시보드에서 만들 때의 기본값과 다른 설정만 "+ field = value"로 나온다.
+	{
 		var before, after map[string]json.RawMessage
 		b, _ := json.Marshal(cur.Spec)
 		json.Unmarshal(b, &before)
@@ -548,7 +568,11 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 			if rawJSONEqual(before[k], after[k]) {
 				continue
 			}
-			changes = append(changes, iacChange{Action: "change", Resource: addr, Field: k, From: before[k], To: after[k]})
+			ch := iacChange{Action: "change", Resource: addr, Field: k, To: after[k]}
+			if !it.create {
+				ch.From = before[k]
+			}
+			changes = append(changes, ch)
 			switch k {
 			case "domains":
 				it.proxy, it.domains = true, true
@@ -559,9 +583,12 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 			}
 		}
 		if store.NormNode(it.nodeID) != store.NormNode(cur.NodeID) {
-			from, _ := json.Marshal(cur.NodeID)
-			to, _ := json.Marshal(it.nodeID)
-			changes = append(changes, iacChange{Action: "change", Resource: addr, Field: "node_id", From: from, To: to})
+			ch := iacChange{Action: "change", Resource: addr, Field: "node_id"}
+			ch.To, _ = json.Marshal(it.nodeID)
+			if !it.create {
+				ch.From, _ = json.Marshal(cur.NodeID)
+			}
+			changes = append(changes, ch)
 		}
 	}
 
@@ -577,17 +604,19 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 			protected = protectedKeys(svc)
 		}
 		next := map[string]string{}
-		for k, v := range *decl.Variables {
+		declVars := *decl.Variables
+		for _, k := range slices.Sorted(maps.Keys(declVars)) {
+			v := declVars[k]
 			if v.Preserve {
 				old, ok := cur.Variables[k]
 				if !ok {
-					return nil, nil, fmt.Errorf("variables.%s uses preserve() but has no value in Aven", k)
+					return nil, nil, fmt.Errorf("variables.%s: uses preserve() but has no value in Aven", k)
 				}
 				next[k] = old
 				continue
 			}
 			if sealed[k] && v.Value != cur.Variables[k] {
-				return nil, nil, fmt.Errorf("variables.%s is sealed; use preserve() or remove it", k)
+				return nil, nil, fmt.Errorf("variables.%s: is sealed; use preserve() or remove it", k)
 			}
 			next[k] = v.Value
 		}
@@ -600,7 +629,7 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 			}
 		}
 		if err := validateVars(next); err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("variables: %w", err)
 		}
 		if !it.create && s.Deploy != nil {
 			probe := *cur
@@ -612,7 +641,7 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 				}
 			}
 		}
-		if !it.create {
+		{
 			keys := map[string]bool{}
 			for k := range cur.Variables {
 				keys[k] = true
@@ -642,24 +671,51 @@ func (s *Server) prepareIACItem(ctx context.Context, env *store.Environment, svc
 	return it, changes, nil
 }
 
-// iacVarValue는 plan에 보여 줄 변수 값이다. 참조가 있으면 그대로, 아니면 show가 아닐 때 «hidden».
+// iacHidden은 plan에서 가린 값(또는 값의 일부) 표시다.
+const iacHidden = "«hidden»"
+
+// iacRefRe는 ${{ name }} 참조다(vars 패키지와 같은 문법).
+var iacRefRe = regexp.MustCompile(`\$\{\{\s*[A-Za-z0-9_.-]+\s*\}\}`)
+
+// iacVarValue는 plan에 보여 줄 변수 값이다. show가 아니면 ${{ }} 참조만 그대로 두고 참조 사이의 글자는 «hidden»으로
+// 바꾼다(postgres://user:secret@${{db.HOST}}/x의 비밀번호가 보이지 않게). 참조가 없으면 값 전체가 «hidden»이다.
 func iacVarValue(v string, show bool) json.RawMessage {
-	if !show && len(vars.References(v)) == 0 {
-		v = "«hidden»"
+	if !show {
+		v = iacMaskLiterals(v)
 	}
 	b, _ := json.Marshal(v)
 	return b
 }
 
+func iacMaskLiterals(v string) string {
+	locs := iacRefRe.FindAllStringIndex(v, -1)
+	if len(locs) == 0 {
+		return iacHidden
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		if l[0] > last {
+			b.WriteString(iacHidden)
+		}
+		b.WriteString(v[l[0]:l[1]])
+		last = l[1]
+	}
+	if last < len(v) {
+		b.WriteString(iacHidden)
+	}
+	return b.String()
+}
+
 // iacSettings는 선언된 설정을 현재 설정 위에 덮고 PATCH /instances와 같은 검증을 한다.
 // 도메인은 custom 도메인 목록을 통째로 바꾼다(생성된 도메인은 그대로 둔다). 새 주 노드가 있으면 돌려준다.
 func (s *Server) iacSettings(ctx context.Context, svc *store.Service, cur *store.Instance, settings map[string]json.RawMessage) (store.Spec, string, error) {
-	for k := range settings {
+	for _, k := range slices.Sorted(maps.Keys(settings)) {
 		switch {
 		case k == "tcp_proxy":
-			return cur.Spec, "", errors.New("tcp_proxy is managed from the service networking settings, not IaC")
+			return cur.Spec, "", errors.New("settings.tcp_proxy: is managed from the service networking settings, not IaC")
 		case !specKeys[k]:
-			return cur.Spec, "", fmt.Errorf("unsupported setting %q", k)
+			return cur.Spec, "", fmt.Errorf("settings.%s: unsupported setting", k)
 		}
 	}
 	var merged map[string]json.RawMessage
@@ -673,13 +729,17 @@ func (s *Server) iacSettings(ctx context.Context, svc *store.Service, cur *store
 	b, _ = json.Marshal(merged)
 	var next store.Spec
 	if err := json.Unmarshal(b, &next); err != nil {
-		return cur.Spec, "", fmt.Errorf("invalid settings: %w", err)
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return cur.Spec, "", fmt.Errorf("settings.%s: must be %s (got %s)", typeErr.Field, jsonKind(typeErr.Type.Kind().String()), typeErr.Value)
+		}
+		return cur.Spec, "", fmt.Errorf("settings: %w", err)
 	}
 	next.TCPProxy, next.Domains = cur.TCPProxy, cur.Domains
 	if raw, ok := settings["domains"]; ok {
 		want, err := parseIACDomains(raw)
 		if err != nil {
-			return cur.Spec, "", err
+			return cur.Spec, "", fmt.Errorf("settings.%w", err)
 		}
 		old := map[string]store.Domain{}
 		doms := []store.Domain{}
@@ -696,10 +756,10 @@ func (s *Server) iacSettings(ctx context.Context, svc *store.Service, cur *store
 			}
 			if d.BasicAuth != nil {
 				if d.BasicAuth.Password != "" {
-					return cur.Spec, "", fmt.Errorf("domain %s: basic_auth passwords cannot be set from IaC; set them in the dashboard", d.Host)
+					return cur.Spec, "", fmt.Errorf("settings.domains: %s: basic_auth passwords cannot be set from IaC; set them in the dashboard", d.Host)
 				}
 				if prev := old[d.Host].BasicAuth; prev == nil || !prev.HasPassword {
-					return cur.Spec, "", fmt.Errorf("domain %s: basic_auth needs a password; set it in the dashboard first", d.Host)
+					return cur.Spec, "", fmt.Errorf("settings.domains: %s: basic_auth needs a password; set it in the dashboard first", d.Host)
 				}
 				d.BasicAuth.HasPassword = true
 			}
@@ -726,7 +786,7 @@ func (s *Server) iacSettings(ctx context.Context, svc *store.Service, cur *store
 				return cur.Spec, "", err
 			}
 			if reason != "" {
-				return cur.Spec, "", fmt.Errorf("private_dns_name %q: %s", next.PrivateDNSName, reason)
+				return cur.Spec, "", fmt.Errorf("settings.private_dns_name: %q %s", next.PrivateDNSName, reason)
 			}
 		}
 	}
@@ -741,7 +801,7 @@ func (s *Server) iacSettings(ctx context.Context, svc *store.Service, cur *store
 				return cur.Spec, "", err
 			}
 			if len(vols) > 0 {
-				return cur.Spec, "", errors.New("placement would move a service with volumes to another node; move it with the node setting first")
+				return cur.Spec, "", errors.New("settings.placement: would move a service with volumes to another node; move it with the node setting first")
 			}
 		}
 		return next, first, nil
@@ -770,10 +830,10 @@ func sameDomainSet(a, b []store.Domain) bool {
 func parseIACDomains(raw json.RawMessage) ([]store.Domain, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, errors.New("domains must be a list")
+		return nil, errors.New("domains: must be a list")
 	}
 	out := make([]store.Domain, 0, len(items))
-	for _, item := range items {
+	for i, item := range items {
 		var host string
 		if json.Unmarshal(item, &host) == nil {
 			out = append(out, store.Domain{Host: host})
@@ -781,7 +841,7 @@ func parseIACDomains(raw json.RawMessage) ([]store.Domain, error) {
 		}
 		var d store.Domain
 		if err := json.Unmarshal(item, &d); err != nil || d.Host == "" {
-			return nil, errors.New("domains entries must be a host name or an object with host")
+			return nil, fmt.Errorf("domains[%d]: must be a host name or an object with host", i)
 		}
 		out = append(out, d)
 	}
@@ -789,10 +849,10 @@ func parseIACDomains(raw json.RawMessage) ([]store.Domain, error) {
 }
 
 type iacApplyInput struct {
-	Definition         iac.Definition `json:"definition"`
-	PlanHash           string         `json:"plan_hash"`
-	ConfirmDestructive bool           `json:"confirm_destructive"`
-	Deploy             bool           `json:"deploy"`
+	Definition         json.RawMessage `json:"definition"`
+	PlanHash           string          `json:"plan_hash"`
+	ConfirmDestructive bool            `json:"confirm_destructive"`
+	Deploy             bool            `json:"deploy"`
 }
 
 type iacApplied struct {
@@ -812,9 +872,10 @@ func (s *Server) applyIACConfig(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	def, defErr := decodeIACDefinition(input.Definition)
 	iacMu.Lock()
 	defer iacMu.Unlock()
-	plan, items, err := s.buildIACPlan(ctx, p, env, &input.Definition, false)
+	plan, items, err := s.buildIACPlan(ctx, p, env, def, defErr, false)
 	if err != nil {
 		s.storeErr(w, err)
 		return
@@ -883,7 +944,7 @@ func (s *Server) applyIACConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.Store.Tx(ctx, func(tx *store.Store) error {
-		if input.Definition.Partial == "" {
+		if def.Partial == "" {
 			return tx.ClearIACOwnership(ctx, env.ID)
 		}
 		for _, it := range items {
@@ -891,7 +952,7 @@ func (s *Server) applyIACConfig(w http.ResponseWriter, r *http.Request) {
 				if err := tx.DeleteIACOwnership(ctx, env.ID, iac.ServiceAddress(it.svc.Name)); err != nil {
 					return err
 				}
-			} else if err := tx.SetIACOwnership(ctx, env.ID, it.decl.Address(), input.Definition.Partial); err != nil {
+			} else if err := tx.SetIACOwnership(ctx, env.ID, it.decl.Address(), def.Partial); err != nil {
 				return err
 			}
 		}
@@ -952,8 +1013,8 @@ func (s *Server) applyIACConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(applied) > 0 || len(plan.Claims) > 0 {
 		msg := fmt.Sprintf("%s 환경에 코드형 인프라 설정을 적용했습니다 (생성 %d, 변경 %d, 삭제 %d)", env.Name, plan.Summary.Create, plan.Summary.Change, plan.Summary.Destroy)
-		if input.Definition.Partial != "" {
-			msg += " · partial " + input.Definition.Partial
+		if def.Partial != "" {
+			msg += " · partial " + def.Partial
 		}
 		if input.Deploy {
 			msg += " 및 배포 요청"
@@ -1162,4 +1223,23 @@ func selectIACResources(owners map[string]string, partial string, requested []st
 	}
 	sort.Strings(selected)
 	return selected, nil
+}
+
+// jsonKind는 Go 타입 종류를 JSON 용어로 바꾼다(오류 메시지용).
+func jsonKind(kind string) string {
+	switch {
+	case strings.HasPrefix(kind, "int"), strings.HasPrefix(kind, "uint"):
+		return "an integer"
+	case strings.HasPrefix(kind, "float"):
+		return "a number"
+	case kind == "string":
+		return "a string"
+	case kind == "bool":
+		return "true or false"
+	case kind == "slice", kind == "array":
+		return "a list"
+	case kind == "map", kind == "struct", kind == "ptr":
+		return "an object"
+	}
+	return kind
 }

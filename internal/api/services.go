@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"reflect"
 	"regexp"
@@ -909,6 +910,9 @@ func (s *Server) validateSpec(svc *store.Service, sp *store.Spec) error {
 	case !validPrivatePorts(sp.PrivatePorts):
 		return errors.New("private_ports must be a list of up to 16 distinct ports (1..65535)")
 	}
+	if err := validHealthcheckPath(sp.HealthcheckPath); err != nil {
+		return err
+	}
 	if err := validateAutoscale(sp.Autoscale); err != nil {
 		return err
 	}
@@ -939,6 +943,24 @@ func (s *Server) validateSpec(svc *store.Service, sp *store.Spec) error {
 		if *p != nil && strings.TrimSpace(**p) == "" {
 			*p = nil
 		}
+	}
+	return nil
+}
+
+// validHealthcheckPath는 http healthcheck가 컨테이너에 요청할 경로를 검사한다. 프로브는 "http://ip:port"+경로로
+// URL을 만들므로 /로 시작하는, 공백·제어 문자가 없는 올바른 URL 경로여야 한다(예: "/%zz"는 URL이 되지 않는다).
+func validHealthcheckPath(p string) error {
+	bad := errors.New("healthcheck_path must be a URL path starting with / (up to 1024 characters, no spaces)")
+	if len(p) > 1024 || !strings.HasPrefix(p, "/") {
+		return bad
+	}
+	for _, c := range p {
+		if c <= ' ' || c == 0x7f {
+			return bad
+		}
+	}
+	if _, err := url.ParseRequestURI("http://127.0.0.1" + p); err != nil {
+		return bad
 	}
 	return nil
 }

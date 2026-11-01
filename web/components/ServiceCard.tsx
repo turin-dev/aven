@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { memo, useEffect, useState, type ReactNode } from "react";
 import { Clock, Copy, HardDrive, PencilLine, Server } from "lucide-react";
-import { isTerminal, type CanvasService } from "@/lib/api";
+import { isTerminal, type CanvasService, type DeploymentStatus } from "@/lib/api";
 import { fmtBytes, fmtRelative, fmtTime, fmtUntil } from "@/lib/format";
 import { describeCron, nextRuns } from "@/lib/cron";
 import { pendingSummary, useStaged } from "@/lib/staged";
@@ -88,6 +88,37 @@ function statusLine(s: CanvasService) {
       return { ...base, status: inst.status, label: d ? t("대기") : t("아직 배포하지 않음"), when: null };
   }
 }
+/** Rough position of an in-progress deployment in its pipeline (0..1) for the card's progress bar. */
+const STAGE: Partial<Record<DeploymentStatus, number>> = {
+  waiting: 0.06,
+  queued: 0.1,
+  initializing: 0.2,
+  building: 0.42,
+  pre_deploy: 0.62,
+  deploying: 0.75,
+  healthchecking: 0.88,
+};
+
+/** Thin bar along the bottom edge of the card while a deployment runs. */
+function DeployProgress({ status, label }: { status: DeploymentStatus; label: string }) {
+  const at = STAGE[status] ?? 0.1;
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(at * 100)}
+      aria-valuetext={label}
+      className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] overflow-hidden rounded-b-xl bg-blue-500/10"
+    >
+      <div className="h-full rounded-r-full bg-blue-500 transition-[width] duration-700 ease-out" style={{ width: `${at * 100}%` }} />
+      <div className="absolute inset-y-0 left-0 w-1/3 animate-[keel-card-shimmer_1.6s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/50 to-transparent motion-reduce:hidden" />
+      <style>{`@keyframes keel-card-shimmer{from{transform:translateX(-100%)}to{transform:translateX(300%)}}`}</style>
+    </div>
+  );
+}
+
 /** "오늘 14:05" style time of the next cron run. */
 function fmtNextRun(d: Date): string {
   const time = d.toLocaleTimeString(dateLocale(), { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -120,7 +151,8 @@ function AttachmentRow({ icon, children }: { icon: ReactNode; children: ReactNod
   );
 }
 
-export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envId: string; selected: boolean }) {
+/** Canvas node for a service. Memoised: it re-renders only when its service object, environment or selection changes. */
+export const ServiceCard = memo(function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envId: string; selected: boolean }) {
   const inst = svc.instance;
   const domain = inst.domains[0]?.host;
   // aven-server 자신(self 서비스)은 도메인 대신 지금 도는 서버 버전을 보여 준다.
@@ -155,7 +187,8 @@ export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envI
     <div className="relative w-[287px]" style={{ height: cardHeight(svc) }}>
       <div
         className={cx(
-          "node group pointer-events-auto relative z-10 flex h-[144px] w-[287px] translate-x-px translate-y-px cursor-pointer flex-col justify-between rounded-xl border p-6 shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700",
+          "node group pointer-events-auto relative z-10 flex h-[144px] w-[287px] translate-x-px translate-y-px cursor-pointer flex-col justify-between rounded-xl border p-6 shadow-sm transition-[border-color,box-shadow] duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700",
+          selected && "shadow-[0px_0px_0px_4px_rgba(166,_103,_228,_0.14)] dark:shadow-[0px_0px_0px_4px_rgba(166,_103,_228,_0.22)]",
           state ? NODE_STATE[state].card : "bg-white dark:bg-secondaryBg",
           selected
             ? "border-pink-400 dark:border-pink-400"
@@ -197,6 +230,7 @@ export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envI
                 className="block max-w-full truncate text-sm text-neutral-secondary hover:underline"
               >
                 {domain}
+                {inst.domains.length > 1 && <span className="ml-1 text-gray-400 no-underline">+{inst.domains.length - 1}</span>}
               </a>
             )}
             {sub && <span className="block max-w-full truncate text-sm text-neutral-secondary">{sub}</span>}
@@ -212,14 +246,17 @@ export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envI
             </div>
           ) : (
             <div className="grid min-w-0 flex-1 grid-cols-[24px_1fr] items-center gap-3">
-              {line.status === "online" ? (
+              {line.status === "online" && !inProgress ? (
                 <svg className="mx-auto" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <circle cx="8" cy="8" r="3" className="fill-green-500" />
                   <circle opacity="0.5" cx="8" cy="8" r="6.25" strokeWidth="1.5" className="stroke-green-200" />
                 </svg>
               ) : (
-                <span className="flex items-center justify-center">
-                  <StatusIcon status={line.status} className="!size-4" />
+                <span className="relative flex items-center justify-center">
+                  {inProgress && (
+                    <span aria-hidden className="absolute size-4 rounded-full bg-blue-500/40 motion-safe:animate-ping" />
+                  )}
+                  <StatusIcon status={line.status} className="relative !size-4" />
                 </span>
               )}
               <p className={cx("min-w-0 truncate whitespace-nowrap text-sm", line.since && !line.progress ? "text-gray-500" : STATUS_TEXT[tone])}>
@@ -245,6 +282,7 @@ export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envI
             </span>
           )}
         </div>
+        {inProgress && d && <DeployProgress status={d.status} label={t("{name} 배포 진행: {status}", { name: svc.name, status: STATUS_LABEL[d.status] })} />}
       </div>
       {vol && (
         <Attachment
@@ -293,4 +331,4 @@ export function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envI
       )}
     </div>
   );
-}
+});

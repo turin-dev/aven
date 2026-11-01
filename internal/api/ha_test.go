@@ -270,19 +270,23 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 		f.live(id)
 	}
 	var mu sync.Mutex
-	rootDown := false
+	rootDown, replicasStreaming := false, true
 	f.exec.reply = func(c, stdin string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
+		wal := "streaming"
+		if !replicasStreaming {
+			wal = ""
+		}
 		switch {
 		case c == "pg" && rootDown:
 			return "", errors.New("node is not available")
 		case c == "pg":
 			return "f|0/500|2|", nil
 		case c == "pg-replica-1":
-			return "t|0/400|0|streaming", nil
+			return "t|0/400|0|" + wal, nil
 		case c == "pg-replica-2":
-			return "t|0/480|0|streaming", nil
+			return "t|0/480|0|" + wal, nil
 		}
 		return "", errors.New("unexpected " + c)
 	}
@@ -296,9 +300,19 @@ func TestHAPostgresConvertFailoverRevert(t *testing.T) {
 		t.Errorf("members: %v", members)
 	}
 
-	// 주 노드가 30초(3번) 응답하지 않으면 가장 앞선 replica(pg-replica-2)를 승격한다.
+	// 제어부에서만 주 노드가 닿지 않고 replica는 아직 주 노드에서 복제 중이면(네트워크 분리) 승격하지 않는다.
 	mu.Lock()
 	rootDown = true
+	mu.Unlock()
+	for range haFailAfter {
+		f.srv.HAOnce(f.ctx)
+	}
+	if cl := f.cluster(pg.ID); cl.PrimaryServiceID != pg.ID || !strings.Contains(cl.Message, "복제 중") {
+		t.Fatalf("promoted while replicas still streamed from the primary: %+v", cl)
+	}
+	// 주 노드가 30초(3번) 응답하지 않고 replica도 끊겼으면 가장 앞선 replica(pg-replica-2)를 승격한다.
+	mu.Lock()
+	replicasStreaming = false
 	mu.Unlock()
 	before = f.dispatchedCount()
 	for range haFailAfter {

@@ -50,6 +50,8 @@ func TestEnvFileRejects(t *testing.T) {
 		{set: map[string]string{"KEEL_X": "a\nb"}},
 		{set: map[string]string{"KEEL_X": `"quoted"`}},
 		{set: map[string]string{"KEEL_X": " padded"}},
+		{set: map[string]string{"KEEL_SMTP_PASSWORD": `pa\ss`}},      // systemd는 \를 이스케이프로 읽는다
+		{set: map[string]string{"KEEL_X": `ends-with\`}, unset: nil}, // systemd는 다음 줄과 잇는다
 		{set: map[string]string{"KEEL_ADMIN_PASSWORD": "short"}},
 		{set: map[string]string{"KEEL_PUBLIC_URL": "example.com"}},
 		{unset: []string{"KEEL_ADMIN_PASSWORD"}},

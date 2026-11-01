@@ -79,7 +79,7 @@ func netLogQuery(kind string, values map[string]string, filter string) string {
 }
 
 func cmdNetLogs(c *config, kind string, args []string) {
-	fl := flag.NewFlagSet("logs", flag.ExitOnError)
+	fl := newFlagSet("logs")
 	fl.Bool("dns", false, "DNS query logs")
 	fl.Bool("network", false, "network flow logs")
 	build := fl.Bool("build", false, "")
@@ -258,7 +258,7 @@ func compactBytes(n int64) string {
 
 // cmdNetDiag: aven netdiag <host> [port] [-r replica]. 서비스의 replica 안에서 이름 해석과 TCP 연결을 시험한다.
 func cmdNetDiag(c *config, args []string) {
-	fl := flag.NewFlagSet("netdiag", flag.ExitOnError)
+	fl := newFlagSet("netdiag")
 	replica := fl.String("r", "", "replica container (default: first)")
 	fl.StringVar(replica, "replica", "", "replica container (default: first)")
 	jsonOut := fl.Bool("json", false, "print the raw JSON result")

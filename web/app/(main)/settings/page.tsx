@@ -3,12 +3,13 @@
 import { toast } from "@/lib/uiState";
 import Link from "next/link";
 import { createPortal } from "react-dom";
-import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Bell,
+  Bot,
   Braces,
   ChartColumn,
   Check,
@@ -24,6 +25,7 @@ import {
   Plug,
   Plus,
   Settings,
+  ShieldCheck,
   Trash2,
   Undo2,
   Users,
@@ -42,7 +44,8 @@ import { IACSettings } from "@/components/IACSettings";
 import { RegistriesView } from "@/components/nodes/RegistriesView";
 import { MCPSettings } from "@/components/MCPSettings";
 import { FeatureFlags } from "@/components/FeatureFlags";
-import { fmtRelative, fmtTime, parseDotenv } from "@/lib/format";
+import { fmtRelative, fmtTime } from "@/lib/format";
+import { parseEnvPairs } from "@/lib/dotenv";
 import { useCtxHref, withCtx } from "@/lib/nav";
 import { envColor, useWorkspace, type Workspace } from "@/lib/workspace";
 import { BrandIcon } from "@/components/ServiceIcon";
@@ -63,12 +66,14 @@ import {
   Segmented,
   Select,
   useConfirm,
-  SideNavLayout,
+  useEscape,
   Spinner,
   Toggle,
   cx,
 } from "@/components/ui";
 import { t, tr } from "@/lib/i18n";
+import { UnsavedChangesProvider, useUnsavedGuard } from "@/components/SettingsGuard";
+import { SettingsNav, focusHeading, type SearchEntry } from "./SettingsNav";
 import { removeStorage, writeStorage } from "@/lib/legacyStorage";
 
 type SectionId =
@@ -87,21 +92,79 @@ type SectionId =
   | "usage"
   | "danger";
 
-const NAV: { id: SectionId; label: string; icon: ReactNode }[] = [
-  { id: "general", label: t("일반"), icon: <Settings className="size-4" /> },
-  { id: "iac", label: t("코드형 인프라"), icon: <Code2 className="size-4" /> },
-  { id: "environments", label: t("환경"), icon: <Layers className="size-4" /> },
-  { id: "flags", label: t("기능 플래그"), icon: <Flag className="size-4" /> },
-  { id: "shared", label: t("공유 변수"), icon: <Braces className="size-4" /> },
-  { id: "members", label: t("멤버"), icon: <Users className="size-4" /> },
-  { id: "workspace-members", label: t("작업 공간"), icon: <UsersRound className="size-4" /> },
-  { id: "access-groups", label: t("접근 그룹"), icon: <UsersRound className="size-4" /> },
-  { id: "registries", label: t("레지스트리"), icon: <KeyRound className="size-4" /> },
-  { id: "integrations", label: t("통합"), icon: <Plug className="size-4" /> },
-  { id: "mcp", label: t("AI 도구 · MCP"), icon: <Braces className="size-4" /> },
-  { id: "notifications", label: t("알림 채널"), icon: <Bell className="size-4" /> },
-  { id: "usage", label: t("사용량 알림·한도"), icon: <ChartColumn className="size-4" /> },
-  { id: "danger", label: t("위험 구역"), icon: <AlertTriangle className="size-4" /> },
+const ICON: Record<SectionId, ReactNode> = {
+  general: <Settings className="size-4" />,
+  iac: <Code2 className="size-4" />,
+  environments: <Layers className="size-4" />,
+  flags: <Flag className="size-4" />,
+  shared: <Braces className="size-4" />,
+  members: <Users className="size-4" />,
+  "workspace-members": <UsersRound className="size-4" />,
+  "access-groups": <ShieldCheck className="size-4" />,
+  registries: <KeyRound className="size-4" />,
+  integrations: <Plug className="size-4" />,
+  mcp: <Bot className="size-4" />,
+  notifications: <Bell className="size-4" />,
+  usage: <ChartColumn className="size-4" />,
+  danger: <AlertTriangle className="size-4" />,
+};
+
+const LABEL: Record<SectionId, string> = {
+  general: t("일반"),
+  iac: t("코드형 인프라"),
+  environments: t("환경"),
+  flags: t("기능 플래그"),
+  shared: t("공유 변수"),
+  members: t("멤버"),
+  "workspace-members": t("작업 공간"),
+  "access-groups": t("접근 그룹"),
+  registries: t("레지스트리"),
+  integrations: t("통합"),
+  mcp: t("AI 도구 · MCP"),
+  notifications: t("알림 채널"),
+  usage: t("사용량 알림·한도"),
+  danger: t("위험 구역"),
+};
+
+/** Left nav groups. A null label draws a divider instead of a heading (danger zone). */
+const GROUPS: { label: string | null; ids: SectionId[] }[] = [
+  { label: t("프로젝트"), ids: ["general", "environments", "shared", "flags", "iac"] },
+  { label: t("접근"), ids: ["members", "workspace-members", "access-groups"] },
+  { label: t("통합"), ids: ["integrations", "registries", "mcp"] },
+  { label: t("알림·사용량"), ids: ["notifications", "usage"] },
+  { label: null, ids: ["danger"] },
+];
+
+/** Settings search: card titles per section (as rendered) plus English keywords so either language finds them. */
+const SEARCH: SearchEntry<SectionId>[] = [
+  { section: "general", title: t("프로젝트 정보"), keywords: `name description rename ${t("이름")} ${t("설명")}` },
+  { section: "general", title: t("프로젝트 ID"), keywords: "project id copy" },
+  { section: "general", title: t("작업 공간"), keywords: "workspace move transfer" },
+  { section: "general", title: t("GitHub 계정"), keywords: "github account clone private repository token" },
+  { section: "environments", title: t("PR 환경"), keywords: "pull request preview fork bot" },
+  { section: "environments", title: t("환경"), keywords: "environment staging production restrict rename" },
+  { section: "shared", title: t("공유 변수"), keywords: "shared variables env secret raw dotenv" },
+  { section: "flags", title: t("기능 플래그"), keywords: "feature flag toggle rollout targeting" },
+  { section: "flags", title: t("앱에서 읽기"), keywords: "sdk feature flags" },
+  { section: "iac", title: t("환경 정의"), keywords: "infrastructure as code json plan apply config" },
+  { section: "iac", title: t("CLI로 관리하기"), keywords: "cli config import plan apply" },
+  { section: "iac", title: t("Named partial 소유권"), keywords: "partial ownership" },
+  { section: "members", title: t("접근 권한"), keywords: `members invite role admin viewer people ${t("초대")} ${t("역할")}` },
+  { section: "members", title: t("그룹"), keywords: "access groups" },
+  { section: "workspace-members", title: t("자원 한도"), keywords: "resource limits cpu memory volume quota" },
+  { section: "workspace-members", title: t("작업 공간 삭제"), keywords: "delete workspace" },
+  { section: "workspace-members", title: t("멤버"), keywords: `workspace members invite role ${t("초대")} ${t("역할")}` },
+  { section: "access-groups", title: t("접근 그룹 적용"), keywords: "access groups enforce rbac" },
+  { section: "registries", title: t("레지스트리"), keywords: "docker registry credentials private image" },
+  { section: "integrations", title: t("GitHub 웹훅"), keywords: "github webhook push deploy secret" },
+  { section: "integrations", title: t("알림 웹훅"), keywords: "notify webhook discord slack" },
+  { section: "mcp", title: t("MCP 주소"), keywords: "mcp ai agent claude cursor vscode token" },
+  { section: "mcp", title: t("연결 방식"), keywords: "mcp cli http token" },
+  { section: "notifications", title: t("알림 채널"), keywords: "notification channel webhook slack discord email test" },
+  { section: "usage", title: t("사용량 알림 기준"), keywords: "usage alert threshold cpu memory egress" },
+  { section: "usage", title: t("사용량 한도"), keywords: "usage limit stop billing cap" },
+  { section: "danger", title: t("프로젝트 삭제"), keywords: "delete project remove" },
+  { section: "danger", title: t("서비스 관리"), keywords: "delete service" },
 ];
 
 const ADMIN_SECTIONS: Record<string, string> = {
@@ -130,6 +193,7 @@ function General({ ws }: { ws: Workspace }) {
   const [error, setError] = useState<unknown>(null);
   const [done, setDone] = useState(false);
   const dirty = name.trim() !== p.name || desc.trim() !== p.description;
+  useUnsavedGuard(dirty);
   return (
     <Card title={t("프로젝트 정보")}>
       <form
@@ -213,6 +277,28 @@ function ProjectWorkspaceGithub({ ws }: { ws: Workspace }) {
   const others = (ghOwners.data ?? []).filter((c) => c.user_id !== me?.id);
   const { confirm, node: confirmNode } = useConfirm();
 
+  const moveTo = async (next: string) => {
+    setMoving(true);
+    setError(null);
+    setBusy(true);
+    try {
+      await api.moveProject(p.id, next);
+      try {
+        writeStorage("aven.workspace.v1", next);
+      } catch {
+        /* ignore */
+      }
+      await qc.invalidateQueries({ queryKey: qk.projects });
+      await qc.invalidateQueries({ queryKey: qk.project(p.id) });
+      toast(t("프로젝트를 옮겼습니다."));
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+      setMoving(false);
+    }
+  };
+
   const setGithub = (userID: string | null) =>
     runGh(async () => {
       await api.setProjectGithub(p.id, userID);
@@ -255,25 +341,23 @@ function ProjectWorkspaceGithub({ ws }: { ws: Workspace }) {
                 onChange={(e) => {
                   const next = e.target.value;
                   if (next === p.workspace_id) return;
-                  setMoving(true);
-                  setError(null);
-                  setBusy(true);
-                  (async () => {
-                    try {
-                      await api.moveProject(p.id, next);
-                      writeStorage("aven.workspace.v1", next);
-                      await qc.invalidateQueries({ queryKey: qk.projects });
-                      await qc.invalidateQueries({ queryKey: qk.project(p.id) });
-                      toast(t("프로젝트를 옮겼습니다."));
-                    } catch (err) {
-                      setError(err);
-                    } finally {
-                      setBusy(false);
-                      setMoving(false);
-                    }
-                  })();
+                  const dest = movable.find((w) => w.id === next);
+                  confirm({
+                    title: t("프로젝트 옮기기"),
+                    message: t("{project} 프로젝트를 {workspace} 작업 공간으로 옮깁니다. 멤버와 접근 권한은 대상 작업 공간을 따르게 되어, 지금 이 프로젝트를 보는 사람 중 일부는 접근을 잃을 수 있습니다.", {
+                      project: p.name,
+                      workspace: dest?.name ?? next,
+                    }),
+                    confirmLabel: t("옮기기"),
+                    run: () => moveTo(next),
+                  });
                 }}
               >
+                {cur && !movable.some((w) => w.id === cur.id) && (
+                  <option value={cur.id} disabled>
+                    {cur.name}
+                  </option>
+                )}
                 {movable.map((w) => (
                   <option key={w.id} value={w.id}>
                     {w.name}
@@ -472,6 +556,7 @@ function PRToggleRow({ label, hint, checked, onChange, disabled }: { label: stri
 /** PR preview environments: one `pr-<number>` environment per GitHub pull request, forked from a base environment. */
 function PREnvironments({ ws }: { ws: Workspace }) {
   const [open, setOpen] = useState(false);
+  useEscape(() => setOpen(false), open);
   const p = ws.detail!;
   const enabled = !!p.pr_environments?.enabled;
   return (
@@ -487,9 +572,9 @@ function PREnvironments({ ws }: { ws: Workspace }) {
       {open &&
         createPortal(
           <div className="fixed inset-0 z-[10000] flex animate-modal-overlay-in items-center justify-center bg-black/[.45] p-4 dark:bg-black/80" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
-            <div role="dialog" aria-modal="true" aria-label={t("PR 환경")} className="relative max-h-[90vh] w-full max-w-[640px] animate-modal-scale-in overflow-y-auto rounded-lg bg-background p-6 dark:bg-secondaryBg">
+            <div role="dialog" aria-modal="true" aria-labelledby="pr-env-dialog-title" className="relative max-h-[90vh] w-full max-w-[640px] animate-modal-scale-in overflow-y-auto rounded-lg bg-background p-6 dark:bg-secondaryBg">
               <div className="mb-4 flex items-center">
-                <h2 className="text-xl font-semibold">{t("PR 환경")}</h2>
+                <h2 id="pr-env-dialog-title" className="text-xl font-semibold">{t("PR 환경")}</h2>
                 <IconButton label={t("닫기")} size="sm" onClick={() => setOpen(false)} className="ml-auto">
                   <X />
                 </IconButton>
@@ -515,12 +600,16 @@ function PRForm({ ws }: { ws: Workspace }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
+  // Background refetches hand us a new object with the same content; only reset the draft when the saved values change.
+  const savedKey = JSON.stringify([saved0, forks0, bots0]);
   useEffect(() => {
-    setCfg(p.pr_environments ?? PR_DEFAULTS);
-    setForks(p.pr_from_forks ?? false);
-    setBots(p.pr_from_bots ?? false);
-  }, [p.pr_environments, p.pr_from_forks, p.pr_from_bots]);
+    const [c, f, b] = JSON.parse(savedKey) as [PREnvironmentSettings, boolean, boolean];
+    setCfg(c);
+    setForks(f);
+    setBots(b);
+  }, [savedKey]);
   const dirty = JSON.stringify(cfg) !== JSON.stringify(saved0) || forks !== forks0 || bots !== bots0;
+  useUnsavedGuard(dirty);
   const standard = ws.envs.filter((e) => !isPreview(e));
   const defName = standard.find((e) => e.id === p.default_environment_id)?.name ?? t("기본 환경");
   const previews = ws.envs.filter(isPreview);
@@ -647,6 +736,7 @@ function SharedEditor({ env }: { env: Environment }) {
   const cur = draft ?? base;
   const keys = useMemo(() => [...new Set([...Object.keys(base), ...Object.keys(cur)])].sort(), [base, cur]);
   const changes = keys.filter((k) => base[k] !== cur[k]).length;
+  useUnsavedGuard(changes > 0);
 
   if (shared.isPending) return <Spinner />;
   if (shared.error) return <ErrorBox error={shared.error} />;
@@ -754,7 +844,6 @@ function SharedEditor({ env }: { env: Environment }) {
               await qc.invalidateQueries({ queryKey: qk.shared(env.id) });
               setDraft(null);
               setSaved(true);
-              toast(t("저장했습니다."));
               toast(t("저장했습니다. 이 변수를 참조하는 서비스는 다음 배포부터 새 값을 씁니다."));
             } catch (e) {
               setError(e);
@@ -778,8 +867,12 @@ function SharedEditor({ env }: { env: Environment }) {
           initial={toDotenv(cur)}
           onClose={() => setRaw(false)}
           onApply={(text) => {
-            set(Object.fromEntries(parseDotenv(text).filter(([k]) => KEY_RE.test(k))));
+            const pairs = parseEnvPairs(text);
+            const ok = pairs.filter(([k]) => KEY_RE.test(k));
+            set(Object.fromEntries(ok));
             setRaw(false);
+            if (ok.length < pairs.length)
+              toast(t("이름이 올바르지 않은 변수 {count}개는 건너뛰었습니다: {keys}", { count: pairs.length - ok.length, keys: pairs.filter(([k]) => !KEY_RE.test(k)).map(([k]) => k).slice(0, 5).join(", ") }), "warning");
           }}
         />
       )}
@@ -789,17 +882,23 @@ function SharedEditor({ env }: { env: Environment }) {
 
 function SharedEnvRow({ env, open: init }: { env: Environment; open: boolean }) {
   const [open, setOpen] = useState(init);
+  // Once opened, keep the editor mounted while collapsed so an unsaved draft survives collapsing the row.
+  const [mounted, setMounted] = useState(init);
   const shared = useSharedVariables(env.id);
   const n = Object.keys(shared.data ?? {}).length;
   return (
     <li>
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left hover:bg-gray-100/50">
+      <button type="button" onClick={() => (setOpen((o) => !o), setMounted(true))} aria-expanded={open} className="flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left hover:bg-gray-100/50">
         <ChevronRight className={cx("size-4 text-gray-500 transition-transform", open && "rotate-90")} />
         <span className="flex-1 text-base font-medium">{env.name}</span>
         <span className="text-sm tabular-nums text-gray-500">{shared.isPending ? "…" : t("변수 {count}개", { count: n })}</span>
         <Braces className="size-4 text-gray-500" />
       </button>
-      {open && <SharedEditor env={env} />}
+      {mounted && (
+        <div hidden={!open}>
+          <SharedEditor env={env} />
+        </div>
+      )}
     </li>
   );
 }
@@ -858,6 +957,7 @@ function Integrations({ ws }: { ws: Workspace }) {
   const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
   const dirty = (url.trim() || null) !== p.notify_webhook_url || [...events].sort().join() !== [...p.notify_events].sort().join();
+  useUnsavedGuard(dirty);
   return (
     <>
       <div className="space-y-8">
@@ -1007,6 +1107,23 @@ function Danger({ ws }: { ws: Workspace }) {
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteProject(p.id);
+      try {
+        removeStorage("aven.project.v1", "keel.project.v1");
+      } catch {
+        /* ignore */
+      }
+      await qc.invalidateQueries({ queryKey: qk.projects });
+      router.replace("/");
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  };
   return (
     <>
       <Card title={t("서비스 관리")}>
@@ -1030,7 +1147,7 @@ function Danger({ ws }: { ws: Workspace }) {
       <Card title={t("프로젝트 삭제")}>
         <div className="space-y-4">
           <DangerNote>{t("프로젝트를 삭제하면 모든 환경의 서비스, 컨테이너, 볼륨, 배포 기록이 영구 삭제됩니다. 되돌릴 수 없습니다.")}</DangerNote>
-          <Button variant="danger" onClick={() => setOpen(true)}>
+          <Button variant="danger" onClick={() => (setTyped(""), setError(null), setOpen(true))}>
             {t("프로젝트 삭제")}
           </Button>
         </div>
@@ -1048,39 +1165,33 @@ function Danger({ ws }: { ws: Workspace }) {
               variant="danger"
               loading={busy}
               disabled={typed !== p.name}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await api.deleteProject(p.id);
-                  removeStorage("aven.project.v1", "keel.project.v1");
-                  await qc.invalidateQueries({ queryKey: qk.projects });
-                  router.replace("/");
-                } catch (e) {
-                  setError(e);
-                  setBusy(false);
-                }
-              }}
+              onClick={remove}
             >
               {t("영구 삭제")}
             </Button>
           </>
         }
       >
-        <div className="space-y-3 pt-1">
+        <form
+          className="space-y-3 pt-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (typed === p.name && !busy) void remove();
+          }}
+        >
           <p>
             {tr("서비스 {count}개와 볼륨 데이터가 모두 지워집니다. 확인을 위해 프로젝트 이름 {name}을 입력하세요.", {
               count: p.services.length,
               name: <span className="font-mono text-foreground">{p.name}</span>,
             })}
           </p>
-          <Input mono value={typed} onChange={(e) => setTyped(e.target.value)} aria-label={t("프로젝트 이름 확인")} autoComplete="off" />
+          <Input mono autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} aria-label={t("프로젝트 이름 확인")} autoComplete="off" />
           {error ? <ErrorBox error={error} /> : null}
-        </div>
+        </form>
       </Dialog>
     </>
   );
 }
-
 /* ── page ────────────────────────────────────────────────────────────── */
 
 function SettingsInner() {
@@ -1089,12 +1200,34 @@ function SettingsInner() {
   const router = useRouter();
   const href = useCtxHref();
   const caps = useCaps(ws.detail?.id, ws.wsid);
-  const nav = NAV.filter((n) => n.id === "access-groups" ? caps.workspaceAdmin
-    : n.id === "danger" || n.id === "registries" ? caps.canAdmin : true);
+  const allowed = (id: SectionId) =>
+    id === "access-groups" ? caps.workspaceAdmin : id === "danger" || id === "registries" ? caps.canAdmin : true;
+  const groups = GROUPS.map((g) => ({ label: g.label, items: g.ids.filter(allowed).map((id) => ({ id, label: LABEL[id], icon: ICON[id], danger: id === "danger" })) })).filter(
+    (g) => g.items.length > 0,
+  );
+  const nav = groups.flatMap((g) => g.items);
   const raw = params.get("section");
   const adminSection = raw && Object.hasOwn(ADMIN_SECTIONS, raw) ? ADMIN_SECTIONS[raw] : null;
   const section: SectionId = nav.find((n) => n.id === raw)?.id ?? "general";
-  const go = (id: SectionId) => router.replace(href("/settings/", { section: id === "general" ? null : id }), { scroll: false });
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [focusTitle, setFocusTitle] = useState<{ title: string; seq: number } | null>(null);
+  const go = (id: SectionId, title?: string) => {
+    if (id !== section) router.replace(href("/settings/", { section: id === "general" ? null : id }), { scroll: false });
+    if (title) setFocusTitle((f) => ({ title, seq: (f?.seq ?? 0) + 1 }));
+  };
+
+  // After a search pick, wait for the section (and its queries) to render the card, then scroll to it.
+  useEffect(() => {
+    if (!focusTitle) return;
+    let tries = 0;
+    let timer = 0;
+    const tick = () => {
+      if (focusHeading(contentRef.current, focusTitle.title) || ++tries > 20) return setFocusTitle(null);
+      timer = window.setTimeout(tick, 100);
+    };
+    timer = window.setTimeout(tick, 0);
+    return () => window.clearTimeout(timer);
+  }, [focusTitle, section]);
 
   useEffect(() => {
     if (adminSection) router.replace(`/admin/?section=${adminSection}`);
@@ -1111,7 +1244,10 @@ function SettingsInner() {
 
   return (
     <PageShell title={t("설정")}>
-      <SideNavLayout label={t("설정 메뉴")} items={nav.map((n) => ({ ...n, danger: n.id === "danger" }))} value={section} onChange={go}>
+      <UnsavedChangesProvider
+        render={(guard) => (
+      <SettingsNav label={t("설정 메뉴")} groups={groups} index={SEARCH} value={section} onChange={(id, title) => (id === section ? go(id, title) : guard(() => go(id, title)))}>
+        <div ref={contentRef} className="contents">
             {ws.error ? (
               <ErrorBox error={ws.error} />
             ) : section === "workspace-members" ? (
@@ -1174,10 +1310,17 @@ function SettingsInner() {
                 <H2 sub={t("이벤트를 webhook(HMAC 서명), Slack, Discord, 이메일로 보냅니다. 실패하면 3번까지 다시 보내고 채널마다 최근 100개의 전달 기록을 남깁니다.")}>
                   {t("알림 채널")}
                 </H2>
-                <NotificationChannels key={ws.detail.id} pid={ws.detail.id} canEdit={caps.canAdmin} title={t("{name} 프로젝트", { name: ws.detail.name })} />
+                <PermFieldset readOnly={!caps.canAdmin} note={t("알림 채널은 프로젝트 admin만 바꿀 수 있습니다.")} className="max-w-3xl">
+                  <NotificationChannels key={ws.detail.id} pid={ws.detail.id} canEdit={caps.canAdmin} title={t("{name} 프로젝트", { name: ws.detail.name })} />
+                </PermFieldset>
               </>
             ) : section === "usage" ? (
               <>
+                {!caps.canAdmin && (
+                  <PermFieldset readOnly note={t("사용량 알림 기준과 한도는 프로젝트 admin만 바꿀 수 있습니다.")} className="max-w-3xl">
+                    {null}
+                  </PermFieldset>
+                )}
                 <UsageAlertSettings key={ws.detail.id} project={ws.detail} canEdit={caps.canAdmin} />
                 <div className="mt-8 max-w-3xl border-t border-gray-200 pt-8">
                   <UsageLimitSettings key={`limit-${ws.detail.id}`} project={ws.detail} canEdit={caps.canAdmin} />
@@ -1187,7 +1330,10 @@ function SettingsInner() {
             ) : (
               <Danger ws={ws} />
             )}
-      </SideNavLayout>
+        </div>
+      </SettingsNav>
+        )}
+      />
     </PageShell>
   );
 }

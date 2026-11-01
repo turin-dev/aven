@@ -629,8 +629,13 @@ func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
 			s.storeErr(w, err)
 			return
 		}
-		s.audit(r, "owner.tokens_revoked", u.ID, u.Email+"의 API 토큰을 모두 폐기했습니다")
-		writeJSON(w, 200, map[string]any{"ok": true})
+		ng, err := s.revokeOAuthGrants(ctx, func(x *store.User) bool { return x.ID == u.ID })
+		if err != nil {
+			s.storeErr(w, err)
+			return
+		}
+		s.audit(r, "owner.tokens_revoked", u.ID, fmt.Sprintf("%s의 API 토큰과 OAuth 앱 승인 %d개를 모두 폐기했습니다", u.Email, ng))
+		writeJSON(w, 200, map[string]any{"ok": true, "oauth_grants_revoked": ng})
 	case body.Scope == "non_owners":
 		keep, err := s.superAdminIDs(ctx)
 		if err != nil {
@@ -642,8 +647,13 @@ func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
 			s.storeErr(w, err)
 			return
 		}
-		s.audit(r, "owner.tokens_revoked", "instance", fmt.Sprintf("owner가 아닌 사용자의 API 토큰 %d개를 폐기했습니다", n))
-		writeJSON(w, 200, map[string]any{"revoked": n})
+		ng, err := s.revokeOAuthGrants(ctx, s.nonOwner)
+		if err != nil {
+			s.storeErr(w, err)
+			return
+		}
+		s.audit(r, "owner.tokens_revoked", "instance", fmt.Sprintf("owner가 아닌 사용자의 API 토큰 %d개와 OAuth 앱 승인 %d개를 폐기했습니다", n, ng))
+		writeJSON(w, 200, map[string]any{"revoked": n, "oauth_grants_revoked": ng})
 	default:
 		writeErr(w, 400, `user_id 또는 scope:"non_owners"가 필요합니다`)
 	}
@@ -697,6 +707,36 @@ func (s *Server) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"owner": target.ID, "still_owner": stillOwner})
 }
 
+// nonOwner는 일괄 폐기 대상(서버 owner, 기본 계정, KEEL_SUPERADMINS가 아닌 계정)인지다.
+func (s *Server) nonOwner(u *store.User) bool {
+	return !u.Builtin && u.Role != store.RoleOwner && !s.SuperAdmins[store.NormalizeEmail(u.Email)]
+}
+
+// revokeOAuthGrants는 match인 사용자가 OAuth 앱에 준 승인(과 그 access/refresh token)을 모두 폐기하고 개수를 돌려준다.
+func (s *Server) revokeOAuthGrants(ctx context.Context, match func(*store.User) bool) (int, error) {
+	users, err := s.Store.ListUsers(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, u := range users {
+		if !match(u) {
+			continue
+		}
+		apps, err := s.Store.ListOAuthAuthorizedApps(ctx, u.ID)
+		if err != nil {
+			return n, err
+		}
+		for _, a := range apps {
+			if err := s.Store.RevokeOAuthGrant(ctx, u.ID, a.GrantID); err != nil && !errors.Is(err, store.ErrNotFound) {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 // ---- 비상 잠금 ----
 
 // lockdown은 점검 모드(로그인 차단, 웹훅 배포 중지)를 켜고 owner가 아닌 모든 세션과 API 토큰을 끊는다.
@@ -735,9 +775,15 @@ func (s *Server) lockdown(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
+	// OAuth 앱에 준 access/refresh token도 API 자격이다. 남겨 두면 잠금 뒤에도 외부 앱이 계속 읽을 수 있다.
+	ng, err := s.revokeOAuthGrants(ctx, s.nonOwner)
+	if err != nil {
+		s.storeErr(w, err)
+		return
+	}
 	s.kickInboxStreams()
-	s.audit(r, "owner.lockdown", "instance", fmt.Sprintf("비상 잠금: 세션 %d개, API 토큰 %d개를 끊고 점검 모드를 켰습니다", ns, nt))
-	writeJSON(w, 200, map[string]any{"sessions_revoked": ns, "tokens_revoked": nt})
+	s.audit(r, "owner.lockdown", "instance", fmt.Sprintf("비상 잠금: 세션 %d개, API 토큰 %d개, OAuth 앱 승인 %d개를 끊고 점검 모드를 켰습니다", ns, nt, ng))
+	writeJSON(w, 200, map[string]any{"sessions_revoked": ns, "tokens_revoked": nt, "oauth_grants_revoked": ng})
 }
 
 // ---- aven DB 백업 ----

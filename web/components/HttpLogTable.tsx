@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useMemo } from "react";
 import Link from "next/link";
 import { ArrowDown, ArrowUp, Waypoints } from "lucide-react";
 import type { HttpLogLine } from "@/lib/api";
@@ -9,6 +9,7 @@ import { LogEmpty, makeFilter } from "./LogTable";
 import { fmtBytes } from "@/lib/format";
 import { useCtxHref } from "@/lib/nav";
 import { cx } from "./ui";
+import { useTailWindow } from "./useTailWindow";
 import { t } from "@/lib/i18n";
 
 const p2 = (n: number) => String(n).padStart(2, "0");
@@ -30,11 +31,13 @@ function fmtMs(ms: number) {
   return ms >= 10 ? `${Math.round(ms)}ms` : `${ms.toFixed(1)}ms`;
 }
 
+const ROW_H = 26;
+
 const Row = memo(function Row({ l }: { l: HttpLogLine }) {
   const href = useCtxHref();
   return (
     <div
-      className="flex min-h-[26px] items-center gap-3 px-6 font-mono text-xs hover:bg-gray-50"
+      className="flex h-[26px] items-center gap-3 overflow-hidden px-6 font-mono text-xs hover:bg-gray-50"
       title={`${l.client_ip} · ${l.user_agent}`}
     >
       <span className="w-[140px] shrink-0 tabular-nums text-neutral-secondary">{fmt(l.t)}</span>
@@ -107,19 +110,13 @@ export function HttpLogTable({
   emptyText: string;
   className?: string;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [stick, setStick] = useState(true);
   const pred = useMemo(() => makeFilter(filter), [filter]);
   const shown = useMemo(
     () => (filter.trim() ? lines.filter((l) => pred(`${l.method} ${l.status} ${l.host}${l.path} ${l.client_ip} ${l.user_agent}`)) : lines),
     [lines, pred, filter],
   );
   const errors = useMemo(() => lines.filter((l) => l.status >= 500).length, [lines]);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && stick) el.scrollTop = el.scrollHeight;
-  }, [shown, stick]);
+  const win = useTailWindow(shown.length, ROW_H);
 
   return (
     <div className={cx("relative flex min-h-0 flex-col bg-background", className)}>
@@ -142,14 +139,13 @@ export function HttpLogTable({
         )}
       </div>
       <div
-        ref={ref}
+        ref={win.ref}
         role="log"
+        aria-live="off"
+        tabIndex={0}
         data-noscroll
-        onScroll={() => {
-          const el = ref.current;
-          if (el) setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 32);
-        }}
-        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={win.onScroll}
+        className="min-h-0 flex-1 overflow-y-auto [overflow-anchor:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-pink-500/40"
       >
         {shown.length === 0 ? (
           <LogEmpty
@@ -157,17 +153,18 @@ export function HttpLogTable({
             sub={lines.length && filter.trim() ? undefined : state === "connecting" ? t("로그를 가져오는 동안 잠시 기다려 주세요.") : emptyText}
           />
         ) : (
-          shown.map((l, i) => <Row key={i} l={l} />)
+          <div style={{ paddingTop: win.padTop, paddingBottom: win.padBottom }}>
+            {shown.slice(win.first, win.end).map((l, i) => (
+              <Row key={win.first + i} l={l} />
+            ))}
+          </div>
         )}
       </div>
       <div className="absolute bottom-4 right-4 flex flex-col gap-2">
         <button
           type="button"
           aria-label={t("맨 위로")}
-          onClick={() => {
-            setStick(false);
-            ref.current?.scrollTo({ top: 0 });
-          }}
+          onClick={win.toTop}
           className="flex size-9 cursor-pointer items-center justify-center rounded-md border border-gray-200 bg-secondaryBg text-gray-600 hover:border-gray-300 hover:text-foreground"
         >
           <ArrowUp className="size-4" />
@@ -175,10 +172,10 @@ export function HttpLogTable({
         <button
           type="button"
           aria-label={t("맨 아래로")}
-          onClick={() => setStick(true)}
+          onClick={win.follow}
           className={cx(
             "flex size-9 cursor-pointer items-center justify-center rounded-md border bg-secondaryBg hover:text-foreground",
-            stick ? "border-gray-200 text-gray-600" : "border-pink-500 text-pink-600",
+            win.stick ? "border-gray-200 text-gray-600" : "border-pink-500 text-pink-600",
           )}
         >
           <ArrowDown className="size-4" />

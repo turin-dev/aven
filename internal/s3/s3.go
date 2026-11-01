@@ -28,16 +28,82 @@ type Client struct {
 	HTTP      *http.Client
 	// PartSize는 멀티파트 한 조각의 크기다(기본 8MiB, S3 최소 5MiB).
 	PartSize int
-	now      func() time.Time
+	// Retries는 일시적인 실패(연결 오류, 5xx, 429, SlowDown)를 다시 시도하는 횟수다(0이면 기본 3, 음수면 다시 시도하지 않는다).
+	// 본문을 메모리에 가진 요청만 다시 보낸다(PutObject의 스트림 본문은 다시 보내지 않는다).
+	Retries int
+	now     func() time.Time
+	backoff time.Duration // 첫 재시도 대기(기본 250ms, 테스트용)
 }
 
-const defaultPartSize = 8 << 20
+const (
+	defaultPartSize = 8 << 20
+	defaultRetries  = 3
+)
+
+// defaultHTTP는 HTTP를 지정하지 않은 클라이언트가 같이 쓴다. 전체 시간 제한은 두지 않지만(큰 객체 스트림),
+// 응답 헤더를 기다리는 시간은 제한해 멈춘 연결이 백업을 몇 시간씩 붙잡지 않게 한다.
+var defaultHTTP = func() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = 2 * time.Minute
+	return &http.Client{Transport: tr}
+}()
 
 func (c *Client) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 0}
+	return defaultHTTP
+}
+
+func (c *Client) region() string {
+	if c.Region == "" {
+		return "us-east-1" // SigV4 scope에는 region이 꼭 있어야 한다(MinIO 등은 us-east-1을 받는다)
+	}
+	return c.Region
+}
+
+func (c *Client) retries() int {
+	switch {
+	case c.Retries < 0:
+		return 0
+	case c.Retries == 0:
+		return defaultRetries
+	}
+	return c.Retries
+}
+
+// retryable은 다시 보내면 성공할 수 있는 S3 오류인지 알려준다.
+func retryable(e *Error) bool {
+	switch e.Status {
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+		http.StatusTooManyRequests:
+		return true
+	}
+	switch e.Code {
+	case "RequestTimeout", "SlowDown", "InternalError", "ServiceUnavailable", "Throttling":
+		return true
+	}
+	return false
+}
+
+// wait는 attempt번째 재시도 전에 기다린다(지수 증가, 최대 8초). ctx가 끝나면 false.
+func (c *Client) wait(ctx context.Context, attempt int) bool {
+	d := c.backoff
+	if d <= 0 {
+		d = 250 * time.Millisecond
+	}
+	d <<= attempt - 1
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func (c *Client) nowUTC() time.Time {
@@ -119,10 +185,10 @@ func (c *Client) sign(req *http.Request, payloadHash string, t time.Time) {
 	}
 	signed := strings.Join(names, ";")
 	canonical := strings.Join([]string{req.Method, req.URL.EscapedPath(), canonicalQuery(req.URL.Query()), ch.String(), signed, payloadHash}, "\n")
-	scope := date + "/" + c.Region + "/s3/aws4_request"
+	scope := date + "/" + c.region() + "/s3/aws4_request"
 	sts := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sha256Hex([]byte(canonical))
 	k := hmacSHA256([]byte("AWS4"+c.SecretKey), date)
-	k = hmacSHA256(k, c.Region)
+	k = hmacSHA256(k, c.region())
 	k = hmacSHA256(k, "s3")
 	k = hmacSHA256(k, "aws4_request")
 	sig := hex.EncodeToString(hmacSHA256(k, sts))
@@ -178,20 +244,38 @@ func parseError(resp *http.Response) error {
 	return &Error{Status: resp.StatusCode, Code: x.Code, Message: x.Message}
 }
 
+// do는 요청을 보내고, 일시적인 실패면 새로 서명해(x-amz-date) 다시 보낸다. 본문은 메모리에 있으므로 다시 보낼 수 있다.
 func (c *Client) do(ctx context.Context, method, key string, q url.Values, body []byte) (*http.Response, error) {
-	req, err := c.newReq(ctx, method, key, q, body)
-	if err != nil {
-		return nil, err
+	var last error
+	for attempt := 0; attempt <= c.retries(); attempt++ {
+		if attempt > 0 && !c.wait(ctx, attempt) {
+			return nil, last
+		}
+		req, err := c.newReq(ctx, method, key, q, body)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := c.client().Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			last = err
+			continue
+		}
+		if resp.StatusCode >= 300 {
+			perr := parseError(resp)
+			resp.Body.Close()
+			var e *Error
+			if errors.As(perr, &e) && retryable(e) {
+				last = perr
+				continue
+			}
+			return nil, perr
+		}
+		return resp, nil
 	}
-	resp, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 300 {
-		defer resp.Body.Close()
-		return nil, parseError(resp)
-	}
-	return resp, nil
+	return nil, last
 }
 
 func (c *Client) simple(ctx context.Context, method, key string, q url.Values, body []byte) (http.Header, []byte, error) {
@@ -247,6 +331,10 @@ func (c *Client) PutStream(ctx context.Context, key string, r io.Reader) (int64,
 			abort()
 			return total, perr
 		}
+		if h.Get("ETag") == "" {
+			abort()
+			return total, fmt.Errorf("s3: part %d response has no ETag", pn)
+		}
 		parts = append(parts, part{pn, h.Get("ETag")})
 		total += int64(n)
 		n, err = io.ReadFull(r, buf)
@@ -263,6 +351,10 @@ func (c *Client) PutStream(ctx context.Context, key string, r io.Reader) (int64,
 			if perr != nil {
 				abort()
 				return total, perr
+			}
+			if h.Get("ETag") == "" {
+				abort()
+				return total, fmt.Errorf("s3: part %d response has no ETag", pn)
 			}
 			parts = append(parts, part{pn, h.Get("ETag")})
 			total += int64(n)

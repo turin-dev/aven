@@ -250,7 +250,14 @@ func (m *Manager) Stop(ctx context.Context, in *store.Instance) error {
 		return ErrSelfService
 	}
 	m.cancelInstance(ctx, in.ID)
-	if err := m.Store.SetInstanceStatus(ctx, in.ID, store.InstOffline, nil); err != nil {
+	// 진행 중인 배포의 컷오버(online 전환)와 엇갈리지 않게 한다: 컷오버가 먼저면 그 컨테이너까지 아래에서 지운다.
+	unlock := m.instLock(in.ID)
+	err := m.Store.SetInstanceStatus(ctx, in.ID, store.InstOffline, nil)
+	if fresh, gerr := m.Store.GetInstance(ctx, in.ID); gerr == nil {
+		in = fresh
+	}
+	unlock()
+	if err != nil {
 		return err
 	}
 	if err := m.SyncProxy(ctx); err != nil {
@@ -598,8 +605,15 @@ func (m *Manager) reconcileNode(ctx context.Context, nodeID string) error {
 		}
 		switch role {
 		case node.RoleApp, node.RoleTCPProxy, "":
+		case node.RoleCron, node.RolePreDeploy:
+			// 보통 실행기가 끝나면 지운다. 실행 중에 aven-server가 재시작했으면(원격 노드는 그때 연결도 없다) 아무도 지우지 않는다.
+			if m.staleRunner(ctx, role, labels) {
+				m.Log.Info("reconcile: removing leftover "+role+" container", "container", name, "node", nodeID)
+				drv.Remove(ctx, name, 10)
+			}
+			continue
 		default:
-			continue // cron/predeploy/helper는 실행기가 정리한다
+			continue // helper는 실행기가 정리한다
 		}
 		if role == "" && labels[node.LabelLegacyApp] == "" {
 			continue
@@ -668,6 +682,27 @@ func (m *Manager) markCrashed(ctx context.Context, t *Target, d *store.Deploymen
 	m.Store.SetInstanceStatus(ctx, cur.ID, store.InstCrashed, nil)
 	m.Store.SetDeploymentStatus(ctx, d.ID, store.DepCrashed)
 	m.emit(events.WithDeployment(ctx, d.ID), t, "deploy.crashed", fmt.Sprintf("%s (%s) 크래시: 컨테이너 %s가 종료되었습니다 (exit %d)", t.Service.Name, t.Env.Name, container, exit))
+}
+
+// staleRunner는 cron 실행·pre-deploy 컨테이너가 더 이상 쓰이지 않는지다: cron은 그 실행 기록이 running이 아니고,
+// pre-deploy는 그 배포가 끝났거나 없다. DB를 읽지 못하면 지우지 않는다.
+func (m *Manager) staleRunner(ctx context.Context, role string, labels map[string]string) bool {
+	if role == node.RoleCron {
+		id := labels[cronRunLabel]
+		if id == "" {
+			return false
+		}
+		r, err := m.Store.GetCronRun(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			return true
+		}
+		return err == nil && r.Status != "running"
+	}
+	d, err := m.Store.GetDeployment(ctx, labels[node.LabelDeploy])
+	if errors.Is(err, store.ErrNotFound) {
+		return true
+	}
+	return err == nil && d.Status.Terminal()
 }
 
 // isOrphan은 최신 DB 상태를 다시 읽어 판단한다. 진행 중인 배포나 방금 live가 된 컨테이너를 지우지 않기 위해서다.

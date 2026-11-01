@@ -40,7 +40,7 @@ export function PasskeysSettings({ onRecoveryCodes }: { onRecoveryCodes: (codes:
 
   const add = () =>
     run(async () => {
-      const begin = await api.beginPasskeyRegistration(name.trim() || "패스키", password);
+      const begin = await api.beginPasskeyRegistration(name.trim() || t("패스키"), password);
       const credential = await createPasskey(begin.options);
       const result = await api.finishPasskeyRegistration(begin.challenge_id, credential);
       setName("");

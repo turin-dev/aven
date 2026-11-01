@@ -228,6 +228,7 @@ func upsertVariables(p graphql.ResolveParams, input map[string]any, vars map[str
 
 func newGraphQLSchema() (graphql.Schema, error) {
 	jsonScalar := newJSONScalar()
+	logType := newLogType()
 	pageInfo := graphql.NewObject(graphql.ObjectConfig{Name: "PageInfo", Fields: graphql.Fields{
 		"hasNextPage":     field(nn(graphql.Boolean)),
 		"hasPreviousPage": field(nn(graphql.Boolean)),
@@ -294,6 +295,13 @@ func newGraphQLSchema() (graphql.Schema, error) {
 			return st == "active" || st == "proxied", nil
 		}),
 		"keelStatus": from("status", optStr),
+		// verificationToken/verificationDnsHost는 소유 확인용 TXT 레코드의 값과 이름이다.
+		"verificationToken": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+			return nullIfEmpty(asMap(asMap(asMap(p.Source)["verification"])["txt"])["value"]), nil
+		}),
+		"verificationDnsHost": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+			return nullIfEmpty(asMap(asMap(asMap(p.Source)["verification"])["txt"])["name"]), nil
+		}),
 		// cdnProvider: CLOUDFLARE(프록시·터널) | null.
 		"cdnProvider": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
 			switch asString(asMap(p.Source)["proxy"]) {
@@ -354,32 +362,81 @@ func newGraphQLSchema() (graphql.Schema, error) {
 		"sizeLimitMb": field(graphql.Int),
 		"createdAt":   field(optStr),
 	}})
-	deployment := graphql.NewObject(graphql.ObjectConfig{Name: "Deployment", Fields: graphql.Fields{
-		"id":                field(nn(graphql.ID)),
-		"serviceId":         field(optStr),
-		"environmentId":     field(optStr),
-		"serviceInstanceId": field(optStr),
-		"status": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
-			return railwayDeploymentStatus(asString(asMap(p.Source)["status"])), nil
-		}),
-		"keelStatus":    from("status", optStr),
-		"trigger":       field(optStr),
-		"image":         field(optStr),
-		"branch":        field(optStr),
-		"builderUsed":   field(optStr),
-		"commitSha":     field(optStr),
-		"commitMessage": field(optStr),
-		"commitAuthor":  field(optStr),
-		"error":         field(optStr),
-		"createdAt":     field(optStr),
-		"startedAt":     field(optStr),
-		"finishedAt":    field(optStr),
-		"meta": resolved(jsonScalar, nil, func(p graphql.ResolveParams) (any, error) {
-			m := asMap(p.Source)
-			return map[string]any{"commitHash": m["commitSha"], "commitMessage": m["commitMessage"], "commitAuthor": m["commitAuthor"],
-				"branch": m["branch"], "image": m["image"], "trigger": m["trigger"]}, nil
-		}),
-	}})
+	// project/environment/service는 아래에서 만들므로 Deployment 필드는 thunk다.
+	var project, environment, service *graphql.Object
+	deployment := graphql.NewObject(graphql.ObjectConfig{Name: "Deployment", Fields: graphql.FieldsThunk(func() graphql.Fields {
+		return graphql.Fields{
+			"id":                field(nn(graphql.ID)),
+			"serviceId":         field(optStr),
+			"environmentId":     field(optStr),
+			"serviceInstanceId": field(optStr),
+			"projectId": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+				return deploymentProjectID(p)
+			}),
+			"service": resolved(service, nil, func(p graphql.ResolveParams) (any, error) {
+				pid, err := deploymentProjectID(p)
+				if err != nil {
+					return nil, err
+				}
+				return findInProject(p, pid, "services", asString(asMap(p.Source)["serviceId"]))
+			}),
+			"environment": resolved(environment, nil, func(p graphql.ResolveParams) (any, error) {
+				pid, err := deploymentProjectID(p)
+				if err != nil {
+					return nil, err
+				}
+				return findInProject(p, pid, "environments", asString(asMap(p.Source)["environmentId"]))
+			}),
+			"status": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+				return railwayDeploymentStatus(asString(asMap(p.Source)["status"])), nil
+			}),
+			"keelStatus":    from("status", optStr),
+			"trigger":       field(optStr),
+			"image":         field(optStr),
+			"branch":        field(optStr),
+			"builderUsed":   field(optStr),
+			"commitSha":     field(optStr),
+			"commitMessage": field(optStr),
+			"commitAuthor":  field(optStr),
+			"error":         field(optStr),
+			"createdAt":     field(optStr),
+			"updatedAt": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+				m := asMap(p.Source)
+				for _, k := range []string{"finishedAt", "startedAt", "createdAt"} {
+					if v := asString(m[k]); v != "" {
+						return v, nil
+					}
+				}
+				return nil, nil
+			}),
+			"startedAt":  field(optStr),
+			"finishedAt": field(optStr),
+			// staticUrl은 서비스의 첫 공개 도메인(생성 도메인 우선, scheme 없음), url은 https:// 주소다. aven에는 배포별 주소가 없다.
+			"staticUrl": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+				return deploymentHost(p)
+			}),
+			"url": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+				host, err := deploymentHost(p)
+				if host == nil || err != nil {
+					return nil, err
+				}
+				return "https://" + host.(string), nil
+			}),
+			// REST redeploy는 이미지가 있는 배포만, rollback은 그중 live까지 간 배포만 받는다.
+			"canRedeploy": resolved(nn(graphql.Boolean), nil, func(p graphql.ResolveParams) (any, error) {
+				return asString(asMap(p.Source)["image"]) != "", nil
+			}),
+			"canRollback": resolved(nn(graphql.Boolean), nil, func(p graphql.ResolveParams) (any, error) {
+				m := asMap(p.Source)
+				return asString(m["image"]) != "" && store.DeployStatus(asString(m["status"])).Succeeded(), nil
+			}),
+			"meta": resolved(jsonScalar, nil, func(p graphql.ResolveParams) (any, error) {
+				m := asMap(p.Source)
+				return map[string]any{"commitHash": m["commitSha"], "commitMessage": m["commitMessage"], "commitAuthor": m["commitAuthor"],
+					"branch": m["branch"], "image": m["image"], "trigger": m["trigger"]}, nil
+			}),
+		}
+	})})
 	volumeConnection := connection("Volume", volume, pageInfo)
 	deploymentConnection := connection("Deployment", deployment, pageInfo)
 
@@ -389,9 +446,14 @@ func newGraphQLSchema() (graphql.Schema, error) {
 		"repo":  from("repoUrl", optStr),
 	}})
 	instance := graphql.NewObject(graphql.ObjectConfig{Name: "ServiceInstance", Fields: graphql.Fields{
-		"id":                 field(nn(graphql.ID)),
-		"serviceId":          field(optStr),
-		"environmentId":      field(optStr),
+		"id":            field(nn(graphql.ID)),
+		"serviceId":     field(optStr),
+		"environmentId": field(optStr),
+		"serviceName": resolved(optStr, nil, func(p graphql.ResolveParams) (any, error) {
+			return instanceServiceName(p)
+		}),
+		// region은 Railway 호환용이다. aven에는 지역이 없고 노드 배치는 placement 설정으로 정한다.
+		"region":             resolved(optStr, nil, func(graphql.ResolveParams) (any, error) { return nil, nil }),
 		"status":             field(optStr),
 		"source":             resolved(serviceSource, nil, func(p graphql.ResolveParams) (any, error) { return p.Source, nil }),
 		"branch":             field(optStr),
@@ -452,7 +514,6 @@ func newGraphQLSchema() (graphql.Schema, error) {
 	instanceConnection := connection("ServiceInstance", instance, pageInfo)
 
 	// ---- 프로젝트 / 환경 / 서비스 (서로 참조하므로 thunk) ----
-	var project, environment, service *graphql.Object
 	var projectConnection, environmentConnection, serviceConnection *graphql.Object
 	service = graphql.NewObject(graphql.ObjectConfig{Name: "Service", Fields: graphql.FieldsThunk(func() graphql.Fields {
 		return graphql.Fields{
@@ -528,10 +589,12 @@ func newGraphQLSchema() (graphql.Schema, error) {
 	})})
 	project = graphql.NewObject(graphql.ObjectConfig{Name: "Project", Fields: graphql.FieldsThunk(func() graphql.Fields {
 		return graphql.Fields{
-			"id":                   field(nn(graphql.ID)),
-			"name":                 field(optStr),
-			"description":          field(optStr),
-			"createdAt":            field(optStr),
+			"id":          field(nn(graphql.ID)),
+			"name":        field(optStr),
+			"description": field(optStr),
+			"createdAt":   field(optStr),
+			// updatedAt은 Railway 호환용이다(aven은 프로젝트 수정 시각을 저장하지 않아 null).
+			"updatedAt":            resolved(optStr, nil, func(graphql.ResolveParams) (any, error) { return nil, nil }),
 			"defaultEnvironmentId": field(optStr),
 			"environments": resolved(nn(environmentConnection), connectionArgs(nil), func(p graphql.ResolveParams) (any, error) {
 				d, err := projectDetail(p, asMap(p.Source))
@@ -639,7 +702,8 @@ func newGraphQLSchema() (graphql.Schema, error) {
 		}),
 		"deployments": resolved(nn(deploymentConnection), connectionArgs(args("input", nn(inputObject("DeploymentListInput",
 			"projectId", optStr, "serviceId", reqStr, "environmentId", optStr,
-			"status", inputObject("DeploymentStatusInput", "successfulOnly", graphql.Boolean),
+			"status", inputObject("DeploymentListStatusInput", "successfulOnly", graphql.Boolean, "in", graphql.NewList(reqStr), "notIn", graphql.NewList(reqStr)),
+			"includeDeleted", graphql.Boolean,
 		)))), func(p graphql.ResolveParams) (any, error) {
 			in := asMap(p.Args["input"])
 			eid := asString(in["environmentId"])
@@ -658,21 +722,14 @@ func newGraphQLSchema() (graphql.Schema, error) {
 			if err != nil {
 				return nil, err
 			}
-			items := asList(v)
-			if asMap(in["status"])["successfulOnly"] == true {
-				kept := []any{}
-				for _, d := range items {
-					if asString(asMap(d)["status"]) == "live" {
-						kept = append(kept, d)
-					}
-				}
-				items = kept
-			}
-			return paginate(items, p.Args)
+			return paginate(filterDeployments(asList(v), asMap(in["status"])), p.Args)
 		}),
 		"deployment": resolved(deployment, args("id", reqStr), func(p graphql.ResolveParams) (any, error) {
 			return rest(p, http.MethodGet, "/api/deployments/"+esc(p.Args["id"]), nil)
 		}),
+		// buildLogs/deploymentLogs는 한 번에 읽은 스냅샷이다(구독 없음). limit 기본 500, 최대 5000.
+		"buildLogs":      resolved(nn(list(logType)), logArgs(), resolveLogs(true)),
+		"deploymentLogs": resolved(nn(list(logType)), logArgs(), resolveLogs(false)),
 		// variables는 기본으로 참조를 푼 값이다(unrendered: true면 ${{...}} 그대로). serviceId가 없으면 환경 공유 변수다.
 		"variables": resolved(nn(jsonScalar), args("projectId", optStr, "environmentId", reqStr, "serviceId", optStr, "unrendered", graphql.Boolean), func(p graphql.ResolveParams) (any, error) {
 			sid, eid := p.Args["serviceId"], p.Args["environmentId"]
@@ -707,18 +764,15 @@ func newGraphQLSchema() (graphql.Schema, error) {
 	// ---- mutations ----
 	idArgs := args("id", reqStr)
 	mutation := graphql.NewObject(graphql.ObjectConfig{Name: "Mutation", Fields: graphql.Fields{
+		// isPublic은 Railway 호환용으로 받고 무시한다(aven 프로젝트는 공개되지 않는다).
 		"projectCreate": resolved(project, args("input", nn(inputObject("ProjectCreateInput",
-			"name", optStr, "description", optStr, "workspaceId", optStr,
+			"name", optStr, "description", optStr, "workspaceId", optStr, "isPublic", graphql.Boolean, "prDeploys", graphql.Boolean,
+			"defaultEnvironmentName", optStr, "repo", inputObject("ProjectCreateRepo", "fullRepoName", reqStr, "branch", reqStr),
 		))), func(p graphql.ResolveParams) (any, error) {
-			in := asMap(p.Args["input"])
-			body := map[string]any{"name": in["name"], "description": in["description"], "workspace_id": in["workspaceId"]}
-			if asString(in["name"]) == "" {
-				body["name"] = "new-project"
-			}
-			return rest(p, http.MethodPost, "/api/projects", body)
+			return createProject(p, asMap(p.Args["input"]))
 		}),
 		"projectUpdate": resolved(project, args("id", reqStr, "input", nn(inputObject("ProjectUpdateInput",
-			"name", optStr, "description", optStr, "defaultEnvironmentId", optStr,
+			"name", optStr, "description", optStr, "defaultEnvironmentId", optStr, "isPublic", graphql.Boolean, "prDeploys", graphql.Boolean,
 		))), func(p graphql.ResolveParams) (any, error) {
 			in := asMap(p.Args["input"])
 			body := map[string]any{}
@@ -726,6 +780,9 @@ func newGraphQLSchema() (graphql.Schema, error) {
 				if v, ok := in[k]; ok {
 					body[key] = v
 				}
+			}
+			if v, ok := in["prDeploys"].(bool); ok {
+				body["pr_environments"] = map[string]any{"enabled": v}
 			}
 			return rest(p, http.MethodPatch, "/api/projects/"+esc(p.Args["id"]), body)
 		}),
@@ -784,6 +841,11 @@ func newGraphQLSchema() (graphql.Schema, error) {
 			return rest(p, http.MethodPatch, "/api/services/"+esc(p.Args["id"]), p.Args["input"])
 		}),
 		"serviceDelete": resolved(nn(graphql.Boolean), args("id", reqStr, "environmentId", optStr), func(p graphql.ResolveParams) (any, error) {
+			// Railway는 environmentId로 한 환경에서만 지울 수 있지만 aven 서비스 삭제는 모든 환경에서 일어난다.
+			// 조용히 전체를 지우지 않도록 거부한다.
+			if asString(p.Args["environmentId"]) != "" {
+				return nil, gqlErr(http.StatusBadRequest, "aven deletes a service in every environment; call serviceDelete without environmentId to delete it everywhere")
+			}
 			return restOK(p, http.MethodDelete, "/api/services/"+esc(p.Args["id"]), nil)
 		}),
 		"serviceInstanceUpdate": resolved(nn(graphql.Boolean), args("serviceId", reqStr, "environmentId", reqStr, "input", nn(inputObject("ServiceInstanceUpdateInput",
@@ -792,14 +854,22 @@ func newGraphQLSchema() (graphql.Schema, error) {
 			"restartPolicyMaxRetries", graphql.Int, "cronSchedule", optStr, "sleepApplication", graphql.Boolean,
 			"dockerfilePath", optStr, "watchPatterns", graphql.NewList(reqStr), "branch", optStr, "autoDeploy", graphql.Boolean,
 			"port", graphql.Int, "source", inputObject("ServiceSourceUpdateInput", "repo", optStr, "image", optStr),
-			"ipv6EgressEnabled", graphql.Boolean,
+			"ipv6EgressEnabled", graphql.Boolean, "buildCommand", optStr, "region", optStr,
 		))), func(p graphql.ResolveParams) (any, error) {
-			return restOK(p, http.MethodPatch, instancePath(p.Args["serviceId"], p.Args["environmentId"]), instancePatch(asMap(p.Args["input"])))
+			in := asMap(p.Args["input"])
+			if _, ok := in["buildCommand"]; ok {
+				return nil, gqlErr(http.StatusBadRequest, "buildCommand is read from the service's config file (build.buildCommand in railway.json or aven.json); it cannot be set through the API")
+			}
+			return restOK(p, http.MethodPatch, instancePath(p.Args["serviceId"], p.Args["environmentId"]), instancePatch(in))
 		}),
 		"serviceInstanceDeploy": resolved(nn(graphql.Boolean), args("serviceId", reqStr, "environmentId", reqStr, "latestCommit", graphql.Boolean), func(p graphql.ResolveParams) (any, error) {
 			return restOK(p, http.MethodPost, instancePath(p.Args["serviceId"], p.Args["environmentId"])+"/deploy", map[string]any{})
 		}),
 		"serviceInstanceDeployV2": resolved(nn(graphql.String), args("serviceId", reqStr, "environmentId", reqStr, "commitSha", optStr), func(p graphql.ResolveParams) (any, error) {
+			// aven은 브랜치의 최신 커밋을 빌드한다. 다른 커밋을 배포한 것처럼 보이지 않게 commitSha는 거부한다.
+			if asString(p.Args["commitSha"]) != "" {
+				return nil, gqlErr(http.StatusBadRequest, "commitSha is not supported: aven deploys the latest commit of the service branch")
+			}
 			v, err := rest(p, http.MethodPost, instancePath(p.Args["serviceId"], p.Args["environmentId"])+"/deploy", map[string]any{})
 			if err != nil {
 				return nil, err
@@ -819,7 +889,15 @@ func newGraphQLSchema() (graphql.Schema, error) {
 			return restOK(p, http.MethodPost, "/api/deployments/"+esc(asMap(l[0])["id"])+"/redeploy", map[string]any{})
 		}),
 
-		"deploymentRedeploy": resolved(deployment, idArgs, func(p graphql.ResolveParams) (any, error) {
+		"environmentTriggersDeploy": resolved(nn(graphql.Boolean), args("input", nn(inputObject("EnvironmentTriggersDeployInput",
+			"environmentId", reqStr, "projectId", optStr, "serviceId", reqStr,
+		))), func(p graphql.ResolveParams) (any, error) {
+			in := asMap(p.Args["input"])
+			return restOK(p, http.MethodPost, instancePath(in["serviceId"], in["environmentId"])+"/deploy", map[string]any{})
+		}),
+
+		// usePreviousImageTag는 Railway 호환용이다. aven redeploy는 항상 그 배포의 이미지를 다시 쓴다.
+		"deploymentRedeploy": resolved(deployment, args("id", reqStr, "usePreviousImageTag", graphql.Boolean), func(p graphql.ResolveParams) (any, error) {
 			return rest(p, http.MethodPost, "/api/deployments/"+esc(p.Args["id"])+"/redeploy", map[string]any{})
 		}),
 		"deploymentRollback": resolved(deployment, idArgs, func(p graphql.ResolveParams) (any, error) {
@@ -837,6 +915,7 @@ func newGraphQLSchema() (graphql.Schema, error) {
 
 		"environmentCreate": resolved(environment, args("input", nn(inputObject("EnvironmentCreateInput",
 			"projectId", reqStr, "name", reqStr, "sourceEnvironmentId", optStr, "ephemeral", graphql.Boolean, "skipInitialDeploys", graphql.Boolean,
+			"stageInitialChanges", graphql.Boolean,
 		))), func(p graphql.ResolveParams) (any, error) {
 			in := asMap(p.Args["input"])
 			body := map[string]any{"name": in["name"]}
@@ -927,6 +1006,7 @@ func newGraphQLSchema() (graphql.Schema, error) {
 
 		"volumeCreate": resolved(volume, args("input", nn(inputObject("VolumeCreateInput",
 			"projectId", reqStr, "serviceId", reqStr, "mountPath", reqStr, "environmentId", optStr, "name", optStr, "sizeLimitMb", graphql.Int,
+			"region", optStr,
 		))), func(p graphql.ResolveParams) (any, error) {
 			in := asMap(p.Args["input"])
 			eid := asString(in["environmentId"])
@@ -1077,4 +1157,132 @@ func deploymentInstanceAction(p graphql.ResolveParams, action string) (any, erro
 	}
 	d := asMap(v)
 	return restOK(p, http.MethodPost, instancePath(d["serviceId"], d["environmentId"])+"/"+action, map[string]any{})
+}
+
+// nullIfEmpty는 빈 문자열(또는 문자열이 아닌 값)을 GraphQL null로 바꾼다.
+func nullIfEmpty(v any) any {
+	if asString(v) == "" {
+		return nil
+	}
+	return v
+}
+
+// createProject는 projectCreate다. prDeploys, defaultEnvironmentName, repo는 만든 뒤 REST로 이어서 적용한다.
+func createProject(p graphql.ResolveParams, in map[string]any) (any, error) {
+	body := map[string]any{"name": in["name"], "description": in["description"], "workspace_id": in["workspaceId"]}
+	if asString(in["name"]) == "" {
+		body["name"] = "new-project"
+	}
+	v, err := rest(p, http.MethodPost, "/api/projects", body)
+	if err != nil {
+		return nil, err
+	}
+	proj := asMap(v)
+	pid := proj["id"]
+	changed := false
+	if on, ok := in["prDeploys"].(bool); ok && on {
+		if _, err := rest(p, http.MethodPatch, "/api/projects/"+esc(pid), map[string]any{"pr_environments": map[string]any{"enabled": true}}); err != nil {
+			return nil, err
+		}
+		changed = true
+	}
+	if name := strings.TrimSpace(asString(in["defaultEnvironmentName"])); name != "" {
+		if _, err := rest(p, http.MethodPatch, "/api/environments/"+esc(proj["defaultEnvironmentId"]), map[string]any{"name": name}); err != nil {
+			return nil, err
+		}
+		changed = true
+	}
+	if repo := asMap(in["repo"]); repo != nil {
+		// 서비스 이름은 REST가 저장소 이름에서 만든다.
+		svc := map[string]any{"source_type": "repo", "repo_url": repoURL(repo["fullRepoName"]), "branch": repo["branch"]}
+		if _, err := rest(p, http.MethodPost, "/api/projects/"+esc(pid)+"/services", svc); err != nil {
+			return nil, err
+		}
+		changed = true
+	}
+	if !changed {
+		return proj, nil
+	}
+	return rest(p, http.MethodGet, "/api/projects/"+esc(pid), nil)
+}
+
+// filterDeployments는 DeploymentListInput.status(successfulOnly, in, notIn)를 적용한다. in/notIn은 Railway 상태 이름이다.
+func filterDeployments(items []any, st map[string]any) []any {
+	if st == nil {
+		return items
+	}
+	set := func(key string) map[string]bool {
+		l, ok := st[key].([]any)
+		if !ok {
+			return nil
+		}
+		m := map[string]bool{}
+		for _, v := range l {
+			m[strings.ToUpper(asString(v))] = true
+		}
+		return m
+	}
+	in, notIn := set("in"), set("notIn")
+	kept := []any{}
+	for _, d := range items {
+		raw := asString(asMap(d)["status"])
+		name := railwayDeploymentStatus(raw)
+		switch {
+		case st["successfulOnly"] == true && raw != string(store.DepLive):
+		case in != nil && !in[name]:
+		case notIn != nil && notIn[name]:
+		default:
+			kept = append(kept, d)
+		}
+	}
+	return kept
+}
+
+// deploymentProjectID는 배포가 속한 프로젝트 id다. 배포는 이미 REST로 읽었으므로(권한 확인) 저장소에서 환경만 찾는다.
+func deploymentProjectID(p graphql.ResolveParams) (string, error) {
+	eid := asString(asMap(p.Source)["environmentId"])
+	return ownerProject(p, func(st *store.Store) (string, error) {
+		env, err := st.GetEnvironment(p.Context, eid)
+		if err != nil {
+			return "", err
+		}
+		return env.ProjectID, nil
+	})
+}
+
+// deploymentHost는 배포가 속한 인스턴스의 첫 공개 도메인이다(생성 도메인 우선). 요청 안에서 인스턴스마다 한 번만 읽는다.
+func deploymentHost(p graphql.ResolveParams) (any, error) {
+	m := asMap(p.Source)
+	in, err := cachedInstance(p, asString(m["serviceId"]), asString(m["environmentId"]))
+	if err != nil {
+		if skippable(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var custom string
+	for _, d := range asList(in["domains"]) {
+		dm := asMap(d)
+		host := asString(dm["host"])
+		if asString(dm["kind"]) != "custom" {
+			return host, nil
+		}
+		if custom == "" {
+			custom = host
+		}
+	}
+	return nullIfEmpty(custom), nil
+}
+
+// instanceServiceName은 인스턴스의 서비스 이름이다. 인스턴스는 이미 REST로 읽었다.
+func instanceServiceName(p graphql.ResolveParams) (any, error) {
+	exec, ok := p.Context.Value(graphQLContextKey{}).(*graphQLExecution)
+	if !ok || exec.store == nil {
+		return nil, nil
+	}
+	svc, err := exec.store.GetService(p.Context, asString(asMap(p.Source)["serviceId"]))
+	if err != nil {
+		return nil, nil
+	}
+	return svc.Name, nil
 }

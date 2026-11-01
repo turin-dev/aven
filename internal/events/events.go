@@ -40,10 +40,21 @@ type Bus struct {
 
 	mu   sync.Mutex
 	subs map[chan *store.Event]string // ch → projectID
+
+	// dispatchSlots는 동시에 도는 Notifier.Dispatch 수를 묶는다(이벤트가 몰려도 webhook 요청이 한꺼번에 나가지 않는다).
+	slotsOnce     sync.Once
+	dispatchSlots chan struct{}
+	dispatchWG    sync.WaitGroup
 }
 
+// MaxConcurrentDispatch는 동시에 처리하는 알림 Dispatch 수다. 나머지는 차례를 기다린다(Emit은 막히지 않는다).
+const MaxConcurrentDispatch = 16
+
+// subscriberBuffer는 구독자 채널 크기다. 다 차면(느린 SSE 클라이언트) 그 구독자에게 가는 이벤트는 버린다.
+const subscriberBuffer = 64
+
 func (b *Bus) Subscribe(projectID string) (chan *store.Event, func()) {
-	ch := make(chan *store.Event, 64)
+	ch := make(chan *store.Event, subscriberBuffer)
 	b.mu.Lock()
 	if b.subs == nil {
 		b.subs = map[chan *store.Event]string{}
@@ -118,9 +129,23 @@ func (b *Bus) EmitNamed(ctx context.Context, projectID string, envID, serviceID,
 	}
 	b.mu.Unlock()
 	if b.Notifier != nil {
-		go b.Notifier.Dispatch(e)
+		b.dispatch(e)
 	}
 }
+
+func (b *Bus) dispatch(e *store.Event) {
+	b.slotsOnce.Do(func() { b.dispatchSlots = make(chan struct{}, MaxConcurrentDispatch) })
+	b.dispatchWG.Add(1)
+	go func() {
+		defer b.dispatchWG.Done()
+		b.dispatchSlots <- struct{}{}
+		defer func() { <-b.dispatchSlots }()
+		b.Notifier.Dispatch(e)
+	}()
+}
+
+// Wait는 진행 중이거나 기다리는 알림 Dispatch가 모두 끝날 때까지 기다린다(종료와 테스트용).
+func (b *Bus) Wait() { b.dispatchWG.Wait() }
 
 // Payload는 Discord({content})와 Slack({text}) 양쪽에서 읽히도록 두 키를 모두 넣는다(예전 프로젝트 webhook 형식).
 func Payload(projectName, kind, message string) []byte {

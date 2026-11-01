@@ -105,6 +105,9 @@ type Handler struct {
 	execs        execSessions
 	link         upState
 
+	wakeMu sync.Mutex
+	wakes  map[string]*wakeFlight // host → 진행 중인 wake 요청(같은 host의 동시 요청은 하나로 묶는다)
+
 	hostsMu sync.Mutex
 	hosts   map[string]bool // 마지막으로 적용한 proxy 라우트의 호스트 → on-demand TLS 허가 여부(Route.Unverified면 false)
 
@@ -270,7 +273,19 @@ func checkRepo(repo string) error {
 		return errors.New("repository URL is not allowed")
 	}
 	for _, p := range []string{"https://", "http://", "ssh://", "git@"} {
-		if strings.HasPrefix(repo, p) {
+		if rest, ok := strings.CutPrefix(repo, p); ok {
+			// ssh에서 '-'로 시작하는 host는 ssh 옵션으로 읽힐 수 있다(CVE-2017-1000117 꼴: ssh://-oProxyCommand=...).
+			// 최근 git도 막지만 노드의 git 버전에 기대지 않는다.
+			host := rest
+			if p != "git@" {
+				host, _, _ = strings.Cut(host, "/")
+				if _, h, ok := strings.Cut(host, "@"); ok {
+					host = h
+				}
+			}
+			if host == "" || strings.HasPrefix(host, "-") || strings.HasPrefix(host, "[-") {
+				return errors.New("repository URL is not allowed")
+			}
 			return nil
 		}
 	}
@@ -1049,13 +1064,28 @@ func (h *Handler) Serve(ctx context.Context, read func(context.Context) ([]byte,
 			}
 			continue
 		}
-		if req.ID == "" {
+		if req.ID == "" || len(req.ID) > agentprotocol.MaxIDBytes {
+			continue
+		}
+		// 바로 답하는 오류는 읽기 루프에서 보내므로 제한 시간을 둔다(쓰기가 막혀도 읽기 루프가 영원히 서지 않게).
+		refuse := func(msg string) {
+			wctx, c := context.WithTimeout(ctx, 10*time.Second)
+			write(wctx, agentprotocol.Message{ID: req.ID, Operation: req.Operation, Error: msg})
+			c()
+		}
+		mu.Lock()
+		_, dup := cancels[req.ID]
+		mu.Unlock()
+		if dup {
+			// 같은 id가 아직 처리 중이면 받지 않는다. 받으면 cancel 함수가 덮여 첫 요청은 취소할 수 없게 되고,
+			// 먼저 끝난 쪽이 다른 쪽의 cancel을 지운다.
+			refuse("duplicate request id")
 			continue
 		}
 		select {
 		case sem <- struct{}{}:
 		default:
-			write(ctx, agentprotocol.Message{ID: req.ID, Operation: req.Operation, Error: "agent is busy"})
+			refuse("agent is busy")
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, opTimeout(req.Operation))

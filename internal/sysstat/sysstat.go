@@ -55,24 +55,56 @@ func ParseCPU(stat string) (idle, total uint64, ok bool) {
 }
 
 // ParseMem은 /proc/meminfo에서 (total, available) bytes를 읽는다.
+// MemAvailable이 없는 오래된 커널(3.14 미만)에서는 MemFree + Buffers + Cached로 어림한다(그대로 두면 사용률이 100%로 보인다).
 func ParseMem(info string) (total, avail uint64) {
+	var free, buffers, cached uint64
+	haveAvail := false
 	for _, line := range strings.Split(info, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {
 			continue
 		}
 		kib, err := strconv.ParseUint(f[1], 10, 64)
-		if err != nil {
+		if err != nil || kib > 1<<50 { // 1 EiB 넘는 값은 깨진 입력이다(곱하다 넘치지 않게)
 			continue
 		}
 		switch f[0] {
 		case "MemTotal:":
 			total = kib * 1024
 		case "MemAvailable:":
-			avail = kib * 1024
+			avail, haveAvail = kib*1024, true
+		case "MemFree:":
+			free = kib * 1024
+		case "Buffers:":
+			buffers = kib * 1024
+		case "Cached:":
+			cached = kib * 1024
 		}
 	}
+	if !haveAvail {
+		avail = free + buffers + cached
+	}
+	if avail > total {
+		avail = total
+	}
 	return
+}
+
+// CPUPercent는 두 /proc/stat 표본 사이의 사용률(0..100)이다. 카운터가 줄면(iowait는 커널에서 줄 수 있다,
+// 재부팅·컨테이너 이동) 0으로 본다. 부호 없는 뺄셈이 넘쳐 사용률이 100%로 튀지 않게 한다.
+func CPUPercent(prevIdle, prevTotal, idle, total uint64) float64 {
+	if total <= prevTotal {
+		return 0
+	}
+	dTotal := total - prevTotal
+	var dIdle uint64
+	if idle > prevIdle {
+		dIdle = idle - prevIdle
+	}
+	if dIdle >= dTotal {
+		return 0
+	}
+	return 100 * float64(dTotal-dIdle) / float64(dTotal)
 }
 
 // Sample은 CPU 사용률을 지난 호출 이후 구간으로 계산한다(첫 호출은 부팅 이후 평균).
@@ -85,16 +117,7 @@ func (s *Sampler) Sample(dataDir string) Sample {
 			if s.init {
 				prevIdle, prevTotal = s.idle, s.total
 			}
-			if total > prevTotal {
-				busy := float64((total - prevTotal) - (idle - prevIdle))
-				r.CPUPercent = 100 * busy / float64(total-prevTotal)
-				if r.CPUPercent < 0 {
-					r.CPUPercent = 0
-				}
-				if r.CPUPercent > 100 {
-					r.CPUPercent = 100
-				}
-			}
+			r.CPUPercent = CPUPercent(prevIdle, prevTotal, idle, total)
 			s.idle, s.total, s.init = idle, total, true
 		}
 	}

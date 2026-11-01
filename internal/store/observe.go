@@ -473,10 +473,9 @@ func (s *Store) QueryUsage(ctx context.Context, projectID string, from, to int64
 	return out, rows.Err()
 }
 
-// PruneUsage는 before보다 오래된 집계와 지워진 프로젝트의 집계를 지운다.
+// PruneUsage는 before보다 오래된 집계와 지워진 프로젝트의 집계를 지운다(프로젝트마다 (project_id, hour) 인덱스로 지운다).
 func (s *Store) PruneUsage(ctx context.Context, before int64) error {
-	_, err := s.q.ExecContext(ctx, `DELETE FROM usage_hourly WHERE hour < ? OR project_id NOT IN (SELECT id FROM projects)`, before)
-	return err
+	return s.pruneSeries(ctx, "usage_hourly", "project_id", "hour", "projects", before)
 }
 
 // UsageAlertState는 프로젝트의 이번 달 사용량 알림 기록이다(항목 → 이미 알린 최고 비율 80|100).

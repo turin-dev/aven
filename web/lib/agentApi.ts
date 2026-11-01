@@ -2,6 +2,7 @@
 
 import { ApiError, type ID } from "./api";
 import { t } from "./i18n";
+import { createSSEParser } from "./sseParse";
 
 /** endpoint/key_hint are only filled in for workspace admins. */
 export type AgentSettings = { endpoint: string; model: string; key_set: boolean; key_hint?: string; configured: boolean };
@@ -67,35 +68,30 @@ async function stream(path: string, body: unknown, onEvent: (e: AgentStreamEvent
   if (!res.body) throw new Error(t("스트림 응답을 읽을 수 없습니다."));
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
-  let name = "message";
-  let data: string[] = [];
-  const dispatch = () => {
-    if (data.length) {
-      try {
-        onEvent({ event: name, data: JSON.parse(data.join("\n")) } as AgentStreamEvent);
-      } catch {
-        /* skip malformed events */
+  const parser = createSSEParser((m) => {
+    let data: unknown;
+    try {
+      data = JSON.parse(m.data);
+    } catch {
+      return; // skip malformed events
+    }
+    onEvent({ event: m.event, data } as AgentStreamEvent);
+  });
+  // Stop reading as soon as the caller aborts, even if the server keeps the connection open.
+  const onAbort = () => void reader.cancel().catch(() => undefined);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) {
+        parser.push(decoder.decode());
+        parser.end();
+        return;
       }
+      parser.push(decoder.decode(value, { stream: true }));
     }
-    name = "message";
-    data = [];
-  };
-  for (;;) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (line === "") dispatch();
-      else if (line.startsWith("event: ")) name = line.slice(7);
-      else if (line.startsWith("data: ")) data.push(line.slice(6));
-    }
-    if (done) {
-      if (buffer.startsWith("data: ")) data.push(buffer.slice(6));
-      dispatch();
-      return;
-    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 

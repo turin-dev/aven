@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, MoreVertical, Save, Undo2 } from "lucide-react";
 import { api, type CanvasService, type ServiceInstance } from "@/lib/api";
 import { cronError } from "@/lib/cron";
-import { clearStaged, pendingSummary, toPatch, useStagedEnv, type Staged } from "@/lib/staged";
+import { clearSentStaged, clearStaged, pendingSummary, toPatch, useStagedEnv, type Staged } from "@/lib/staged";
 import { qk, useNodes } from "@/lib/queries";
 import { useCanvasState } from "@/lib/nav";
 import { toast } from "@/lib/uiState";
@@ -151,7 +151,9 @@ export function StagedBar({
   const { confirm, node: confirmNode } = useConfirm();
   const [busy, setBusy] = useState<"save" | "apply" | null>(null);
   const [details, setDetails] = useState(false);
-  const [errors, setErrors] = useState<{ name: string; error: unknown }[]>([]);
+  const [errors, setErrors] = useState<{ id: string; name: string; error: unknown }[]>([]);
+  // Guards against a second Shift+Enter before the first run's state update lands.
+  const running = useRef(false);
   const nodeName = (id: unknown) => nodes.data?.find((n) => n.id === id)?.name ?? String(id);
 
   const items: Item[] = [];
@@ -170,9 +172,10 @@ export function StagedBar({
   const blocked = problems.length > 0;
 
   const run = async (deploy: boolean) => {
-    if (busy || blocked || !canEdit) return;
+    if (running.current || busy || blocked || !canEdit) return;
     const targets = deploy ? items : items.filter((it) => it.hasLocal);
     if (!targets.length) return;
+    running.current = true;
     setBusy(deploy ? "apply" : "save");
     setErrors([]);
     const results = await Promise.allSettled(
@@ -181,7 +184,7 @@ export function StagedBar({
           if (hasLocal) {
             const next = await api.updateInstance(svc.id, envId, toPatch(staged), deploy);
             qc.setQueryData(qk.instance(svc.id, envId), next);
-            clearStaged(svc.id, envId);
+            clearSentStaged(svc.id, envId, staged);
           } else {
             await api.deploy(svc.id, envId);
           }
@@ -194,9 +197,12 @@ export function StagedBar({
     );
     qc.invalidateQueries({ queryKey: qk.canvas(envId) });
     qc.invalidateQueries({ queryKey: ["events"] });
-    const failed = results.flatMap((r, i) => (r.status === "rejected" ? [{ name: targets[i].svc.name, error: r.reason as unknown }] : []));
+    const failed = results.flatMap((r, i) =>
+      r.status === "rejected" ? [{ id: targets[i].svc.id, name: targets[i].svc.name, error: r.reason as unknown }] : [],
+    );
     setErrors(failed);
     setBusy(null);
+    running.current = false;
     const ok = targets.length - failed.length;
     if (ok > 0) {
       toast(deploy ? t("서비스 {count}개에 배포를 시작했습니다", { count: ok }) : t("서비스 {count}개의 변경 사항을 저장했습니다", { count: ok }));
@@ -261,7 +267,13 @@ export function StagedBar({
         style={style}
       >
         <div className="flex items-center justify-between gap-4">
-          <span className="font-medium text-pink-600">{t("변경 사항 {count}개 적용", { count })}</span>
+          <span className="min-w-0 font-medium text-pink-600" aria-live="polite">
+            {t("변경 사항 {count}개 적용", { count })}
+            <span className="ml-1.5 text-xs font-normal text-gray-500">
+              {items.length > 1 ? t("서비스 {count}개", { count: items.length }) : items[0]?.svc.name}
+              {!anyLocal && <> · {t("저장됨 · 배포 전")}</>}
+            </span>
+          </span>
           <div className="flex items-center space-x-2">
             <Button variant="outline" onClick={() => setDetails(true)}>
               {t("세부 정보")}
@@ -315,7 +327,7 @@ export function StagedBar({
               </li>
             ))}
             {errors.map((e) => (
-              <li key={`e-${e.name}`} className="flex items-start gap-1.5 text-xs text-red-500">
+              <li key={`e-${e.id}`} className="flex items-start gap-1.5 text-xs text-red-500">
                 <AlertCircle className="mt-px size-3.5 shrink-0" />
                 <span>
                   <b className="font-medium">{e.name}</b>: {errorMessage(e.error)}
@@ -354,10 +366,10 @@ export function StagedBar({
                 <span className="ml-auto shrink-0 text-xs text-blue-600">{t("변경 {count}개", { count: it.pend.count })}</span>
               </div>
               <ChangeList item={it} nodeName={nodeName} />
-              {(it.problem || errors.find((e) => e.name === it.svc.name)) && (
+              {(it.problem || errors.find((e) => e.id === it.svc.id)) && (
                 <p className="mt-2 flex items-start gap-1.5 text-xs text-red-500">
                   <AlertCircle className="mt-px size-3.5 shrink-0" />
-                  {it.problem ?? errorMessage(errors.find((e) => e.name === it.svc.name)?.error)}
+                  {it.problem ?? errorMessage(errors.find((e) => e.id === it.svc.id)?.error)}
                 </p>
               )}
             </section>

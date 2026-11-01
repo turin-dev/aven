@@ -4,494 +4,330 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-type archiveEntry struct {
-	Name     string
-	Body     string
-	Mode     int64
-	Typeflag byte
-	Linkname string
-	Devmajor int64
-	Devminor int64
+type entry struct {
+	name string
+	typ  byte
+	body string
+	link string
+	mode int64
+	size int64 // 0이면 len(body)
 }
 
-func archiveBytes(t *testing.T, entries []archiveEntry) []byte {
+func archive(t *testing.T, entries ...entry) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	for _, e := range entries {
-		typ := e.Typeflag
-		if typ == 0 {
-			typ = tar.TypeReg
+		h := &tar.Header{Name: e.name, Typeflag: e.typ, Linkname: e.link, Mode: e.mode}
+		if h.Mode == 0 {
+			h.Mode = 0o644
 		}
-		hdr := &tar.Header{Name: e.Name, Typeflag: typ}
-		if typ == tar.TypeXGlobalHeader {
-			hdr.PAXRecords = map[string]string{"comment": "skip"}
-		} else {
-			mode := e.Mode
-			if mode == 0 {
-				mode = 0o644
-			}
-			hdr.Mode = mode
-			hdr.Linkname = e.Linkname
-			hdr.Devmajor = e.Devmajor
-			hdr.Devminor = e.Devminor
-			if typ == tar.TypeReg {
-				hdr.Size = int64(len(e.Body))
+		if e.typ == tar.TypeReg {
+			h.Size = int64(len(e.body))
+			if e.size != 0 {
+				h.Size = e.size
 			}
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			t.Fatalf("header %s: %v", e.Name, err)
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
 		}
-		if typ == tar.TypeReg {
-			if _, err := tw.Write([]byte(e.Body)); err != nil {
-				t.Fatalf("write %s: %v", e.Name, err)
+		if e.typ == tar.TypeReg && e.size == 0 {
+			if _, err := tw.Write([]byte(e.body)); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
+	// size를 부풀린 항목은 본문을 쓰지 않으므로 Close가 실패할 수 있다(헤더만 있으면 충분하다).
+	_ = tw.Close()
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return buf.Bytes()
+	return &buf
 }
+
+func reg(name, body string) entry { return entry{name: name, typ: tar.TypeReg, body: body} }
+func dir(name string) entry       { return entry{name: name, typ: tar.TypeDir, mode: 0o755} }
+func sym(name, link string) entry { return entry{name: name, typ: tar.TypeSymlink, link: link} }
 
 func TestSafeJoin(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "out")
-	sibling := root + "x"
-
-	if !strings.HasPrefix(sibling, root) || strings.HasPrefix(sibling, root+string(filepath.Separator)) {
-		t.Fatalf("fixture %q does not share a raw prefix with %q", sibling, root)
+	root := "/srv/app"
+	cases := []struct {
+		rel, want string
+	}{
+		{"a/b", "/srv/app/a/b"},
+		{"../../etc/passwd", "/srv/app/etc/passwd"},
+		{"/etc/passwd", "/srv/app/etc/passwd"},
+		{"./", "/srv/app"},
+		{"", "/srv/app"},
+		{"a/../../b", "/srv/app/b"},
 	}
-
-	ok := map[string]string{
-		".":     root,
-		"./":    root,
-		"a":     filepath.Join(root, "a"),
-		"a/b":   filepath.Join(root, "a/b"),
-		"./a/b": filepath.Join(root, "a/b"),
-		"a/b/":  filepath.Join(root, "a/b"),
-		"a//b":  filepath.Join(root, "a/b"),
-		"a/./b": filepath.Join(root, "a/b"),
-	}
-	for rel, want := range ok {
-		got, err := SafeJoin(root, rel)
-		if err != nil || got != want {
-			t.Errorf("SafeJoin(%q) = %q, %v; want %q", rel, got, err, want)
-		}
-		if got != root && !strings.HasPrefix(got, root+string(filepath.Separator)) {
-			t.Errorf("SafeJoin(%q) = %q is not inside root", rel, got)
+	for _, c := range cases {
+		got, err := SafeJoin(root, c.rel)
+		if err != nil || got != c.want {
+			t.Errorf("SafeJoin(%q) = %q, %v; want %q", c.rel, got, err, c.want)
 		}
 	}
-
-	siblingRel := "../" + filepath.Base(sibling) + "/pwned.txt"
-	bad := []string{
-		siblingRel,
-		"../escape.txt",
-		"..",
-		"foo/../../etc/passwd",
-		"foo/../bar",
-		"/etc/passwd",
-		"/tmp/outx/pwned.txt",
-		"",
-		"a/\x00/b",
-	}
-	for _, rel := range bad {
-		got, err := SafeJoin(root, rel)
-		if err == nil {
-			t.Errorf("SafeJoin(%q) = %q, want error", rel, got)
-		}
-	}
-
-	if insideRoot(root, sibling) {
-		t.Fatalf("sibling %q passed the prefix check", sibling)
-	}
-	if insideRoot(root, filepath.Join(sibling, "pwned.txt")) {
-		t.Fatal("sibling file passed the prefix check")
-	}
-	if !insideRoot(root, root) || !insideRoot(root, filepath.Join(root, "a", "b")) {
-		t.Fatal("path inside root was rejected")
-	}
-	if insideRoot(root, filepath.Dir(root)) {
-		t.Fatal("parent of root was accepted")
-	}
-	if insideRoot("relative-root", filepath.Join(root, "a")) {
-		t.Fatal("mixed relative and absolute paths were accepted")
+	if got, err := SafeJoin("/srv/app/", "x"); err != nil || got != "/srv/app/x" {
+		t.Errorf("trailing slash root: %q %v", got, err)
 	}
 }
 
-func TestExtract(t *testing.T) {
-	type testCase struct {
-		name      string
-		entries   []archiveEntry
-		prepare   func(t *testing.T, dst string) (forbidden []string)
-		wantErr   string // empty: success; "*": any error; otherwise a substring
-		wantFiles map[string]string
-		wantMode  map[string]os.FileMode
+func TestWithin(t *testing.T) {
+	cases := []struct {
+		root, p string
+		ok      bool
+	}{
+		{"/srv/a", "/srv/a", true},
+		{"/srv/a", "/srv/a/b", true},
+		{"/srv/a", "/srv/ab", false},
+		{"/srv/a", "/srv", false},
+		{"/", "/anything", true},
 	}
+	for _, c := range cases {
+		if got := within(c.root, c.p); got != c.ok {
+			t.Errorf("within(%q,%q) = %v", c.root, c.p, got)
+		}
+	}
+}
 
-	cases := []testCase{
+func TestExtractBasic(t *testing.T) {
+	dst := t.TempDir()
+	err := Extract(archive(t,
+		dir("./"),
+		dir("src"),
+		reg("src/main.go", "package main"),
+		entry{name: "run.sh", typ: tar.TypeReg, body: "#!/bin/sh", mode: 0o4755},
+		reg("deep/nested/file.txt", "x"),
+		sym("link", "src/main.go"),
+	), dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dst, "src/main.go"))
+	if err != nil || string(b) != "package main" {
+		t.Fatalf("main.go = %q %v", b, err)
+	}
+	fi, err := os.Stat(filepath.Join(dst, "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o755 || fi.Mode()&os.ModeSetuid != 0 {
+		t.Errorf("run.sh mode = %v; want 0755 without setuid", fi.Mode())
+	}
+	fi, _ = os.Stat(filepath.Join(dst, "src/main.go"))
+	if fi.Mode().Perm() != 0o644 {
+		t.Errorf("main.go mode = %v", fi.Mode())
+	}
+	if l, err := os.Readlink(filepath.Join(dst, "link")); err != nil || l != "src/main.go" {
+		t.Errorf("link = %q %v", l, err)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "deep/nested/file.txt")); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestExtractTraversalIsConfined(t *testing.T) {
+	parent := t.TempDir()
+	dst := filepath.Join(parent, "out")
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := Extract(archive(t,
+		reg("../escape.txt", "x"),
+		reg("/abs.txt", "y"),
+		reg("a/../../../escape2.txt", "z"),
+	), dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"escape.txt", "escape2.txt", "abs.txt"} {
+		if _, err := os.Stat(filepath.Join(parent, name)); err == nil {
+			t.Errorf("%s escaped dst", name)
+		}
+		if _, err := os.Stat(filepath.Join(dst, name)); err != nil {
+			t.Errorf("%s not confined into dst: %v", name, err)
+		}
+	}
+}
+
+func TestExtractSymlinkEscapes(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []entry
+		wantErr bool
+		gone    []string // dst 기준으로 남아 있으면 안 되는 링크
+	}{
 		{
-			name: "nested files and modes",
-			entries: []archiveEntry{
-				// Global PAX metadata is not a file and must be skipped.
-				{Name: "global", Typeflag: tar.TypeXGlobalHeader},
-				{Name: ".", Typeflag: tar.TypeDir, Mode: 0o755},
-				{Name: "nested", Typeflag: tar.TypeDir, Mode: 0o755},
-				{Name: "nested/plain.txt", Body: "hello", Mode: 0o644},
-				{Name: "nested/script.sh", Body: "#!/bin/sh\n", Mode: 0o755},
-				{Name: "./top.txt", Body: "top", Mode: 0o644},
-				{Name: "bin/run", Body: "run", Mode: 0o700},
-			},
-			wantFiles: map[string]string{
-				"nested/plain.txt": "hello",
-				"nested/script.sh": "#!/bin/sh\n",
-				"top.txt":          "top",
-				"bin/run":          "run",
-			},
-			wantMode: map[string]os.FileMode{
-				"nested/plain.txt": 0o644,
-				"nested/script.sh": 0o755,
-				"bin/run":          0o755,
-				"top.txt":          0o644,
-			},
+			name:    "absolute link is skipped",
+			entries: []entry{sym("etc", "/etc")},
+			gone:    []string{"etc"},
 		},
 		{
-			name: "absolute path",
-			entries: []archiveEntry{
-				{Name: "/tmp/abs.txt", Body: "no"},
-			},
-			wantErr: "invalid path",
+			name:    "relative link out of dst is skipped",
+			entries: []entry{sym("up", "../..")},
+			gone:    []string{"up"},
 		},
 		{
-			name: "dotdot traversal",
-			entries: []archiveEntry{
-				{Name: "../../escape.txt", Body: "no"},
-				{Name: "foo/../bar.txt", Body: "no"},
-			},
-			wantErr: "invalid path",
+			name:    "empty link target is skipped",
+			entries: []entry{sym("empty", "")},
+			gone:    []string{"empty"},
 		},
 		{
-			name: "sibling prefix",
-			prepare: func(t *testing.T, dst string) []string {
-				sibling := dst + "x"
-				if err := os.MkdirAll(sibling, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				return []string{filepath.Join(sibling, "pwned.txt")}
-			},
-			entries: []archiveEntry{
-				{Name: "../PLACEHOLDER/pwned.txt", Body: "no"},
-			},
-			wantErr: "invalid path",
+			name:    "write through a dir symlink is rejected",
+			entries: []entry{sym("d", "."), reg("d/x", "x")},
+			wantErr: true,
 		},
 		{
-			name: "sibling prefix via link",
-			prepare: func(t *testing.T, dst string) []string {
-				sibling := dst + "x"
-				if err := os.MkdirAll(sibling, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				return []string{filepath.Join(sibling, "pwned.txt")}
-			},
-			entries: []archiveEntry{
-				{Name: "l", Typeflag: tar.TypeSymlink, Linkname: "../PLACEHOLDER"},
-				{Name: "l/pwned.txt", Body: "no"},
-			},
-			wantErr: "symlink",
+			name:    "chained links reaching outside are pruned",
+			entries: []entry{dir("a"), sym("a/self", ".."), sym("b", "a/self/a/self/..")},
+			gone:    []string{"b"},
 		},
 		{
-			name: "symlink chain",
-			entries: []archiveEntry{
-				{Name: "l1", Typeflag: tar.TypeSymlink, Linkname: "."},
-				{Name: "l1/l2", Typeflag: tar.TypeSymlink, Linkname: ".."},
-				{Name: "l2/l3", Typeflag: tar.TypeSymlink, Linkname: ".."},
-				{Name: "l2/l3/l4", Typeflag: tar.TypeSymlink, Linkname: ".."},
-				{Name: "l2/l3/l4/deep.txt", Body: "pwned"},
-			},
-			wantErr: "symlink",
-		},
-		{
-			name: "hard link",
-			entries: []archiveEntry{
-				{Name: "a.txt", Body: "a"},
-				{Name: "b.txt", Typeflag: tar.TypeLink, Linkname: "a.txt"},
-			},
-			wantErr: "hard link",
-		},
-		{
-			name: "fifo",
-			entries: []archiveEntry{
-				{Name: "pipe", Typeflag: tar.TypeFifo},
-			},
-			wantErr: "fifo",
-		},
-		{
-			name: "device",
-			entries: []archiveEntry{
-				{Name: "dev", Typeflag: tar.TypeChar, Devmajor: 1, Devminor: 3},
-			},
-			wantErr: "device",
-		},
-		{
-			name: "block device",
-			entries: []archiveEntry{
-				{Name: "blk", Typeflag: tar.TypeBlock, Devmajor: 1, Devminor: 0},
-			},
-			wantErr: "device",
-		},
-		{
-			name: "unsupported type",
-			entries: []archiveEntry{
-				{Name: "weird", Typeflag: tar.TypeCont},
-			},
-			wantErr: "unsupported",
-		},
-		{
-			name: "pre-existing link",
-			prepare: func(t *testing.T, dst string) []string {
-				if err := os.MkdirAll(dst, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				outside := filepath.Join(filepath.Dir(dst), "outside")
-				if err := os.MkdirAll(outside, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(outside, filepath.Join(dst, "jump")); err != nil {
-					t.Fatal(err)
-				}
-				return []string{filepath.Join(outside, "evil.txt")}
-			},
-			entries: []archiveEntry{
-				{Name: "jump/evil.txt", Body: "pwned"},
-			},
-			wantErr: "*",
-		},
-		{
-			name: "destination is a symlink",
-			prepare: func(t *testing.T, dst string) []string {
-				real := filepath.Join(filepath.Dir(dst), "real")
-				if err := os.MkdirAll(real, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(real, dst); err != nil {
-					t.Fatal(err)
-				}
-				return []string{filepath.Join(real, "file.txt")}
-			},
-			entries: []archiveEntry{
-				{Name: "file.txt", Body: "no"},
-			},
-			wantErr: "symlink",
+			name:    "symlink loop is pruned",
+			entries: []entry{sym("x", "y"), sym("y", "x")},
+			gone:    []string{"x"}, // x를 지우면 y는 dst 안의 끊어진 링크가 되어 남아도 된다
 		},
 	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
 			parent := t.TempDir()
-			// Nest the destination so a failed confinement check stays inside TempDir.
-			dst := filepath.Join(parent, "a", "b", "dst")
-			var forbidden []string
-			if tc.prepare != nil {
-				forbidden = tc.prepare(t, dst)
+			dst := filepath.Join(parent, "out")
+			if err := os.Mkdir(dst, 0o755); err != nil {
+				t.Fatal(err)
 			}
-			entries := append([]archiveEntry(nil), tc.entries...)
-			for i := range entries {
-				base := filepath.Base(dst + "x")
-				entries[i].Name = strings.ReplaceAll(entries[i].Name, "PLACEHOLDER", base)
-				entries[i].Linkname = strings.ReplaceAll(entries[i].Linkname, "PLACEHOLDER", base)
+			err := Extract(archive(t, c.entries...), dst)
+			if c.wantErr {
+				if err == nil {
+					t.Fatal("want error")
+				}
+				if _, err := os.Stat(filepath.Join(parent, "x")); err == nil {
+					t.Fatal("file written outside dst")
+				}
+				return
 			}
-			err := Extract(bytes.NewReader(archiveBytes(t, entries)), dst)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatal(err)
-				}
-			} else if err == nil {
-				t.Errorf("expected an error")
-			} else if tc.wantErr != "*" && !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error %q, want substring %q", err, tc.wantErr)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for rel, body := range tc.wantFiles {
-				got, rerr := os.ReadFile(filepath.Join(dst, rel))
-				if rerr != nil {
-					t.Fatalf("read %s: %v", rel, rerr)
+			for _, g := range c.gone {
+				if _, err := os.Lstat(filepath.Join(dst, g)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s should not exist: %v", g, err)
 				}
-				if string(got) != body {
-					t.Fatalf("%s = %q, want %q", rel, got, body)
-				}
-			}
-			for rel, mode := range tc.wantMode {
-				fi, rerr := os.Lstat(filepath.Join(dst, rel))
-				if rerr != nil {
-					t.Fatalf("lstat %s: %v", rel, rerr)
-				}
-				if fi.Mode().Perm() != mode {
-					t.Fatalf("%s mode %o, want %o", rel, fi.Mode().Perm(), mode)
-				}
-				if fi.Mode()&os.ModeSetuid != 0 || fi.Mode()&os.ModeSetgid != 0 {
-					t.Fatalf("%s kept privileged mode bits: %o", rel, fi.Mode())
-				}
-			}
-			for _, path := range forbidden {
-				if _, rerr := os.Lstat(path); rerr == nil {
-					t.Fatalf("wrote outside destination: %s", path)
-				}
-			}
-			if tc.name == "symlink chain" {
-				escaped := filepath.Clean(filepath.Join(dst, "..", "..", "..", "deep.txt"))
-				if _, rerr := os.Lstat(escaped); rerr == nil {
-					t.Fatalf("symlink chain wrote %s", escaped)
-				}
-				// Links created while resolving the chain must not land above dst.
-				for _, rel := range []string{"../l3", "../../l4"} {
-					p := filepath.Clean(filepath.Join(dst, rel))
-					if _, rerr := os.Lstat(p); rerr == nil {
-						t.Fatalf("symlink chain created %s", p)
-					}
-				}
-			}
-			if tc.wantErr != "" {
-				// A rejected archive must not leave the payload above dst.
-				filepath.WalkDir(parent, func(path string, d os.DirEntry, werr error) error {
-					if werr != nil || d.IsDir() {
-						return nil
-					}
-					rel, rerr := filepath.Rel(dst, path)
-					if rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-						if filepath.Base(path) == "pwned.txt" || filepath.Base(path) == "deep.txt" || filepath.Base(path) == "evil.txt" || filepath.Base(path) == "escape.txt" || filepath.Base(path) == "file.txt" {
-							t.Errorf("payload escaped to %s", path)
-						}
-					}
-					return nil
-				})
 			}
 		})
 	}
 }
 
-func TestExtractFileAndErrors(t *testing.T) {
-	dir := t.TempDir()
-	archive := filepath.Join(dir, "ok.tgz")
-	if err := os.WriteFile(archive, archiveBytes(t, []archiveEntry{
-		{Name: "a/b.txt", Body: "hi", Mode: 0o644},
-	}), 0o644); err != nil {
+// 바깥을 가리키는 링크를 파일 이름으로 두고 같은 이름의 일반 파일을 쓰면 링크 대상이 아니라 링크가 바뀌어야 한다.
+func TestExtractRegularOverExistingSymlink(t *testing.T) {
+	parent := t.TempDir()
+	victim := filepath.Join(parent, "victim")
+	if err := os.WriteFile(victim, []byte("keep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(dir, "out")
-	if err := ExtractFile(archive, dst); err != nil {
+	dst := filepath.Join(parent, "out")
+	if err := os.Mkdir(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if b, err := os.ReadFile(filepath.Join(dst, "a/b.txt")); err != nil || string(b) != "hi" {
-		t.Fatalf("content %q, %v", b, err)
-	}
-	if err := ExtractFile(filepath.Join(dir, "missing.tgz"), dst); err == nil {
-		t.Fatal("missing archive succeeded")
-	}
-	if err := Extract(strings.NewReader("not a tarball"), filepath.Join(dir, "bad")); err == nil {
-		t.Fatal("invalid gzip succeeded")
-	}
-	var junk bytes.Buffer
-	jgz := gzip.NewWriter(&junk)
-	if _, err := jgz.Write([]byte("this is not a tar archive")); err != nil {
+	if err := os.Symlink(victim, filepath.Join(dst, "f")); err != nil {
 		t.Fatal(err)
 	}
-	if err := jgz.Close(); err != nil {
+	if err := Extract(archive(t, reg("f", "new")), dst); err != nil {
 		t.Fatal(err)
 	}
-	if err := Extract(bytes.NewReader(junk.Bytes()), filepath.Join(dir, "junk")); err == nil {
-		t.Fatal("non-tar gzip succeeded")
+	if b, _ := os.ReadFile(victim); string(b) != "keep" {
+		t.Fatalf("victim overwritten: %q", b)
 	}
+	fi, err := os.Lstat(filepath.Join(dst, "f"))
+	if err != nil || fi.Mode()&fs.ModeSymlink != 0 {
+		t.Fatalf("f should be a regular file: %v %v", fi, err)
+	}
+}
 
-	// Gzip wrapping a truncated tar entry.
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Name: "short.txt", Mode: 0o644, Size: 100, Typeflag: tar.TypeReg}); err != nil {
+func TestExtractSkipsSpecialEntries(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "secret"), []byte("s"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tw.Write([]byte("only-ten!")); err != nil {
+	dst := filepath.Join(parent, "out")
+	if err := os.Mkdir(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Close gzip without finishing the tar so the entry is short.
-	if err := gz.Close(); err != nil {
+	err := Extract(archive(t,
+		entry{name: "hard", typ: tar.TypeLink, link: "../secret"},
+		entry{name: "fifo", typ: tar.TypeFifo},
+		entry{name: "dev", typ: tar.TypeChar},
+	), dst)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Extract(bytes.NewReader(buf.Bytes()), filepath.Join(dir, "short")); err == nil {
-		t.Fatal("truncated entry succeeded")
+	for _, n := range []string{"hard", "fifo", "dev"} {
+		if _, err := os.Lstat(filepath.Join(dst, n)); err == nil {
+			t.Errorf("%s should be skipped", n)
+		}
 	}
+}
 
-	parentFile := filepath.Join(dir, "not-a-dir")
-	if err := os.WriteFile(parentFile, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
+func TestExtractSymlinkCannotReplaceDir(t *testing.T) {
+	dst := t.TempDir()
+	err := Extract(archive(t, dir("d"), reg("d/x", "x"), sym("d", ".")), dst)
+	if err == nil || !strings.Contains(err.Error(), "replace a directory") {
+		t.Fatalf("err = %v", err)
 	}
-	if err := Extract(bytes.NewReader(archiveBytes(t, []archiveEntry{{Name: "a.txt", Body: "a"}})), filepath.Join(parentFile, "child")); err == nil {
-		t.Fatal("destination under a file succeeded")
-	}
+}
 
-	notDir := filepath.Join(dir, "file-dst")
-	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
+func TestExtractTooLarge(t *testing.T) {
+	err := Extract(archive(t, entry{name: "big", typ: tar.TypeReg, size: MaxBytes + 1}), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err = %v", err)
 	}
-	if err := Extract(bytes.NewReader(archiveBytes(t, []archiveEntry{{Name: "a.txt", Body: "a"}})), notDir); err == nil {
-		t.Fatal("file destination succeeded")
-	}
+}
 
-	// A header that claims more than MaxBytes must be rejected before the body is written.
-	var big bytes.Buffer
-	bgz := gzip.NewWriter(&big)
-	btw := tar.NewWriter(bgz)
-	if err := btw.WriteHeader(&tar.Header{Name: "big.bin", Mode: 0o644, Size: MaxBytes + 1, Typeflag: tar.TypeReg}); err != nil {
-		t.Fatal(err)
+func TestExtractNotGzip(t *testing.T) {
+	if err := Extract(strings.NewReader("plain"), t.TempDir()); err == nil {
+		t.Fatal("want error for non-gzip input")
 	}
-	if err := bgz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := Extract(bytes.NewReader(big.Bytes()), filepath.Join(dir, "big")); err == nil || !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("oversize archive: %v", err)
-	}
+}
 
-	var empty bytes.Buffer
-	egz := gzip.NewWriter(&empty)
-	etw := tar.NewWriter(egz)
-	if err := etw.Close(); err != nil {
+func TestExtractFile(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "a.tgz")
+	if err := os.WriteFile(path, archive(t, reg("hello", "hi")).Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := egz.Close(); err != nil {
+	dst := filepath.Join(tmp, "out")
+	if err := os.Mkdir(dst, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	emptyDst := filepath.Join(dir, "empty")
-	if err := Extract(bytes.NewReader(empty.Bytes()), emptyDst); err != nil {
+	if err := ExtractFile(path, dst); err != nil {
 		t.Fatal(err)
 	}
-	if fi, err := os.Lstat(emptyDst); err != nil || !fi.IsDir() {
-		t.Fatalf("empty archive dst: %v %+v", err, fi)
+	if b, _ := os.ReadFile(filepath.Join(dst, "hello")); string(b) != "hi" {
+		t.Fatalf("hello = %q", b)
 	}
+	if err := ExtractFile(filepath.Join(tmp, "missing"), dst); err == nil {
+		t.Fatal("want error for missing file")
+	}
+}
 
-	// A regular member must not follow a pre-existing symlink to a file outside dst.
-	linkDst := filepath.Join(dir, "linkdst")
-	if err := os.MkdirAll(linkDst, 0o755); err != nil {
+func TestExtractRelativeDst(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+	if err := os.Mkdir("out", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(dir, "outside.txt")
-	if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+	if err := Extract(archive(t, reg("f", "x"), sym("l", "f")), "out"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(outside, filepath.Join(linkDst, "evil.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(tmp, "out", "l")); err != nil {
 		t.Fatal(err)
-	}
-	err := Extract(bytes.NewReader(archiveBytes(t, []archiveEntry{{Name: "evil.txt", Body: "pwned"}})), linkDst)
-	if err == nil {
-		t.Fatal("write through a pre-existing symlink succeeded")
-	}
-	if b, rerr := os.ReadFile(outside); rerr != nil || string(b) != "safe" {
-		t.Fatalf("outside file = %q, %v", b, rerr)
 	}
 }

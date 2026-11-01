@@ -6,9 +6,10 @@ import { t } from "@/lib/i18n";
 
 export type Series = { name: string; color: string; points: { t: number; v: number }[] };
 
-export const SERIES_COLORS = ["var(--pink-500)", "var(--blue-500)", "var(--green-500)", "var(--red-300)", "var(--yellow-400)", "var(--cyan-500)"];
-export const OTHER_SERIES = "var(--gray-400)";
-export const ACCENT_LINE = "var(--pink-500)";
+// Per-theme chart palette from globals.css (--chart-*): distinct hues that keep 3:1 against both themes' surfaces.
+export const SERIES_COLORS = ["var(--chart-1)", "var(--chart-2)", "var(--chart-3)", "var(--chart-4)", "var(--chart-5)", "var(--chart-6)"];
+export const OTHER_SERIES = "var(--chart-other)";
+export const ACCENT_LINE = "var(--chart-1)";
 
 /** d3 `tickIncrement`-style step (1/2/5 × 10^n) for about `count` intervals over [0, max]. */
 function tickStep(max: number, count: number) {
@@ -82,7 +83,7 @@ export function LineChart({
     return () => ro.disconnect();
   }, []);
 
-  const all = series.flatMap((s) => s.points);
+  const all = useMemo(() => series.flatMap((s) => s.points), [series]);
   const geo = useMemo(() => {
     if (!all.length) return null;
     const t0 = Math.min(...all.map((p) => p.t));
@@ -120,10 +121,26 @@ export function LineChart({
     const r = e.currentTarget.getBoundingClientRect();
     const px = e.clientX - r.left;
     if (px < PAD.l - 4 || px > w - PAD.r + 4) return setHover(null);
+    if (t1 === t0) return setHover(0);
     const at = t0 + ((px - PAD.l) / geo.iw) * (t1 - t0);
     let best = 0;
     for (let i = 1; i < times.length; i++) if (Math.abs(times[i] - at) < Math.abs(times[best] - at)) best = i;
     setHover(best);
+  };
+
+  // Keyboard: focus the chart, then arrows / Home / End step through the time slots; Esc clears.
+  const onKey = (e: React.KeyboardEvent<SVGSVGElement>) => {
+    const last = times.length - 1;
+    let next: number | null | undefined;
+    if (e.key === "ArrowRight") next = hover === null ? 0 : Math.min(last, hover + 1);
+    else if (e.key === "ArrowLeft") next = hover === null ? last : Math.max(0, hover - 1);
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = last;
+    else if (e.key === "Escape" && hover !== null) next = null;
+    if (next === undefined) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setHover(next);
   };
 
   const tipLeft = ht !== null ? x(ht) : 0;
@@ -136,9 +153,12 @@ export function LineChart({
         height={height - 1}
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
+        onKeyDown={onKey}
+        onBlur={() => setHover(null)}
+        tabIndex={0}
         role="img"
         aria-label={t("{names} 그래프", { names: series.map((s) => s.name).join(", ") })}
-        className="block cursor-crosshair touch-none"
+        className="block cursor-crosshair touch-none rounded-sm focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-pink-500"
       >
         <defs>
           {series.map((s, i) => (
@@ -150,7 +170,7 @@ export function LineChart({
         </defs>
         {grid &&
           gridTicks.map((v) => (
-            <line key={v} x1={PAD.l} x2={w} y1={y(v)} y2={y(v)} stroke="var(--gray-100)" strokeOpacity={0.4} strokeWidth={1} shapeRendering="crispEdges" />
+            <line key={v} x1={PAD.l} x2={w} y1={y(v)} y2={y(v)} stroke="var(--chart-grid)" strokeWidth={1} shapeRendering="crispEdges" />
           ))}
         {xt.map((ms) => (
           <text key={ms} x={x(ms)} y={PAD.t + ih + 1 + 19} textAnchor="middle" fontSize={11} fill="var(--gray-500)" className="tabular-nums">
@@ -197,7 +217,7 @@ export function LineChart({
           return (
             <g key={s.name}>
               {area && <path d={fill} fill={`url(#${gid}-g${i})`} />}
-              <path d={line} fill="transparent" stroke={s.color} strokeWidth={2} strokeLinecap="round" />
+              <path d={line} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
             </g>
           );
         })}
@@ -213,7 +233,8 @@ export function LineChart({
       </svg>
       {ht !== null && (
         <div
-          className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-md border border-gray-200 bg-gray-50/95 px-3 py-2 text-xs shadow-[0_12px_32px_-8px_rgba(0,0,0,0.12)] dark:shadow-[0_12px_32px_-8px_rgba(0,0,0,0.7)]"
+          aria-live="polite"
+          className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-md border border-gray-200 bg-gray-50/95 px-3 py-2 text-xs shadow-popover backdrop-blur-sm"
           style={flip ? { right: w - tipLeft + 12 } : { left: tipLeft + 12 }}
         >
           <div className="mb-1 text-gray-500">{tipTime(ht)}</div>

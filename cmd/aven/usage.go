@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -51,7 +50,7 @@ func (c *config) findLink() *link {
 
 // cmdUsage: aven usage [--from D] [--to D] [--group service|environment|day] [--all]
 func cmdUsage(c *config, args []string) {
-	fl := flag.NewFlagSet("usage", flag.ExitOnError)
+	fl := newFlagSet("usage")
 	from := fl.String("from", "", "start (YYYY-MM-DD or RFC3339, UTC; default: first day of this month)")
 	to := fl.String("to", "", "end (YYYY-MM-DD = end of that day, or RFC3339; default: now)")
 	group := fl.String("group", "service", "service | environment | day (linked project only)")

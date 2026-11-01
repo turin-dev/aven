@@ -54,7 +54,8 @@ func (l *limiter) allow(key string, rl RateLimit, now time.Time) (bool, time.Dur
 	if l.windows == nil {
 		l.windows = map[string]*window{}
 	}
-	if now.Sub(l.lastSweep) > time.Minute || len(l.windows) > maxLimiterKeys {
+	// 표가 가득 차도 정리는 1초에 한 번까지만 한다. 요청마다 20만 개를 훑으면 그 자체가 서비스 거부가 된다.
+	if since := now.Sub(l.lastSweep); since > time.Minute || (len(l.windows) >= maxLimiterKeys && since > time.Second) {
 		for k, w := range l.windows {
 			if now.Sub(w.start) >= w.size {
 				delete(l.windows, k)

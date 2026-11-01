@@ -119,6 +119,11 @@ func (s *Server) githubOAuthStart(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 503, "GitHub OAuth App is not configured (KEEL_GITHUB_CLIENT_ID / KEEL_GITHUB_CLIENT_SECRET)")
 		return
 	}
+	if p := principalFrom(r); p != nil && p.ViewAsBy != nil {
+		// GET이라 "사용자로 보기"에서도 통과하지만, 연결을 시작하면 대상 사용자의 계정에 쓰게 된다.
+		writeJSON(w, 403, map[string]any{"error": "사용자로 보기 중에는 GitHub 계정을 연결할 수 없습니다", "view_as": true})
+		return
+	}
 	st, err := s.ghStates.put(principalID(r), githubBackPath(r.URL.Query().Get("from")))
 	if err != nil {
 		writeErr(w, 503, err.Error())
@@ -141,6 +146,13 @@ func (s *Server) githubOAuthReturn(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Redirect(w, r, "/login/?"+url.Values{"next": {"/settings/?section=integrations"}}.Encode(), http.StatusSeeOther)
+		return
+	}
+	// "사용자로 보기" 세션이면 주체가 대상 사용자라, 여기서 연결하면 owner의 GitHub 토큰이 그 사람 계정에 저장된다.
+	if problem, err := s.interactiveSessionProblem(r.Context(), p); err != nil || problem != "" {
+		s.ghStates.take(r.URL.Query().Get("state"), p.User.ID) // 쓰지 못한 state는 버린다
+		q := url.Values{"section": {"integrations"}, "github": {"error"}, "message": {"이 세션에서는 GitHub 계정을 연결할 수 없습니다."}}
+		http.Redirect(w, r, "/settings/?"+q.Encode(), http.StatusFound)
 		return
 	}
 	s.githubOAuthCallback(w, withPrincipal(r, p))

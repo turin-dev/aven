@@ -46,13 +46,14 @@ export function TcpProxyRow({
             {" · "}{t("TCP 프록시")}
             {!proxy.available && proxy.reason ? <span className="text-yellow-600"> · {proxy.reason}</span> : null}
           </PortMeta>
+          <p className="text-xs leading-[18px] text-gray-500">{t("인터넷 어디서나 이 주소로 접속할 수 있습니다. HTTP가 아닌 TCP(데이터베이스 등)를 그대로 전달하므로 서비스 자체의 비밀번호와 TLS로 보호하세요.")}</p>
         </div>
         <div className="ml-auto flex flex-shrink-0 space-x-1">
-          <CopyBtn value={addr} />
+          <CopyBtn value={addr} title={t("주소 복사")} />
           <IconBtn title={t("수정")} pressed={editing} onClick={() => setEditing((e) => !e)}>
             <SquarePen />
           </IconBtn>
-          <IconBtn title={t("삭제")} onClick={onDelete}>
+          <IconBtn title={t("TCP 프록시 삭제")} onClick={onDelete}>
             <Trash2 />
           </IconBtn>
         </div>

@@ -828,3 +828,57 @@ func TestMultiNodeDeployRollsBackAllNodes(t *testing.T) {
 		t.Fatalf("previous deployment must keep serving: %s %v", in.Status, *in.CurrentDeploymentID)
 	}
 }
+
+// 올린 직후의 cooldown이 끝나도 바꾸기 전 지표(다른 replica 수에서 잰 부하)로 다시 올리지 않는다.
+func TestAutoscaleIgnoresMetricsFromBeforeLastScale(t *testing.T) {
+	ctx := context.Background()
+	f := newScaleFixture(t)
+	f.live(t)
+	cpu := 50.0
+	in, _ := f.st.GetInstance(ctx, f.in.ID)
+	in.Autoscale = &store.Autoscale{Enabled: true, MinReplicas: 2, MaxReplicas: 8, TargetCPUPercent: &cpu}
+	f.st.UpdateInstanceConfig(ctx, in)
+	now := time.Now()
+	for i := 0; i < 6; i++ {
+		f.st.InsertMetrics(ctx, in.ID, []store.MetricRow{{T: now.Add(-time.Duration(i*10) * time.Second).Unix(), Resolution: 10, CPU: 200, Mem: 100, MemLimit: 1000, Replicas: 2}})
+	}
+	f.m.AutoscaleOnce(ctx, now)
+	if n := f.m.CurrentReplicas(ctx, in); n != 4 {
+		t.Fatalf("first scale: %d", n)
+	}
+	// 90초 뒤(scale up cooldown 60초는 지났다): 새 지표는 아직 없고 구간에는 바꾸기 전 점만 있다.
+	later := now.Add(90 * time.Second)
+	f.m.AutoscaleOnce(ctx, later)
+	if n := f.m.CurrentReplicas(ctx, in); n != 4 {
+		t.Fatalf("scaled again from pre-scale metrics: %d (%+v)", n, f.m.AutoscaleStatusOf(in))
+	}
+	// 바꾼 뒤에 잰 지표가 여전히 높으면 다시 올린다(replica 4개, 합계 400% → replica당 100%).
+	for i := 0; i < 3; i++ {
+		f.st.InsertMetrics(ctx, in.ID, []store.MetricRow{{T: later.Add(-time.Duration(i*10) * time.Second).Unix(), Resolution: 10, CPU: 400, Mem: 100, MemLimit: 1000, Replicas: 4}})
+	}
+	f.m.AutoscaleOnce(ctx, later.Add(time.Second))
+	if n := f.m.CurrentReplicas(ctx, in); n != 8 {
+		t.Fatalf("post-scale load ignored: %d (%+v)", n, f.m.AutoscaleStatusOf(in))
+	}
+}
+
+func TestMetricsWindow(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	cases := []struct {
+		last     time.Time
+		wantFrom time.Time
+		wantOK   bool
+	}{
+		{time.Time{}, now.Add(-AutoscaleWindow), true},
+		{now.Add(-10 * time.Minute), now.Add(-AutoscaleWindow), true},
+		{now.Add(-time.Minute), now.Add(-time.Minute), true},
+		{now.Add(-5 * time.Second), now.Add(-5 * time.Second), false},
+		{now.Add(time.Minute), now.Add(time.Minute), false},
+	}
+	for _, c := range cases {
+		from, ok := metricsWindow(now, c.last)
+		if !from.Equal(c.wantFrom) || ok != c.wantOK {
+			t.Errorf("metricsWindow(last=%v) = %v %v, want %v %v", c.last, from, ok, c.wantFrom, c.wantOK)
+		}
+	}
+}

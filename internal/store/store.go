@@ -34,18 +34,38 @@ type Store struct {
 	box **secret.Box
 }
 
+// dsnPragmas는 모든 커넥션에 거는 SQLite 설정이다.
+//   - journal_mode=WAL: 읽기와 쓰기가 서로 막지 않는다(외부 백업·sqlite3 CLI가 읽는 동안에도 쓴다).
+//   - synchronous=NORMAL: WAL에서는 프로세스가 죽어도 DB가 깨지지 않고, 전원이 나갔을 때만 마지막 커밋 몇 개를 잃을 수 있다.
+//     FULL은 커밋마다 fsync를 두 번 해서 지표·로그처럼 쓰기가 잦은 표에서 느리다.
+//   - foreign_keys=ON: ON DELETE CASCADE로 프로젝트·환경·서비스를 지울 때 딸린 행이 남지 않는다.
+//   - busy_timeout=5000: 다른 프로세스(백업 도구 등)가 잠금을 잡고 있으면 SQLITE_BUSY 대신 5초까지 기다린다.
+//   - _txlock=immediate: 트랜잭션을 처음부터 쓰기 잠금으로 연다. 읽기로 시작한 트랜잭션이 나중에 쓰기로 올라가다
+//     SQLITE_BUSY가 나는 경우(busy_timeout으로도 기다리지 않는다)를 없앤다.
+const dsnPragmas = "_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+uriPath(path)+"?"+dsnPragmas)
 	if err != nil {
 		return nil, err
 	}
+	// 쓰기 커넥션 하나로 모든 접근을 줄 세운다. SQLite는 동시에 한 명만 쓰므로 커넥션을 늘려도 쓰기는 빨라지지 않고
+	// 프로세스 안에서 SQLITE_BUSY만 생긴다. Tx 안에서 바깥 Store를 쓰면 막히는 것도 이 때문이다(Tx 주석).
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	db.SetConnMaxIdleTime(0)
 	s := &Store{db: db, q: db, box: new(*secret.Box)}
 	if err := s.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return s, nil
+}
+
+// uriPath는 파일 경로를 SQLite URI 경로로 쓸 수 있게 바꾼다. '?'나 '#'이 든 경로가 쿼리로 잘려 엉뚱한 파일을 열지 않게 한다.
+func uriPath(p string) string {
+	return strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(p)
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -59,12 +79,20 @@ func NewID(prefix string) string {
 // RandomSecret은 비밀번호 등으로 쓸 영숫자 문자열을 만든다.
 func RandomSecret(n int) string {
 	const alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	b := make([]byte, n)
-	rand.Read(b)
-	for i := range b {
-		b[i] = alphabet[int(b[i])%len(alphabet)]
+	// 256은 글자 수(57)로 나누어떨어지지 않으므로 바이트를 그대로 나머지 연산하면 앞쪽 글자가 더 자주 나온다.
+	// 57의 배수(228) 이상인 바이트는 버린다(rejection sampling).
+	const limit = 256 - 256%len(alphabet)
+	out := make([]byte, 0, n)
+	buf := make([]byte, n+n/4+8)
+	for len(out) < n {
+		rand.Read(buf)
+		for _, c := range buf {
+			if int(c) < limit && len(out) < n {
+				out = append(out, alphabet[int(c)%len(alphabet)])
+			}
+		}
 	}
-	return string(b)
+	return string(out)
 }
 
 // 저장 형식은 고정 폭이라 문자열 정렬이 시간 정렬과 같다.
@@ -145,10 +173,19 @@ func (s *Store) Tx(ctx context.Context, f func(tx *Store) error) error {
 	if err != nil {
 		return err
 	}
+	// f가 panic해도 트랜잭션을 되돌린다. 커넥션이 하나뿐이라 열린 채로 두면 이후 모든 쿼리가 영원히 기다린다.
+	done := false
+	defer func() {
+		if !done {
+			tx.Rollback()
+		}
+	}()
 	if err := f(&Store{db: s.db, q: tx, box: s.box}); err != nil {
+		done = true
 		tx.Rollback()
 		return err
 	}
+	done = true
 	return tx.Commit()
 }
 
@@ -1622,24 +1659,58 @@ func (s *Store) ReplaceMetrics(ctx context.Context, instanceID string, from, to 
 	})
 }
 
+// MetricInstances는 지표 점이 있는 인스턴스 ID다(정렬됨).
 func (s *Store) MetricInstances(ctx context.Context) ([]string, error) {
-	rows, err := s.q.QueryContext(ctx, `SELECT DISTINCT instance_id FROM metrics`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return s.distinctKeys(ctx, "metrics", "instance_id")
 }
 
+// distinctKeys는 (col, t) 인덱스의 첫 열 값을 하나씩 건너뛰며 읽는다(키마다 인덱스 탐색 한 번).
+// SELECT DISTINCT는 인덱스 전체(지표 점 수백만 개)를 훑는다. table과 col은 상수만 넘긴다.
+func (s *Store) distinctKeys(ctx context.Context, table, col string) ([]string, error) {
+	q := `SELECT min(` + col + `) FROM ` + table + ` WHERE ` + col + ` > ?`
+	var out []string
+	last := ""
+	for {
+		var id sql.NullString
+		if err := s.q.QueryRowContext(ctx, q, last).Scan(&id); err != nil {
+			return nil, err
+		}
+		if !id.Valid {
+			return out, nil
+		}
+		out = append(out, id.String)
+		last = id.String
+	}
+}
+
+// PruneMetrics는 before보다 오래된 점과 지워진 인스턴스의 점을 지운다.
+// 예전 쿼리(t < ? OR instance_id NOT IN ...)는 인덱스를 못 써서 매시 지표 표 전체를 훑었고, 그동안 하나뿐인 커넥션을
+// 잡고 있어 다른 요청이 모두 기다렸다. 이제 인스턴스마다 (instance_id, t) 인덱스로 지운다.
 func (s *Store) PruneMetrics(ctx context.Context, before int64) error {
-	_, err := s.q.ExecContext(ctx, `DELETE FROM metrics WHERE t < ? OR instance_id NOT IN (SELECT id FROM instances)`, before)
-	return err
+	return s.pruneSeries(ctx, "metrics", "instance_id", "t", "instances", before)
+}
+
+// pruneSeries는 시계열 표(table: (key, tcol) 인덱스)에서 before보다 오래된 점과 parent 표에 없는 key의 점을 지운다.
+func (s *Store) pruneSeries(ctx context.Context, table, key, tcol, parent string, before int64) error {
+	keys, err := s.distinctKeys(ctx, table, key)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		var exists int
+		if err := s.q.QueryRowContext(ctx, `SELECT count(*) FROM `+parent+` WHERE id=?`, k).Scan(&exists); err != nil {
+			return err
+		}
+		if exists == 0 {
+			_, err = s.q.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+key+`=?`, k)
+		} else {
+			_, err = s.q.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+key+`=? AND `+tcol+` < ?`, k, before)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ---------------- KV settings ----------------
@@ -1696,20 +1767,77 @@ func (s *Store) EncryptLegacySecrets(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	type row struct{ id, raw string }
-	var todo []row
+	var todo []registryRow
 	for rows.Next() {
-		var r row
+		var r registryRow
 		if err := rows.Scan(&r.id, &r.raw); err != nil {
 			rows.Close()
 			return err
 		}
 		todo = append(todo, r)
 	}
+	err = rows.Err()
 	rows.Close()
+	if err != nil {
+		return err
+	}
+	if *s.box == nil {
+		return nil // 키가 없으면 바꿀 것이 없다
+	}
+	return s.Tx(ctx, func(tx *Store) error {
+		if err := tx.encryptRegistryRows(ctx, todo); err != nil {
+			return err
+		}
+		for _, c := range sealedColumns {
+			if err := tx.encryptLegacyColumn(ctx, c.table, c.key, c.col); err != nil {
+				return fmt.Errorf("%s.%s: %w", c.table, c.col, err)
+			}
+		}
+		return nil
+	})
+}
+
+// sealedColumns는 값 전체를 Seal로 저장하는 열이다. 암호화를 넣기 전에 저장된 평문 값을 EncryptLegacySecrets가 암호화한다.
+var sealedColumns = []struct{ table, key, col string }{
+	{"users", "id", "totp_secret"},
+	{"notification_channels", "id", "config"},
+}
+
+func (s *Store) encryptLegacyColumn(ctx context.Context, table, key, col string) error {
+	rows, err := s.q.QueryContext(ctx, `SELECT `+key+`, `+col+` FROM `+table+` WHERE `+col+` <> '' AND substr(`+col+`, 1, ?) <> ?`, len(secret.Prefix), secret.Prefix)
+	if err != nil {
+		return err
+	}
+	var todo []registryRow
+	for rows.Next() {
+		var r registryRow
+		if err := rows.Scan(&r.id, &r.raw); err != nil {
+			rows.Close()
+			return err
+		}
+		todo = append(todo, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, r := range todo {
+		if _, err := s.q.ExecContext(ctx, `UPDATE `+table+` SET `+col+`=? WHERE `+key+`=?`, s.Seal(r.raw), r.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type registryRow struct{ id, raw string }
+
+func (s *Store) encryptRegistryRows(ctx context.Context, todo []registryRow) error {
 	for _, r := range todo {
 		var regs []Registry
-		json.Unmarshal([]byte(r.raw), &regs)
+		if err := json.Unmarshal([]byte(r.raw), &regs); err != nil {
+			continue // 읽을 수 없는 값은 건드리지 않는다
+		}
 		plain := false
 		for _, g := range regs {
 			if g.Password != "" && !strings.HasPrefix(g.Password, secret.Prefix) {

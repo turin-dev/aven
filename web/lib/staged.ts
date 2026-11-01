@@ -141,6 +141,30 @@ export function useStagedEnv(eid: string): Record<string, Staged> {
 }
 const EMPTY_ALL: Record<string, Staged> = {};
 
+/** `current` minus the entries that still hold exactly the values in `sent` (edits made meanwhile survive). */
+export function withoutSent(current: Staged, sent: Staged): Staged {
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const vars: Staged["vars"] = {};
+  for (const [k, v] of Object.entries(current.vars)) if (!(k in sent.vars) || !same(sent.vars[k], v)) vars[k] = v;
+  const settings: SettingsPatch = {};
+  for (const [k, v] of Object.entries(current.settings))
+    if (!(k in sent.settings) || !same((sent.settings as Record<string, unknown>)[k], v)) (settings as Record<string, unknown>)[k] = v;
+  return { vars, settings };
+}
+
+/** After a successful save: drops the edits that were sent, keeping anything changed while the request ran. */
+export function clearSentStaged(sid: string, eid: string, sent: Staged) {
+  load();
+  const k = keyOf(sid, eid);
+  const cur = state[k];
+  if (!cur) return;
+  const next = withoutSent(cur, sent);
+  const copy = { ...state };
+  if (stagedCount(next) === 0) delete copy[k];
+  else copy[k] = next;
+  commit(copy);
+}
+
 /** Drops the local edits of one service instance (outside a component). */
 export function clearStaged(sid: string, eid: string) {
   load();

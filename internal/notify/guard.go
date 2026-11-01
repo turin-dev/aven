@@ -26,6 +26,8 @@ var blockedPrefixes = func() []netip.Prefix {
 		"198.51.100.0/24", // TEST-NET-2
 		"203.0.113.0/24",  // TEST-NET-3
 		"240.0.0.0/4",     // reserved + broadcast
+		"::/96",           // IPv4-compatible(폐기, 내부 IPv4로 이어질 수 있다)
+		"::ffff:0:0:0/96", // IPv4-translated(SIIT)
 		"64:ff9b::/96",    // NAT64(내부 IPv4로 이어질 수 있다)
 		"64:ff9b:1::/48",
 		"2002::/16", // 6to4

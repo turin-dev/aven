@@ -302,6 +302,11 @@ func TestValidate(t *testing.T) {
 		"loopback peer":       func(c *Config) { c.Peers[0].Address = "127.0.0.1:7443" },
 		"hostname peer":       func(c *Config) { c.Peers[0].Address = "evil.example:7443" },
 		"low port":            func(c *Config) { c.Peers[0].Address = "10.0.0.2:22" },
+		"zoned peer address":  func(c *Config) { c.Peers[0].Address = "[fd00::2%eth0]:7443" },
+		"mapped public peer":  func(c *Config) { c.Peers[0].Address = "[::ffff:8.8.8.8]:7443" },
+		"link-local peer":     func(c *Config) { c.Peers[0].Address = "[fe80::1]:7443" },
+		"unspecified peer":    func(c *Config) { c.Peers[0].Address = "0.0.0.0:7443" },
+		"multicast peer":      func(c *Config) { c.Peers[0].Address = "[ff02::1]:7443" },
 		"self as peer":        func(c *Config) { c.Peers[0].NodeID = nodA },
 		"no serials":          func(c *Config) { c.Peers[0].Serials = nil },
 		"bad serial":          func(c *Config) { c.Peers[0].Serials = []string{"zz"} },
@@ -435,5 +440,21 @@ func TestEnsureForwarders(t *testing.T) {
 	}
 	if _, ok := f.labels[name]; ok {
 		t.Fatal("forwarder kept after import removal")
+	}
+}
+
+func TestParsePrivateIP(t *testing.T) {
+	for in, want := range map[string]string{
+		"100.64.0.1": "100.64.0.1", " 10.0.0.5 ": "10.0.0.5", "[fd7a:115c:a1e0::1]": "fd7a:115c:a1e0::1",
+		"192.168.1.2": "192.168.1.2", "::ffff:172.16.0.1": "172.16.0.1",
+	} {
+		if got, ok := ParsePrivateIP(in); !ok || got.String() != want {
+			t.Errorf("ParsePrivateIP(%q) = %v, %v; want %s", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"", "8.8.8.8", "127.0.0.1", "::1", "fe80::1", "fd00::1%eth0", "100.128.0.1", "10.0.0.1:7443", "node-b", "0.0.0.0", "::"} {
+		if got, ok := ParsePrivateIP(bad); ok {
+			t.Errorf("ParsePrivateIP(%q) = %v; want rejected", bad, got)
+		}
 	}
 }

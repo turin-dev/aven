@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDownToLine, ClipboardCheck, Copy, RefreshCw, ShieldCheck, Terminal, TriangleAlert } from "lucide-react";
 import { api, type IACChange, type IACDefinition, type IACPlan } from "@/lib/api";
 import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
 import type { Workspace } from "@/lib/workspace";
-import { Button, Card, Dialog, ErrorBox, Spinner, Textarea, Toggle } from "@/components/ui";
+import { Button, Card, Dialog, ErrorBox, Spinner, Textarea, Toggle, useConfirm } from "@/components/ui";
+import { useUnsavedGuard } from "@/components/SettingsGuard";
 import { t, tr } from "@/lib/i18n";
 
 function pretty(definition: IACDefinition) {
@@ -146,6 +147,7 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
   const [deployAfter, setDeployAfter] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const { confirm, node: confirmNode } = useConfirm();
 
   const load = async () => {
     if (!pid || !env) return;
@@ -246,16 +248,41 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
   };
 
   const copyCLI = async () => {
-    await navigator.clipboard?.writeText("aven config import && aven config plan");
-    toast(t("명령을 복사했습니다"));
+    try {
+      await navigator.clipboard.writeText("aven config import && aven config plan");
+      toast(t("명령을 복사했습니다"));
+    } catch {
+      toast(t("클립보드에 복사하지 못했습니다. 직접 선택해 복사하세요."), "error");
+    }
   };
 
   const dirty = definitionText !== loadedText;
+  useUnsavedGuard(dirty && canEdit);
+  const jsonError = useMemo(() => {
+    if (!definitionText.trim()) return null;
+    try {
+      JSON.parse(definitionText);
+      return null;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }, [definitionText]);
+  const reload = () =>
+    dirty
+      ? confirm({
+          title: t("현재 설정 가져오기"),
+          message: t("편집한 정의를 버리고 서버의 현재 설정으로 바꿉니다."),
+          confirmLabel: t("편집 버리기"),
+          danger: true,
+          run: load,
+        })
+      : void load();
   const currentPlan = !!plan && plannedText === definitionText;
   const pending = !!plan && (plan.changes.length > 0 || plan.claims.length > 0);
 
   return (
     <div className="space-y-6">
+      {confirmNode}
       <Card
         title={t("코드형 인프라")}
         description={t("{env} 환경의 서비스, 설정, 변수를 하나의 정의로 관리합니다. 변경 사항을 미리 본 뒤 적용하면 일반 편집처럼 배포 대기 상태로 저장됩니다. 생략한 설정은 그대로 두고, 서비스에 변수 목록을 적으면 그 목록이 전부가 됩니다.", { env: env?.name ?? t("현재") })}
@@ -278,8 +305,10 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
         }
       >
         <pre className="overflow-x-auto rounded-md bg-gray-50 px-3 py-2 font-mono text-xs leading-5 text-gray-700">
-          <Terminal className="mr-1 inline size-3.5 align-[-2px]" />
-          aven config import{"\n"}  aven config plan{"\n"}  aven config apply --yes
+          <Terminal className="mr-1 inline size-3.5 align-[-2px]" aria-hidden />
+          aven config import{"\n"}
+          <span className="ml-[18px]">aven config plan</span>{"\n"}
+          <span className="ml-[18px]">aven config apply --yes</span>
         </pre>
       </Card>
 
@@ -287,7 +316,7 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
         title={t("환경 정의")}
         description={t("JSON 정의를 편집한 뒤 변경 사항을 미리 보고 적용하세요. partial을 적으면 그 partial이 소유한 서비스만 관리하고, 생략한 서비스 중 그 partial이 소유한 것만 삭제합니다.")}
         action={
-          <Button variant="outline" size="sm" onClick={load} disabled={loading || !pid || !env}>
+          <Button variant="outline" size="sm" onClick={reload} disabled={loading || !pid || !env}>
             <ArrowDownToLine /> {t("현재 설정 가져오기")}
           </Button>
         }
@@ -306,10 +335,12 @@ export function IACSettings({ ws, canEdit, canAdmin = false }: { ws: Workspace; 
             aria-label={t("코드형 인프라 JSON 정의")}
             className="min-h-[440px] w-full resize-y font-mono !text-xs !leading-5"
             disabled={!canEdit}
+            aria-invalid={!!jsonError}
           />
         )}
+        {jsonError && !loading && <p className="mt-2 font-mono text-xs text-danger" role="status">{t("JSON 형식이 올바르지 않습니다: {message}", { message: jsonError })}</p>}
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button variant="default" onClick={preview} loading={planning} disabled={!canEdit || loading || !definitionText.trim()}>
+          <Button variant="default" onClick={preview} loading={planning} disabled={!canEdit || loading || !definitionText.trim() || !!jsonError}>
             <RefreshCw /> {t("변경 미리보기")}
           </Button>
           <Button

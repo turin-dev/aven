@@ -14,5 +14,16 @@ import g12 from "./g12";
 import g13 from "./g13";
 import g14 from "./g14";
 import common from "./common";
+import ui_system from "./ov-ui-system";
+import ui_canvas from "./ov-ui-canvas";
+import ui_deployments from "./ov-ui-deployments";
+import ui_vars_settings from "./ov-ui-vars-settings";
+import ui_data from "./ov-ui-data";
+import ui_networking from "./ov-ui-networking";
+import ui_shell from "./ov-ui-shell";
+import ui_auth from "./ov-ui-auth";
+import ui_settings from "./ov-ui-settings";
+import ui_admin from "./ov-ui-admin";
+import ui_pages from "./ov-ui-pages";
 
-export const EN: Record<string, string> = { ...common, ...g01, ...g02, ...g03, ...g04, ...g05, ...g06, ...g07, ...g08, ...g09, ...g10, ...g11, ...g12, ...g13, ...g14 };
+export const EN: Record<string, string> = { ...common, ...g01, ...g02, ...g03, ...g04, ...g05, ...g06, ...g07, ...g08, ...g09, ...g10, ...g11, ...g12, ...g13, ...g14, ...ui_system, ...ui_canvas, ...ui_deployments, ...ui_vars_settings, ...ui_data, ...ui_networking, ...ui_shell, ...ui_auth, ...ui_settings, ...ui_admin, ...ui_pages };

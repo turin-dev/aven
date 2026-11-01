@@ -13,6 +13,7 @@ import {
 import { Eraser, Info, Plug, TerminalSquare, Unplug } from "lucide-react";
 import { execUrl, type CanvasService, type Environment, type ExecControl } from "@/lib/api";
 import { Terminal, keyToBytes, type Run, type Style } from "@/lib/terminal";
+import { backoffDelay } from "@/lib/logs";
 import { Button, Kbd, Select, cx } from "../ui";
 import { t, tr } from "@/lib/i18n";
 
@@ -40,12 +41,12 @@ export function renderLine(line: Run[], cursorX: number): ReactNode[] {
   const out: ReactNode[] = [];
   let x = 0;
   line.forEach((r, i) => {
-    const end = x + r.text.length;
+    const end = x + r.cells.length;
     if (cursorX >= x && cursorX < end) {
       const k = cursorX - x;
-      if (k > 0) out.push(<span key={`${i}a`} style={styleOf(r.st)}>{r.text.slice(0, k)}</span>);
-      out.push(<span key={`${i}c`} style={CURSOR}>{r.text[k]}</span>);
-      if (k + 1 < r.text.length) out.push(<span key={`${i}b`} style={styleOf(r.st)}>{r.text.slice(k + 1)}</span>);
+      if (k > 0) out.push(<span key={`${i}a`} style={styleOf(r.st)}>{r.cells.slice(0, k).join("")}</span>);
+      out.push(<span key={`${i}c`} style={CURSOR}>{r.cells[k] || " "}</span>);
+      if (k + 1 < r.cells.length) out.push(<span key={`${i}b`} style={styleOf(r.st)}>{r.cells.slice(k + 1).join("")}</span>);
     } else {
       out.push(<span key={i} style={styleOf(r.st)}>{r.text}</span>);
     }
@@ -58,6 +59,9 @@ export function renderLine(line: Run[], cursorX: number): ReactNode[] {
   return out;
 }
 
+/** Automatic reconnects after an unexpected drop (network blip, server restart). */
+const MAX_RECONNECTS = 5;
+
 /** Service shell: an interactive TTY in a running replica over the exec WebSocket. */
 export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment }) {
   const inst = svc.instance;
@@ -66,6 +70,7 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
   const [replica, setReplica] = useState("");
   const [conn, setConn] = useState<Conn>("idle");
   const [notice, setNotice] = useState<string | null>(null);
+  const [retry, setRetry] = useState<{ attempt: number; at: number } | null>(null);
   const [, setTick] = useState(0);
   const term = useRef(new Terminal());
   const ws = useRef<WebSocket | null>(null);
@@ -73,16 +78,31 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
   const probe = useRef<HTMLSpanElement>(null);
   const raf = useRef(0);
   const enc = useRef(new TextEncoder());
+  /** Pinned to the bottom unless the user scrolled up to read. */
+  const follow = useRef(true);
+  /** Bumped by every connect / disconnect; stale sockets and timers compare against it. */
+  const gen = useRef(0);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const attempts = useRef(0);
+  const sentSize = useRef<[number, number]>([0, 0]);
+
+  // A replica that went away (redeploy, scale down) falls back to the first one.
+  const replicaNames = replicas.map((r) => r.name).join();
+  useEffect(() => {
+    if (replica && !replicaNames.split(",").includes(replica) && conn !== "open") setReplica("");
+  }, [replica, replicaNames, conn]);
 
   const redraw = useCallback(() => {
     if (raf.current) return;
     raf.current = requestAnimationFrame(() => {
       raf.current = 0;
       setTick((t) => t + 1);
-      const el = screen.current;
-      if (el) el.scrollTop = el.scrollHeight;
     });
   }, []);
+  useLayoutEffect(() => {
+    const el = screen.current;
+    if (el && follow.current) el.scrollTop = el.scrollHeight;
+  });
 
   /** Terminal size from the element size and the width of one character. */
   const measure = useCallback((): [number, number] => {
@@ -102,50 +122,128 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
     if (w && w.readyState === WebSocket.OPEN) w.send(enc.current.encode(s));
   }, []);
 
-  const disconnect = useCallback(() => {
-    ws.current?.close(1000);
-    ws.current = null;
+  const sendSize = useCallback((cols: number, rows: number) => {
+    const w = ws.current;
+    if (!w || w.readyState !== WebSocket.OPEN) return;
+    if (sentSize.current[0] === cols && sentSize.current[1] === rows) return;
+    sentSize.current = [cols, rows];
+    w.send(JSON.stringify({ type: "resize", cols, rows }));
   }, []);
 
-  const connect = useCallback(() => {
-    disconnect();
-    const [cols, rows] = measure();
-    term.current.resize(cols, rows);
-    setNotice(null);
-    setConn("connecting");
-    const w = new WebSocket(execUrl(svc.id, env.id, { replica: replica || undefined, cols, rows }));
-    w.binaryType = "arraybuffer";
-    const dec = new TextDecoder();
-    ws.current = w;
-    w.onopen = () => {
-      if (ws.current !== w) return;
-      setConn("open");
-      screen.current?.focus();
-    };
-    w.onmessage = (ev) => {
-      if (ws.current !== w) return;
-      if (typeof ev.data === "string") {
-        try {
-          const c = JSON.parse(ev.data) as ExecControl;
-          if (c.type === "exit") setNotice(t("셸이 종료되었습니다 (exit {code})", { code: c.code }));
-          else if (c.type === "error") setNotice(c.message);
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
-      term.current.write(dec.decode(new Uint8Array(ev.data as ArrayBuffer), { stream: true }));
-      redraw();
-    };
-    w.onclose = (ev) => {
-      if (ws.current !== w && ws.current !== null) return;
-      setConn("closed");
-      if (ev.code !== 1000) setNotice((n) => n ?? t("연결이 끊겼습니다. 서비스가 실행 중인지 확인하세요."));
-      ws.current = null;
-    };
-  }, [disconnect, env.id, measure, redraw, replica, svc.id]);
+  const stopRetry = useCallback(() => {
+    clearTimeout(retryTimer.current);
+    retryTimer.current = undefined;
+    setRetry(null);
+  }, []);
 
-  useEffect(() => () => disconnect(), [disconnect]);
+  const disconnect = useCallback(() => {
+    gen.current++;
+    stopRetry();
+    attempts.current = 0;
+    const w = ws.current;
+    ws.current = null;
+    w?.close(1000);
+    setConn((c) => (c === "idle" ? c : "closed"));
+  }, [stopRetry]);
+
+  const open = useCallback(
+    (isRetry: boolean) => {
+      const prev = ws.current;
+      ws.current = null;
+      prev?.close(1000);
+      const my = ++gen.current;
+      clearTimeout(retryTimer.current);
+      retryTimer.current = undefined;
+      const [cols, rows] = measure();
+      term.current.resize(cols, rows);
+      setNotice(null);
+      setConn("connecting");
+      if (!isRetry) attempts.current = 0;
+      const w = new WebSocket(execUrl(svc.id, env.id, { replica: replica || undefined, cols, rows }));
+      w.binaryType = "arraybuffer";
+      const dec = new TextDecoder();
+      ws.current = w;
+      sentSize.current = [cols, rows];
+      let opened = false;
+      let ended = false; // the server reported exit / error: do not retry
+      w.onopen = () => {
+        if (gen.current !== my) return;
+        opened = true;
+        setConn("open");
+        setRetry(null);
+        if (isRetry) {
+          term.current.write("\r\n\x1b[2m── " + t("다시 연결됨 · 새 셸 세션") + " ──\x1b[0m\r\n");
+          redraw();
+        }
+        // The pane may have been resized while connecting.
+        const [c, r] = measure();
+        term.current.resize(c, r);
+        sendSize(c, r);
+        screen.current?.focus({ preventScroll: true });
+      };
+      w.onmessage = (ev) => {
+        if (gen.current !== my) return;
+        if (typeof ev.data === "string") {
+          try {
+            const c = JSON.parse(ev.data) as ExecControl;
+            if (c.type === "exit") {
+              ended = true;
+              setNotice(t("셸이 종료되었습니다 (exit {code})", { code: c.code }));
+            } else if (c.type === "error") {
+              ended = true;
+              setNotice(c.message);
+            }
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        // A successful exchange resets the retry budget.
+        attempts.current = 0;
+        term.current.write(dec.decode(new Uint8Array(ev.data as ArrayBuffer), { stream: true }));
+        redraw();
+      };
+      w.onclose = (ev) => {
+        if (gen.current !== my) return;
+        ws.current = null;
+        const unexpected = ev.code !== 1000 && !ended;
+        if (unexpected && opened && attempts.current < MAX_RECONNECTS && navigator.onLine !== false) {
+          attempts.current++;
+          const delay = backoffDelay(attempts.current, Math.random, 1000, 10000);
+          setConn("connecting");
+          setRetry({ attempt: attempts.current, at: Date.now() + delay });
+          retryTimer.current = setTimeout(() => gen.current === my && open(true), delay);
+          return;
+        }
+        setConn("closed");
+        setRetry(null);
+        if (unexpected) setNotice((n) => n ?? t("연결이 끊겼습니다. 서비스가 실행 중인지 확인하세요."));
+      };
+    },
+    [env.id, measure, redraw, replica, sendSize, svc.id],
+  );
+  const connect = useCallback(() => open(false), [open]);
+
+  useEffect(
+    () => () => {
+      gen.current++;
+      clearTimeout(retryTimer.current);
+      if (raf.current) cancelAnimationFrame(raf.current);
+      const w = ws.current;
+      ws.current = null;
+      w?.close(1000);
+    },
+    [],
+  );
+
+  // Back online while waiting to retry: reconnect at once.
+  useEffect(() => {
+    const onOnline = () => {
+      if (retryTimer.current) open(true);
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [open]);
 
   // 크기가 바뀌면 resize 제어 메시지를 보낸다
   useLayoutEffect(() => {
@@ -156,10 +254,11 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
       clearTimeout(t);
       t = setTimeout(() => {
         const [cols, rows] = measure();
-        if (cols === term.current.cols && rows === term.current.rows) return;
-        term.current.resize(cols, rows);
-        const w = ws.current;
-        if (w && w.readyState === WebSocket.OPEN) w.send(JSON.stringify({ type: "resize", cols, rows }));
+        if (cols !== term.current.cols || rows !== term.current.rows) {
+          term.current.resize(cols, rows);
+          redraw();
+        }
+        sendSize(cols, rows);
       }, 120);
     });
     ro.observe(el);
@@ -167,7 +266,7 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
       clearTimeout(t);
       ro.disconnect();
     };
-  }, [measure]);
+  }, [measure, redraw, sendSize]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (conn !== "open") return;
@@ -175,6 +274,7 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
     if (b === null) return;
     e.preventDefault();
     e.stopPropagation(); // Esc가 패널을 닫지 않게
+    follow.current = true;
     send(b);
   };
 
@@ -203,7 +303,7 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
         </label>
         {conn === "open" || conn === "connecting" ? (
           <Button variant="outline" onClick={disconnect}>
-            <Unplug /> {t("연결 끊기")}
+            <Unplug /> {retry ? t("재연결 취소") : t("연결 끊기")}
           </Button>
         ) : (
           <Button variant="primary" onClick={connect} disabled={!inst.current_deployment_id}>
@@ -230,7 +330,15 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
               )}
             />
           )}
-          {conn === "connecting" ? t("연결 중…") : conn === "open" ? t("연결됨") : conn === "closed" ? t("연결 끊김") : ""}
+          {retry
+            ? t("다시 연결하는 중… ({n}/{max})", { n: retry.attempt, max: MAX_RECONNECTS })
+            : conn === "connecting"
+              ? t("연결 중…")
+              : conn === "open"
+                ? t("연결됨")
+                : conn === "closed"
+                  ? t("연결 끊김")
+                  : ""}
         </span>
       </div>
       {notice && (
@@ -246,6 +354,11 @@ export function ShellTab({ svc, env }: { svc: CanvasService; env: Environment })
         aria-label={t("{service} 셸 터미널 ({env}). Shift+Tab으로 빠져나갑니다", { service: svc.name, env: env.name })}
         aria-roledescription={t("터미널")}
         onKeyDown={onKeyDown}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        }}
+        data-terminal={conn === "open" || undefined}
         onPaste={(e) => {
           if (conn !== "open") return;
           e.preventDefault();

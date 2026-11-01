@@ -417,6 +417,7 @@ func (m *Manager) pitrExec(ctx context.Context, pt *pitrTarget, script string, e
 		if msg == "" {
 			msg = strings.TrimSpace(string(out.Stdout))
 		}
+		msg = redactSecrets(msg, dbSecrets(pt.kind, pt.vars))
 		if len(msg) > 500 {
 			msg = msg[:500] + "…"
 		}
@@ -632,6 +633,7 @@ func (m *Manager) pitrSyncInstance(ctx context.Context, id string, now time.Time
 	case "mysql":
 		err = m.pitrSyncMySQL(ctx, pt, cfg)
 	}
+	err = pt.scrub(err)
 	syncAt := time.Now().UTC()
 	m.updatePITRConfig(ctx, id, func(c *store.DBPITRConfig) {
 		if err != nil {
@@ -653,7 +655,9 @@ func (m *Manager) pitrSyncInstance(ctx context.Context, id string, now time.Time
 			m.Log.Warn("pitr base", "instance", id, "err", err)
 		}
 	}
-	m.prunePITR(ctx, id, pt.kind, cfg)
+	if !PITRRestoreRunning(id) { // 복원이 읽고 있는 파일은 지우지 않는다
+		m.prunePITR(ctx, id, pt.kind, cfg)
+	}
 	return nil
 }
 
@@ -932,6 +936,7 @@ func (m *Manager) StartPITRBase(ctx context.Context, in *store.Instance) error {
 		bg, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 		defer cancel()
 		o, err := m.runPITRBase(bg, pt, cfg)
+		err = pt.scrub(err)
 		if err != nil {
 			m.updatePITRConfig(bg, in.ID, func(c *store.DBPITRConfig) { c.LastError = "기준 백업 실패: " + err.Error() })
 			m.emitDB(bg, pt.dbTarget, "pitr.base_failed", fmt.Sprintf("%s: 시점 복구 기준 백업 실패: %v", pt.t.Service.Name, err))
@@ -1102,6 +1107,9 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 	if !agentprotocol.PITRSupported(kind) {
 		return nil, ErrPITRNotSupported
 	}
+	if err := checkPITRRestoreTarget(src, target, o.InPlace); err != nil {
+		return nil, err
+	}
 	if err := m.CheckPITRTarget(ctx, src, kind, at); err != nil {
 		return nil, err
 	}
@@ -1118,6 +1126,12 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 		bg, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 		defer cancel()
 		err := m.runPITRRestore(bg, src, target, kind, at, o)
+		dt, derr := m.dbTargetFor(bg, target)
+		if derr == nil {
+			err = dt.scrub(err)
+		} else if err != nil {
+			err = (&dbTarget{kind: kind, vars: src.Variables}).scrub(err)
+		}
 		now := time.Now().UTC()
 		setPITRRestore(src.ID, func(r *PITRRestoreStatus) {
 			r.FinishedAt = &now
@@ -1127,7 +1141,7 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 				r.Status, r.Step = "done", "완료"
 			}
 		})
-		if dt, derr := m.dbTargetFor(bg, target); derr == nil {
+		if derr == nil {
 			if err != nil {
 				m.emitDB(bg, dt, "pitr.restore_failed", fmt.Sprintf("%s: 시점 복원 실패: %v", dt.t.Service.Name, err))
 			} else {
@@ -1137,6 +1151,37 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 	}()
 	c := *rs
 	return &c, nil
+}
+
+// checkPITRRestoreTarget은 복원 대상을 확인한다: 원본에 덮어쓰는 것은 InPlace를 명시했을 때만, InPlace면 대상이 원본이어야 한다.
+func checkPITRRestoreTarget(src, target *store.Instance, inPlace bool) error {
+	switch {
+	case src == nil || target == nil:
+		return errors.New("restore source and target are required")
+	case inPlace && target.ID != src.ID:
+		return errors.New("an in-place restore must target the source database")
+	case !inPlace && target.ID == src.ID:
+		return errors.New("restoring into the source database overwrites it; set in_place to confirm")
+	case target.EnvironmentID != src.EnvironmentID:
+		return errors.New("the restore target must be in the same environment as the source")
+	}
+	return nil
+}
+
+// pitrLockWait는 lock을 잡을 때까지 기다린다(최대 wait).
+func pitrLockWait(ctx context.Context, id, what string, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for !pitrLock(id, what) {
+		if time.Now().After(deadline) {
+			return ErrPITRBusy
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+	return nil
 }
 
 func (m *Manager) runPITRRestore(ctx context.Context, src, target *store.Instance, kind string, at time.Time, o PITRRestoreOpts) error {
@@ -1177,21 +1222,21 @@ func (m *Manager) runPITRRestore(ctx context.Context, src, target *store.Instanc
 	}
 	defer unlockInstance(target.ID)
 	if o.InPlace {
+		// 복원하는 동안 보관 작업을 멈춘다. epoch를 바꾸기 전에 잡아야 진행 중이던 보관이 새 epoch에 섞이지 않는다.
+		if err := pitrLockWait(ctx, src.ID, "sync", 2*time.Minute); err != nil {
+			return err
+		}
+		defer pitrUnlock(src.ID, "sync")
 		if cfg, err := m.Store.GetDBPITRConfig(ctx, src.ID); err == nil {
 			o.keepArchive = cfg.Enabled
 		}
 		// 복원한 DB의 로그를 복원 전 로그와 섞지 않는다. 새 epoch에서 기준 백업부터 다시 만든다.
-		m.updatePITRConfig(ctx, src.ID, func(c *store.DBPITRConfig) {
+		if _, err := m.updatePITRConfig(ctx, src.ID, func(c *store.DBPITRConfig) {
 			c.Epoch++
 			c.LastBaseAt, c.LastBaseTry, c.PGLastLSN, c.MySQLActive = nil, nil, "", ""
-		})
-		if !pitrLock(src.ID, "sync") { // 복원하는 동안 보관 작업을 멈춘다
-			time.Sleep(5 * time.Second)
-			if !pitrLock(src.ID, "sync") {
-				return ErrPITRBusy
-			}
+		}); err != nil {
+			return fmt.Errorf("start a new archive epoch: %w", err)
 		}
-		defer pitrUnlock(src.ID, "sync")
 	}
 	step("데이터 복원")
 	switch kind {
@@ -1325,18 +1370,12 @@ func (m *Manager) restorePITRPostgres(ctx context.Context, pt *pitrTarget, plan 
 	if pt.cur != nil {
 		containers = pt.cur.Containers
 	}
-	for _, c := range containers {
-		m.markDrain(c)
-		if err := pt.drv.Stop(ctx, c, 30); err != nil {
-			m.Log.Warn("pitr restore: stop", "container", c, "err", err)
-		}
+	if err := m.stopForRestore(ctx, pt.drv, containers); err != nil {
+		return err
 	}
 	err = pipeTo(ctx, func(w io.Writer) error { return writePGRestoreTar(ctx, w, plan, m.openPITR) },
 		func(r io.Reader) error { return m.pitrRunIn(ctx, pt, req, tool, r) })
-	for _, c := range containers {
-		pt.drv.Start(context.WithoutCancel(ctx), c)
-		m.undrain(c)
-	}
+	m.startAfterRestore(context.WithoutCancel(ctx), pt.drv, containers)
 	if err != nil {
 		return err
 	}

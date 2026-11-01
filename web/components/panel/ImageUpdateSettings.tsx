@@ -120,6 +120,12 @@ export function ImageUpdateSettings({ svc, env, inst }: { svc: CanvasService; en
             <option value="minor">{t("마이너 및 패치")}</option>
           </Select>
         </Field>
+        {policy !== "disabled" && !inst.image && (
+          <p className="text-xs leading-[18px] text-red-600">{t("자동 업데이트를 켜려면 먼저 소스 이미지를 정하세요.")}</p>
+        )}
+        {policy !== "disabled" && !!inst.image?.includes("@sha256:") && (
+          <p className="text-xs leading-[18px] text-yellow-600">{t("이 이미지는 digest로 고정되어 있어 업데이트를 확인하지 않습니다. 태그(예: nginx:1.27)로 바꾸세요.")}</p>
+        )}
         {policy !== "disabled" && (
           <>
             <Field label={t("유지보수 시간 (UTC)")}>
@@ -159,7 +165,7 @@ export function ImageUpdateSettings({ svc, env, inst }: { svc: CanvasService; en
           </>
         )}
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="submit" variant="primary" disabled={!canEdit || !dirty || (win === "custom" && policy !== "disabled" && (days.length === 0 || start >= end))} loading={busy === "save"}>
+          <Button type="submit" variant="primary" disabled={!canEdit || !dirty || (policy !== "disabled" && !inst.image) || (win === "custom" && policy !== "disabled" && (days.length === 0 || start >= end))} loading={busy === "save"}>
             {t("저장")}
           </Button>
           <Button variant="outline" disabled={!canEdit || !!busy || !inst.image} loading={busy === "check"}

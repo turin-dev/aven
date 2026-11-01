@@ -1,6 +1,10 @@
 package watch
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestMatchFile(t *testing.T) {
 	cases := []struct {
@@ -26,6 +30,19 @@ func TestMatchFile(t *testing.T) {
 		{[]string{"apps/*/package.json"}, "apps/api/package.json", true},
 		{[]string{"apps/*/package.json"}, "apps/api/src/package.json", false},
 		{[]string{"# comment", "", "Dockerfile"}, "Dockerfile", true},
+		// 앞의 "/"는 루트에 고정한다.
+		{[]string{"/Dockerfile"}, "Dockerfile", true},
+		{[]string{"/Dockerfile"}, "apps/web/Dockerfile", false},
+		{[]string{"/*.md"}, "README.md", true},
+		{[]string{"/*.md"}, "docs/intro.md", false},
+		{[]string{"Dockerfile"}, "apps/web/Dockerfile", true},
+		{[]string{"/backend"}, "backend/main.go", true},
+		{[]string{"/backend"}, "apps/backend/main.go", false},
+		{[]string{"**", "!/README.md"}, "docs/README.md", true},
+		{[]string{"**", "!/README.md"}, "README.md", false},
+		// 빈 경로는 아무 패턴에도 맞지 않는다.
+		{[]string{"*"}, "", false},
+		{[]string{"**"}, "/", false},
 	}
 	for _, c := range cases {
 		if got := MatchFile(c.patterns, c.file); got != c.want {
@@ -69,5 +86,21 @@ func TestMatchService(t *testing.T) {
 				t.Errorf("MatchService(%v, %q, %v) = %v, want %v", tc.patterns, tc.root, tc.changed, got, tc.want)
 			}
 		})
+	}
+}
+
+// "**"가 많은 패턴도 깊은 경로에서 빨리 끝난다.
+func TestMatchFileManyDoubleStars(t *testing.T) {
+	p := strings.Repeat("**/", 12) + "nomatch"
+	file := strings.Repeat("d/", 60) + "file.go"
+	done := make(chan bool, 1)
+	go func() { done <- MatchFile([]string{p}, file) }()
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("unexpected match")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("pathological pattern did not finish")
 	}
 }

@@ -5,12 +5,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { Environment, ProjectDetail, Workspace as WorkspaceInfo } from "./api";
 import { useMe, useProject, useProjects, useWorkspaces } from "./queries";
 import { withCtx } from "./nav";
-import { selectWorkspaceID, rememberedSelection } from "./workspaceSelection";
+import { selectWorkspaceID, rememberedSelection, rememberSelection } from "./workspaceSelection";
 import { t } from "./i18n";
 import { writeStorage } from "./legacyStorage";
-
-const PROJECT_KEY = "aven.project.v1";
-const WORKSPACE_KEY = "aven.workspace.v1";
 
 /**
  * Current project, environment and workspace.
@@ -70,14 +67,14 @@ export function useWorkspace() {
 
   useEffect(() => {
     if (pid && pidParam === pid) {
-      writeStorage(PROJECT_KEY, pid);
+      rememberSelection("project", pid);
     }
   }, [pid, pidParam]);
 
   // Remember the resolved workspace so it survives reloads without a `?ws=` param.
   useEffect(() => {
     if (!wsid || !allProjects.data || !wsList.length) return;
-    writeStorage(WORKSPACE_KEY, wsid);
+    rememberSelection("workspace", wsid);
   }, [wsid, allProjects.data, wsList.length]);
 
   const project = useProject(pid);
@@ -90,7 +87,8 @@ export function useWorkspace() {
     [detail],
   );
   const env =
-    envs.find((e) => e.name === envParam) ?? envs.find((e) => e.id === detail?.default_environment_id) ?? envs[0];
+    // `?env=` is a name; notification links carry the environment id (names cannot contain "_", ids do).
+    envs.find((e) => e.name === envParam) ?? envs.find((e) => e.id === envParam) ?? envs.find((e) => e.id === detail?.default_environment_id) ?? envs[0];
   const isDefaultEnv = !!env && env.id === detail?.default_environment_id;
 
   /** Switch environment, keeping the current page but dropping open panels. */
@@ -103,11 +101,7 @@ export function useWorkspace() {
 
   const switchProject = useCallback(
     (id: string) => {
-      try {
-        window.localStorage.setItem(PROJECT_KEY, id);
-      } catch {
-        /* ignore */
-      }
+      rememberSelection("project", id);
       router.push(withCtx(pathname === "/settings/" ? pathname : "/", { project: id }));
     },
     [router, pathname],
@@ -116,18 +110,10 @@ export function useWorkspace() {
   /** Switch workspace: jump to its first project (or the empty dashboard, prompting to create one). */
   const switchWorkspace = useCallback(
     (id: string) => {
-      try {
-        window.localStorage.setItem(WORKSPACE_KEY, id);
-      } catch {
-        /* ignore */
-      }
+      rememberSelection("workspace", id);
       const first = (allProjects.data ?? []).find((p) => p.workspace_id === id);
       if (first) {
-        try {
-          window.localStorage.setItem(PROJECT_KEY, first.id);
-        } catch {
-          /* ignore */
-        }
+        rememberSelection("project", first.id);
         router.push(withCtx("/", { project: first.id }, { ws: id }));
       } else {
         router.push(withCtx("/", {}, { ws: id }));

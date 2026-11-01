@@ -91,3 +91,51 @@ func TestSecretsEncryptedAtRest(t *testing.T) {
 }
 
 func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
+
+// 키가 생기기 전에 평문으로 저장된 TOTP 비밀과 알림 채널 설정도 EncryptLegacySecrets가 암호화한다.
+func TestEncryptLegacyColumns(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "k.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	u := &User{Email: "a@example.com", Name: "a", Role: RoleMember, TOTPSecret: "JBSWY3DPEHPK3PXP"}
+	if err := s.CreateUser(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	ch := &NotificationChannel{Kind: "webhook", Name: "hook", Config: ChannelConfig{URL: "https://hooks.example.com/very-secret"}}
+	if err := s.CreateChannel(ctx, ch); err != nil {
+		t.Fatal(err)
+	}
+	raw := func(q, id string) string {
+		var v string
+		s.q.QueryRowContext(ctx, q, id).Scan(&v)
+		return v
+	}
+	if !strings.Contains(raw(`SELECT totp_secret FROM users WHERE id=?`, u.ID), "JBSWY3DPEHPK3PXP") {
+		t.Fatal("precondition: plaintext totp")
+	}
+	box, _ := secret.LoadOrCreate(filepath.Join(dir, "master.key"))
+	s.SetSecretBox(box)
+	for i := 0; i < 2; i++ { // 두 번 돌려도 이중 암호화되지 않는다
+		if err := s.EncryptLegacySecrets(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := raw(`SELECT totp_secret FROM users WHERE id=?`, u.ID); !strings.HasPrefix(v, secret.Prefix) {
+		t.Errorf("totp not encrypted: %s", v)
+	}
+	if v := raw(`SELECT config FROM notification_channels WHERE id=?`, ch.ID); !strings.HasPrefix(v, secret.Prefix) || strings.Contains(v, "very-secret") {
+		t.Errorf("channel config not encrypted: %s", v)
+	}
+	got, err := s.GetUser(ctx, u.ID)
+	if err != nil || got.TOTPSecret != "JBSWY3DPEHPK3PXP" {
+		t.Fatalf("totp after encrypt: %+v %v", got, err)
+	}
+	c2, err := s.GetChannel(ctx, ch.ID)
+	if err != nil || c2.Config.URL != "https://hooks.example.com/very-secret" {
+		t.Fatalf("channel after encrypt: %+v %v", c2, err)
+	}
+}

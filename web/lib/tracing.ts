@@ -150,9 +150,13 @@ export function parseTraceId(v: string): string | null {
 }
 
 export function fmtSpanMs(ms: number): string {
-  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`;
-  if (ms >= 10) return `${Math.round(ms)}ms`;
-  if (ms >= 1) return `${ms.toFixed(1)}ms`;
+  if (!Number.isFinite(ms)) return "—";
+  // Clock skew between hosts can make an offset negative; keep the sign instead of printing "-0µs" style noise.
+  if (ms < 0) return `-${fmtSpanMs(-ms)}`;
+  // Thresholds are on the rounded value so 999.6 ms reads "1.00s", not "1000ms".
+  if (ms >= 999.5) return ms >= 9995 ? `${(ms / 1000).toFixed(1)}s` : `${(ms / 1000).toFixed(2)}s`;
+  if (ms >= 9.95) return `${Math.round(ms)}ms`;
+  if (ms >= 0.9995) return `${ms.toFixed(1)}ms`;
   return `${Math.round(ms * 1000)}µs`;
 }
 
@@ -174,13 +178,17 @@ export function isoMs(iso: string): number {
 
 export type SpanRow = { span: TraceSpan; depth: number; hasChildren: boolean };
 
-/** Orders spans depth-first under their parents (orphans become roots), each level by start time. */
+/**
+ * Orders spans depth-first under their parents (orphans become roots), each level by start time.
+ * Spans come from untrusted SDKs: a span that is its own parent, a parent cycle or a repeated span id must not
+ * loop forever or drop spans, so every span is emitted exactly once and unreachable ones become roots.
+ */
 export function spanTree(spans: TraceSpan[]): SpanRow[] {
   const ids = new Set(spans.map((s) => s.span_id));
   const kids = new Map<string, TraceSpan[]>();
   const roots: TraceSpan[] = [];
   for (const s of spans) {
-    if (s.parent_span_id && ids.has(s.parent_span_id)) {
+    if (s.parent_span_id && s.parent_span_id !== s.span_id && ids.has(s.parent_span_id)) {
       const l = kids.get(s.parent_span_id) ?? [];
       l.push(s);
       kids.set(s.parent_span_id, l);
@@ -188,11 +196,24 @@ export function spanTree(spans: TraceSpan[]): SpanRow[] {
   }
   const byStart = (a: TraceSpan, b: TraceSpan) => isoMs(a.start_time) - isoMs(b.start_time);
   const out: SpanRow[] = [];
-  const walk = (s: TraceSpan, depth: number) => {
-    const c = (kids.get(s.span_id) ?? []).sort(byStart);
-    out.push({ span: s, depth, hasChildren: c.length > 0 });
-    for (const k of c) walk(k, depth + 1);
+  const done = new Set<TraceSpan>();
+  const expanded = new Set<string>();
+  const walk = (root: TraceSpan) => {
+    // Iterative so a very deep trace cannot overflow the stack.
+    const stack: { s: TraceSpan; depth: number }[] = [{ s: root, depth: 0 }];
+    while (stack.length) {
+      const { s, depth } = stack.pop()!;
+      if (done.has(s)) continue;
+      done.add(s);
+      // Children are listed under the first span with a given id only.
+      const c = expanded.has(s.span_id) ? [] : (kids.get(s.span_id) ?? []).filter((k) => !done.has(k)).sort(byStart);
+      expanded.add(s.span_id);
+      out.push({ span: s, depth, hasChildren: c.length > 0 });
+      for (let i = c.length - 1; i >= 0; i--) stack.push({ s: c[i], depth: depth + 1 });
+    }
   };
-  roots.sort(byStart).forEach((r) => walk(r, 0));
+  roots.sort(byStart).forEach(walk);
+  // Spans caught in a parent cycle are not reachable from any root.
+  for (const s of [...spans].sort(byStart)) if (!done.has(s)) walk(s);
   return out;
 }

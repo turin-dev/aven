@@ -160,7 +160,7 @@ func main() {
 	}
 	startWake(ctx, h, docker, caddy, log)
 	log.Info("aven-agent starting", "node", cred.NodeID, "server", *server, "version", version)
-	backoff := time.Second
+	var retry backoff
 	for ctx.Err() == nil {
 		started := time.Now()
 		if cred.Key == "" {
@@ -181,16 +181,11 @@ func main() {
 		if ctx.Err() != nil {
 			break
 		}
-		log.Warn("disconnected from server; containers keep running", "err", err)
-		if time.Since(started) > time.Minute {
-			backoff = time.Second
-		}
+		wait := retry.next(time.Since(started))
+		log.Warn("disconnected from server; containers keep running", "err", err, "retry_in", wait.Round(time.Millisecond))
 		select {
 		case <-ctx.Done():
-		case <-time.After(backoff):
-		}
-		if backoff < 30*time.Second {
-			backoff *= 2
+		case <-time.After(wait):
 		}
 	}
 }
@@ -213,7 +208,9 @@ func httpClient(caFile string) (*http.Client, error) {
 	}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = cfg
-	return &http.Client{Transport: tr}, nil
+	// 리다이렉트를 따라가지 않는다: 307/308이면 join token이나 옛 비밀키가 담긴 POST 본문이 다른 host로 다시 간다.
+	// agent는 설정한 서버 URL에만 말한다.
+	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
 }
 
 func loadCredentials(path string) (credentials, error) {
@@ -265,9 +262,14 @@ func register(ctx context.Context, client *http.Client, server, path string, req
 		return c, 200, err
 	}
 	if r.Certificate == "" { // 인증서를 모르는 옛 서버: Bearer 비밀키
-		return credentials{NodeID: r.NodeID, Secret: r.Secret}, 200, nil
+		c = credentials{NodeID: r.NodeID, Secret: r.Secret}
+	} else {
+		c = credentials{NodeID: r.NodeID, Key: string(key), Certificate: r.Certificate, CA: r.CA}
 	}
-	return credentials{NodeID: r.NodeID, Key: string(key), Certificate: r.Certificate, CA: r.CA}, 200, nil
+	if err := checkIssued(c, time.Now()); err != nil {
+		return credentials{}, 200, err
+	}
+	return c, 200, nil
 }
 
 func enroll(ctx context.Context, client *http.Client, server, token string) (credentials, error) {
@@ -298,6 +300,9 @@ func upgrade(ctx context.Context, client *http.Client, server string, old creden
 	}
 	if err == nil && c.Key == "" {
 		err = errors.New("server returned no certificate")
+	}
+	if err == nil && c.NodeID != old.NodeID {
+		err = fmt.Errorf("server returned a certificate for node %s, expected %s", c.NodeID, old.NodeID)
 	}
 	return c, err
 }
@@ -337,30 +342,23 @@ func authenticate(ctx context.Context, conn *websocket.Conn, cred *credentials, 
 	return nil
 }
 
-// acceptRenewal은 서버가 연결 중에 밀어 준 새 인증서를 검증하고 저장한다(같은 키, 같은 node ID, 고정해 둔 CA가 서명한 것만).
+// acceptRenewal은 서버가 연결 중에 밀어 준 새 인증서를 검증하고 저장한다(같은 키, 같은 node ID(CN과 URI SAN), 지금 유효하고
+// 고정해 둔 CA가 서명한 것만). 지금 인증서보다 먼저 만료되는 인증서로 되돌리지 않는다.
 func acceptRenewal(cred *credentials, path string, certPEM string) error {
-	cert, err := agentpki.ParseCert([]byte(certPEM))
-	if err != nil {
-		return err
-	}
-	priv, err := agentpki.ParsePrivateKey([]byte(cred.Key))
-	if err != nil {
-		return err
-	}
-	if pub, ok := cert.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(priv.Public()) {
-		return errors.New("renewed certificate is for a different key")
-	}
+	var roots *x509.CertPool
 	if cred.CA != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(cred.CA)) {
+		roots = x509.NewCertPool()
+		if !roots.AppendCertsFromPEM([]byte(cred.CA)) {
 			return errors.New("invalid pinned CA")
 		}
-		if _, err := cert.Verify(x509.VerifyOptions{Roots: pool, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-			return err
-		}
 	}
-	if cert.Subject.CommonName != cred.NodeID {
-		return errors.New("renewed certificate is for a different node")
+	if err := checkNodeCert(*cred, roots, certPEM, time.Now()); err != nil {
+		return fmt.Errorf("renewed %w", err)
+	}
+	if cur, err := agentpki.ParseCert([]byte(cred.Certificate)); err == nil {
+		if next, _ := agentpki.ParseCert([]byte(certPEM)); next != nil && next.NotAfter.Before(cur.NotAfter) {
+			return errors.New("renewed certificate expires before the current one")
+		}
 	}
 	next := *cred
 	next.Certificate = certPEM

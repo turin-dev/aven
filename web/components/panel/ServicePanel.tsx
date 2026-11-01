@@ -312,18 +312,19 @@ export function ServicePanel({
               <div role="tabpanel" id={tabPanelId("svc")} aria-labelledby={tabId("svc", cur)} className="h-full px-5 pt-8 md:px-12">
                 {svc.instance.admin_hold && cur !== "admin" && <AdminHoldNotice hold={svc.instance.admin_hold} />}
                 {svc.instance.self && cur === "deployments" && <SelfServiceNotice self={svc.instance.self} svcId={svc.id} envId={env.id} />}
-                {cur === "deployments" && <DeploymentsTab svc={svc} env={env} actions={actions} onOpenDep={(id) => onDep(id)} onTab={onTab} />}
+                {/* Tabs are keyed by instance so local state (paging, spinners, paused metrics) never leaks into another service. */}
+                {cur === "deployments" && <DeploymentsTab key={`${svc.id}:${env.id}`} svc={svc} env={env} actions={actions} onOpenDep={(id) => onDep(id)} onTab={onTab} />}
                 {cur === "backups" && (
                   <>
-                    <VolumeBackupsTab svc={svc} />
-                    {svc.source_type === "database" && (svc.database_kind === "postgres" || svc.database_kind === "mysql") && <PitrSection svc={svc} env={env} />}
+                    <VolumeBackupsTab key={svc.id} svc={svc} />
+                    {svc.source_type === "database" && (svc.database_kind === "postgres" || svc.database_kind === "mysql") && <PitrSection key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
                   </>
                 )}
                 {cur === "code" && <FunctionTab key={`${svc.id}:${env.id}`} svc={svc} env={env} actions={actions} />}
-                {cur === "data" && <DataTab svc={svc} env={env} />}
+                {cur === "data" && <DataTab key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
                 {cur === "bucket" && <BucketTab key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
                 {cur === "variables" && <VariablesTab key={svc.id} svc={svc} env={env} />}
-                {cur === "metrics" && <MetricsTab svc={svc} env={env} />}
+                {cur === "metrics" && <MetricsTab key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
                 {cur === "shell" && <ShellTab key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
                 {cur === "settings" && <SettingsTab key={svc.id} svc={svc} env={env} actions={actions} />}
                 {cur === "admin" && <AdminTab key={`${svc.id}:${env.id}`} svc={svc} env={env} />}
@@ -333,7 +334,7 @@ export function ServicePanel({
         )}
       </aside>
       {svc && dep && (
-        <DeploymentPanel key={dep} id={dep} svc={svc} env={env} actions={actions} tab={dtab} onTab={onDtab} onClose={() => onDep(null)} />
+        <DeploymentPanel key={`${svc.id}:${env.id}:${dep}`} id={dep} svc={svc} env={env} actions={actions} tab={dtab} onTab={onDtab} onClose={() => onDep(null)} />
       )}
     </PanelPortal>
   );

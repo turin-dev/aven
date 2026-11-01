@@ -69,3 +69,29 @@ func watchResize(f func()) func() {
 	}()
 	return func() { close(done) }
 }
+
+// enableANSI turns on VT processing so the console renders ANSI colors (Windows 10+). Without it colors stay off.
+func enableANSI(f *os.File) bool {
+	h := windows.Handle(f.Fd())
+	var mode uint32
+	if err := windows.GetConsoleMode(h, &mode); err != nil {
+		return false
+	}
+	if mode&windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING != 0 {
+		return true
+	}
+	return windows.SetConsoleMode(h, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING) == nil
+}
+
+// disableEcho turns off console echo for password prompts. The returned function restores it.
+func disableEcho(f *os.File) (func(), error) {
+	h := windows.Handle(f.Fd())
+	var old uint32
+	if err := windows.GetConsoleMode(h, &old); err != nil {
+		return nil, err
+	}
+	if err := windows.SetConsoleMode(h, (old&^windows.ENABLE_ECHO_INPUT)|windows.ENABLE_PROCESSED_INPUT|windows.ENABLE_LINE_INPUT); err != nil {
+		return nil, err
+	}
+	return func() { windows.SetConsoleMode(h, old) }, nil
+}

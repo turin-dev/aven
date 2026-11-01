@@ -19,13 +19,12 @@ export function RegistriesView({ pid }: { pid: string }) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [, setSaved] = useState(false);
   const base: Row[] = (regs.data ?? []).map((r) => ({ key: `stored:${r.host}`, host: r.host, username: r.username, password: null, storedHost: r.has_password ? r.host : null }));
   const cur = rows ?? base;
   const dirty = rows !== null;
   const set = (next: Row[]) => {
     setRows(next);
-    setSaved(false);
+    setError(null);
   };
   const upd = (key: string, patch: Partial<Row>) => set(cur.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
@@ -69,14 +68,17 @@ export function RegistriesView({ pid }: { pid: string }) {
             const bad = cur.find((r) => !r.host || !r.username.trim() || (r.storedHost !== r.host && !r.password));
             if (bad) return setError(t("{host}: 호스트, 사용자 이름, 비밀번호를 모두 입력하세요. 호스트를 변경하면 새 비밀번호가 필요합니다.", { host: bad.host || t("새 레지스트리") }));
             if (new Set(cur.map((r) => r.host)).size !== cur.length) return setError(t("같은 호스트는 한 번만 등록할 수 있습니다."));
-            if (cur.some((r) => !/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$/.test(r.host))) return setError(t("호스트는 ghcr.io 또는 registry.example.com:5000 형식으로 입력하세요. URL 경로는 포함하지 마세요."));
+            const badHost = cur.find((r) => {
+              const m = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(?::([0-9]{1,5}))?$/.exec(r.host);
+              return !m || (m[2] !== undefined && (+m[2] < 1 || +m[2] > 65535));
+            });
+            if (badHost) return setError(t("{host}: 호스트는 ghcr.io 또는 registry.example.com:5000 형식으로 입력하세요. URL 경로와 https://는 넣지 마세요.", { host: badHost.host }));
             setBusy(true);
             setError(null);
             try {
               await api.setRegistries(pid, cur.map((r) => ({ host: r.host, username: r.username, password: r.password })));
               await qc.invalidateQueries({ queryKey: qk.registries(pid) });
               setRows(null);
-              setSaved(true);
               toast(t("저장했습니다. 다음 배포부터 이 인증 정보로 이미지를 받습니다."));
             } catch (e) {
               setError(e);
@@ -100,7 +102,7 @@ export function RegistriesView({ pid }: { pid: string }) {
         {cur.length === 0 && <div className="px-4 py-6 text-center text-sm text-gray-500">{t("등록한 레지스트리가 없습니다.")}</div>}
         {cur.map((r) => (
           <div key={r.key} className="grid gap-2 border-b border-gray-200 px-4 py-3 last:border-0 sm:grid-cols-[1.2fr_1fr_1fr_40px] sm:gap-3">
-            <Input mono value={r.host} onChange={(e) => upd(r.key, { host: e.target.value.trim().toLowerCase() })} placeholder="ghcr.io" aria-label={t("레지스트리 호스트")} />
+            <Input mono value={r.host} onChange={(e) => upd(r.key, { host: e.target.value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "") })} placeholder="ghcr.io" aria-label={t("레지스트리 호스트")} />
             <Input mono value={r.username} onChange={(e) => upd(r.key, { username: e.target.value })} placeholder="user" aria-label={t("사용자 이름")} />
             <Input
               mono

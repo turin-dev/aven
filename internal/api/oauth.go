@@ -344,6 +344,18 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login/?"+url.Values{"next": {r.URL.RequestURI()}}.Encode(), http.StatusSeeOther)
 		return
 	}
+	// "사용자로 보기" 중인 서버 owner가 대상 사용자로 앱에 로그인(자동 동의로 코드 발급)하지 못하게 한다.
+	switch problem, err := s.interactiveSessionProblem(r.Context(), p); {
+	case err != nil:
+		fail("server_error", "could not check the session")
+		return
+	case problem == "view_as":
+		fail("access_denied", "the session is viewing as another user (read-only)")
+		return
+	case problem != "":
+		fail("access_denied", "the user must set up two-factor authentication first")
+		return
+	}
 
 	if prompt != "consent" {
 		// 자동 동의: 이전 승인이 요청한 scope를 모두 덮으면 동의 화면 없이 그 승인으로 코드를 준다.
@@ -380,21 +392,47 @@ func (s *Server) oauthAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 // oauthSession은 브라우저 세션 쿠키의 사용자다(API 토큰으로는 인가할 수 없다).
+// requireAuth를 거치지 않는 브라우저 이동(OAuth 인가, GitHub 연결 콜백)에 쓰므로 requireAuth와 같은 세션 조건을 지킨다:
+// SSO가 적용된 도메인 사용자의 비SAML 세션은 없는 것으로 본다(다시 로그인해야 한다).
+// "사용자로 보기" 중인 세션은 ViewAsBy가 붙은 채로 돌려준다. 호출자는 그 세션으로 아무것도 만들거나 승인하면 안 된다.
 func (s *Server) oauthSession(w http.ResponseWriter, r *http.Request) *principal {
-	c, err := r.Cookie(cookieName)
-	if err != nil {
+	c, ok := sessionCookieFrom(r)
+	if !ok {
 		return nil
 	}
 	p, refresh := s.sessionPrincipal(r.Context(), c.Value)
-	if p != nil && refresh {
+	if p == nil {
+		return nil
+	}
+	if p.ViewAsBy == nil && !s.samlSessionOK(r.Context(), p) {
+		return nil
+	}
+	if refresh {
 		http.SetCookie(w, s.sessionCookie(r, c.Value, time.Now().Add(sessionTTL), 0))
 	}
 	return p
 }
 
+// interactiveSessionProblem은 브라우저 세션으로 OAuth 승인이나 외부 계정 연결을 할 수 없는 이유다(할 수 있으면 "").
+// "사용자로 보기"는 읽기 전용이고, 2단계 인증이 강제됐는데 설정하지 않은 세션은 설정 화면만 쓸 수 있다(requireMFA).
+func (s *Server) interactiveSessionProblem(ctx context.Context, p *principal) (string, error) {
+	if p.ViewAsBy != nil {
+		return "view_as", nil
+	}
+	_, setup, err := s.mfaSetupRequired(ctx, p.User)
+	if err != nil {
+		return "", err
+	}
+	if setup {
+		return "mfa_setup_required", nil
+	}
+	return "", nil
+}
+
 // oauthBounce는 같은 origin에서 target으로 다시 이동하는 작은 HTML이다(script 없이 meta refresh).
+// target은 요청 자신의 경로라 같은 origin이지만, 다른 곳으로 새지 않게 safeLocalRedirect를 한 번 더 거친다.
 func oauthBounce(w http.ResponseWriter, target string) {
-	esc := html.EscapeString(target)
+	esc := html.EscapeString(safeLocalRedirect(target))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.WriteHeader(http.StatusOK)

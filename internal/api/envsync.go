@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -91,16 +92,37 @@ type syncPlan struct {
 	newShared map[string]string
 }
 
-// maskVar는 값에 ${{ }} 참조가 있으면 그대로, 아니면 MaskedValue를 돌려준다.
+// varRefRe는 ${{ name }} 참조다(vars 패키지와 같은 문법).
+var varRefRe = regexp.MustCompile(`\$\{\{\s*[A-Za-z0-9_.-]+\s*\}\}`)
+
+// maskVar는 동기화 미리보기에 보일 값이다. ${{ }} 참조는 그대로 두고, 참조 사이의 글자(비밀번호가 들어갈 수 있다,
+// 예: postgres://user:secret@${{db.HOST}}/x)는 MaskedValue로 바꾼다. 참조가 없으면 전체가 MaskedValue다.
 func maskVar(v string, ok bool) *string {
 	if !ok {
 		return nil
 	}
-	if len(vars.References(v)) > 0 {
-		return &v
-	}
-	m := MaskedValue
+	m := maskLiterals(v)
 	return &m
+}
+
+func maskLiterals(v string) string {
+	locs := varRefRe.FindAllStringIndex(v, -1)
+	if len(locs) == 0 {
+		return MaskedValue
+	}
+	var b strings.Builder
+	last := 0
+	for _, l := range locs {
+		if l[0] > last {
+			b.WriteString(MaskedValue)
+		}
+		b.WriteString(v[l[0]:l[1]])
+		last = l[1]
+	}
+	if last < len(v) {
+		b.WriteString(MaskedValue)
+	}
+	return b.String()
 }
 
 // DiffVars는 dst를 src와 같게 만드는 변수 변경과 적용 후 값을 돌려준다. protected 키는 dst 값을 그대로 둔다.

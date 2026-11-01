@@ -6,6 +6,7 @@ import { Flag, Pencil, Plus, Trash2 } from "lucide-react";
 import { api, type Environment, type FeatureFlag, type FeatureFlagRule, type FeatureFlagType, type ID } from "@/lib/api";
 import { toast } from "@/lib/uiState";
 import { lock } from "@/components/Perm";
+import { useUnsavedGuard } from "@/components/SettingsGuard";
 import { Button, Card, CopyButton, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, RowList, Select, Spinner, Textarea, Toggle, useConfirm } from "@/components/ui";
 import { t, tr } from "@/lib/i18n";
 
@@ -106,8 +107,34 @@ export function condToWhen(c: Cond): string {
 let uidSeq = 0;
 const uid = () => `r${++uidSeq}`;
 
+/** Rule IDs must be unique within a flag; Date.now() alone collides when two rules are added in the same millisecond. */
+function newRuleID(existing: RuleDraft[]) {
+  const taken = new Set(existing.map((r) => r.id));
+  let id = "";
+  do id = `rule-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  while (taken.has(id));
+  return id;
+}
+
 function toDraft(type: FeatureFlagType, r: FeatureFlagRule): RuleDraft {
   return { uid: uid(), id: r.id, cond: parseCond(r.when), value: toText(type, r.value) };
+}
+
+/** The expression the builder will store, or why it cannot be built yet. */
+function WhenPreview({ cond }: { cond: Cond }) {
+  if (cond.kind === "expression") return null;
+  let when = "";
+  let problem: string | null = null;
+  try {
+    when = condToWhen(cond);
+  } catch (e) {
+    problem = e instanceof Error ? e.message : String(e);
+  }
+  return (
+    <div className="mt-2 font-mono text-xs md:ml-[162px]" aria-live="polite">
+      {problem ? <span className="font-sans text-danger">{problem}</span> : <span className="text-gray-500">when: {when}</span>}
+    </div>
+  );
 }
 
 function RuleRow({ rule, index, type, onChange, onRemove }: { rule: RuleDraft; index: number; type: FeatureFlagType; onChange: (next: RuleDraft) => void; onRemove: () => void }) {
@@ -176,6 +203,7 @@ function RuleRow({ rule, index, type, onChange, onRemove }: { rule: RuleDraft; i
           </Field>
         )}
       </div>
+      <WhenPreview cond={c} />
       <div className="mt-3 md:ml-[162px]">
         <Field label={t("제공할 값 (Serve)")}>
           <ValueInput type={type} value={rule.value} onChange={(value) => onChange({ ...rule, value })} label={t("규칙 {n} 값", { n: index + 1 })} />
@@ -195,6 +223,9 @@ function FeatureFlagDialog({ pid, environment, flag, onClose }: { pid: ID; envir
   const [rules, setRules] = useState<RuleDraft[]>(() => (flag?.rules ?? []).map((r) => toDraft(flag!.type, r)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const snapshot = JSON.stringify([name, type, defaultValue, rules.map((r) => [r.id, r.cond, r.value])]);
+  const [initial] = useState(snapshot);
+  useUnsavedGuard(snapshot !== initial);
 
   const changeType = (ft: FeatureFlagType) => {
     setType(ft);
@@ -277,7 +308,7 @@ function FeatureFlagDialog({ pid, environment, flag, onClose }: { pid: ID; envir
             <Button
               size="sm"
               variant="outline"
-              onClick={() => setRules((all) => [...all, { uid: uid(), id: `rule-${Date.now().toString(36)}`, cond: { kind: "attribute", attr: "plan", op: "==", value: "" }, value: zeroText(type) }])}
+              onClick={() => setRules((all) => [...all, { uid: uid(), id: newRuleID(all), cond: { kind: "attribute", attr: "plan", op: "==", value: "" }, value: zeroText(type) }])}
             >
               <Plus className="size-3.5" /> {t("규칙 추가")}
             </Button>
@@ -303,7 +334,7 @@ function FeatureFlagDialog({ pid, environment, flag, onClose }: { pid: ID; envir
 
 const SDK_SNIPPET = `import { flags } from "aven-flags";
 
-await flags.init(); // AVEN_URL, AVEN_TOKEN(프로젝트·환경 토큰)
+await flags.init(); // reads AVEN_URL and AVEN_TOKEN (project or environment token)
 const on = flags.getBoolean("checkout-v2", { key: userId, plan: user.plan }, false);`;
 
 export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin }: {
@@ -318,6 +349,8 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
   const environment = environments.find((e) => e.id === environmentID);
   const [editing, setEditing] = useState<FeatureFlag | null | undefined>(undefined);
   const [error, setError] = useState<unknown>(null);
+  const [pending, setPending] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
   const { confirm, node } = useConfirm();
   const query = useQuery({
     queryKey: ["feature-flags", pid, environmentID],
@@ -327,14 +360,20 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
 
   const toggle = async (flag: FeatureFlag, value: boolean) => {
     setError(null);
+    setPending(flag.name);
     try {
       await api.updateFeatureFlag(pid, flag.name, { environment_id: environmentID, default_value: value });
       await qc.invalidateQueries({ queryKey: ["feature-flags", pid] });
       toast(value ? t("{name} 기본값을 켰습니다.", { name: flag.name }) : t("{name} 기본값을 껐습니다.", { name: flag.name }));
     } catch (e) {
       setError(e);
+    } finally {
+      setPending(null);
     }
   };
+  const all = query.data?.flags ?? [];
+  const needle = filter.trim().toLowerCase();
+  const shown = needle ? all.filter((f) => f.name.toLowerCase().includes(needle)) : all;
 
   const remove = (flag: FeatureFlag) =>
     confirm({
@@ -362,9 +401,9 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
       <Card
         title={t("기능 플래그")}
         description={t("배포 없이 기능을 켜고 끄거나 일부 사용자에게만 내보냅니다. 기본값과 타기팅 규칙은 환경마다 따로 있습니다. 정적인 설정과 비밀 값은 변수를 쓰세요.")}
-        action={
-          <>
-            <Select aria-label={t("환경")} value={environmentID} onChange={(e) => setPicked(e.target.value)} className="w-40">
+      >
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+            <Select aria-label={t("환경")} value={environmentID} onChange={(e) => setPicked(e.target.value)} className="w-44">
               {environments.map((env) => (
                 <option key={env.id} value={env.id}>{env.name}</option>
               ))}
@@ -372,9 +411,7 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
             <Button variant="primary" onClick={() => setEditing(null)} disabled={!environment} {...lock(canAdmin)}>
               <Plus className="size-3.5" /> {t("플래그 만들기")}
             </Button>
-          </>
-        }
-      >
+        </div>
         {!canAdmin && <p className="mb-4 text-sm text-gray-500">{t("플래그를 만들고 바꾸는 것은 프로젝트 admin만 할 수 있습니다. 보기 권한으로는 내용을 볼 수만 있습니다.")}</p>}
         {error ? <ErrorBox error={error} className="mb-4" /> : null}
         {query.isPending ? (
@@ -386,8 +423,13 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
             {tr("{cmd}로도 만들 수 있습니다.", { cmd: <span className="font-mono">aven flag set checkout.v2 true</span> })}
           </EmptyState>
         ) : (
-          <RowList>
-            {query.data.flags.map((flag) => (
+          <>
+          {all.length > 6 && (
+            <Input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t("플래그 이름으로 찾기")} aria-label={t("플래그 찾기")} className="mb-3" />
+          )}
+          {shown.length === 0 && <p className="py-4 text-sm text-gray-500">{t("일치하는 플래그가 없습니다")}</p>}
+          <RowList className={shown.length === 0 ? "hidden" : undefined}>
+            {shown.map((flag) => (
               <li key={flag.id} className="flex flex-wrap items-center gap-4 px-4 py-3">
                 <div className="min-w-[200px] flex-1">
                   <div className="flex items-center gap-2">
@@ -405,7 +447,7 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
                   </div>
                 </div>
                 {flag.type === "bool" && (
-                  <Toggle checked={flag.default_value === true} onChange={(v) => toggle(flag, v)} label={t("{name} 기본값", { name: flag.name })} disabled={!canAdmin} />
+                  <Toggle checked={flag.default_value === true} onChange={(v) => toggle(flag, v)} label={t("{name} 기본값", { name: flag.name })} disabled={!canAdmin || pending === flag.name} />
                 )}
                 <Button size="sm" variant="outline" onClick={() => setEditing(flag)} {...lock(canAdmin)}>
                   <Pencil className="size-3.5" /> {t("수정")}
@@ -416,6 +458,7 @@ export function FeatureFlags({ pid, environments, currentEnvironmentID, canAdmin
               </li>
             ))}
           </RowList>
+          </>
         )}
       </Card>
       <Card

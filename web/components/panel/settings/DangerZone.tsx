@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle } from "lucide-react";
 import type { CanvasService, Environment } from "@/lib/api";
 import type { ServiceActions } from "@/lib/useServiceActions";
-import { Button, Dialog, ErrorBox, Input, useConfirm } from "../../ui";
-import { FIELD, SettingItem } from "./primitives";
+import { Button, ErrorBox, useConfirm } from "../../ui";
+import { SettingItem } from "./primitives";
+import { TypeToConfirm } from "./TypeToConfirm";
 import { t, tr } from "@/lib/i18n";
 
 export function DangerZone({ svc, env, actions, running }: { svc: CanvasService; env: Environment; actions: ServiceActions; running: boolean }) {
@@ -64,70 +64,31 @@ export function DangerZone({ svc, env, actions, running }: { svc: CanvasService;
 }
 
 function DeleteServiceDialog({ svc, onClose, run }: { svc: CanvasService; onClose: () => void; run: () => Promise<unknown> | unknown }) {
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const ok = text.trim() === svc.name;
-  const submit = async () => {
-    if (!ok || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await run();
-      onClose();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusy(false);
-    }
-  };
+  const vols = svc.volumes ?? [];
   return (
-    <Dialog
-      open
-      onClose={() => !busy && onClose()}
+    <TypeToConfirm
       title={t("서비스 삭제")}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t("취소")}
-          </Button>
-          <Button variant="danger" disabled={!ok} loading={busy} onClick={submit}>
-            {t("서비스 삭제")}
-          </Button>
-        </>
-      }
-    >
-      <div className="flex gap-4">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-500/10">
-          <AlertTriangle className="size-5 text-red-500" />
-        </span>
-        <div className="min-w-0 space-y-3">
+      name={svc.name}
+      confirmLabel={t("서비스 삭제")}
+      inputLabel={t("삭제할 서비스 이름")}
+      run={run}
+      onClose={onClose}
+      message={
+        <div className="space-y-2">
           <p>
             {tr("{service} 서비스를 모든 환경에서 삭제합니다. 컨테이너, 도메인, 배포 기록이 함께 지워지며 되돌릴 수 없습니다.", {
               service: <span className="font-mono text-foreground">{svc.name}</span>,
             })}
           </p>
-          <label className="block">
-            <span className="mb-2 block text-xs font-semibold leading-[18px] text-gray-600">
-              {tr("확인을 위해 {name}을(를) 입력하세요", {
-                name: <span className="required-confirm-text font-mono font-bold text-foreground">{svc.name}</span>,
+          {vols.length > 0 && (
+            <p className="text-red-600">
+              {tr("이 환경에 연결된 볼륨: {volumes}. 데이터가 남아 있다면 먼저 백업하세요.", {
+                volumes: <span className="font-mono">{vols.map((v) => v.name).join(", ")}</span>,
               })}
-            </span>
-            <Input
-              size="sm"
-              mono
-              autoFocus
-              className={FIELD}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              aria-label={t("삭제할 서비스 이름")}
-              autoComplete="off"
-            />
-          </label>
-          {error ? <ErrorBox error={error} /> : null}
+            </p>
+          )}
         </div>
-      </div>
-    </Dialog>
+      }
+    />
   );
 }

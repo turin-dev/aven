@@ -10,6 +10,9 @@ import { fmtBytes, fmtRelative } from "@/lib/format";
 import { dateLocale, t, tr } from "@/lib/i18n";
 import { lock } from "../Perm";
 import { Button, Card, ErrorBox, Field, Input, LABEL_CLS, Notice, Segmented, Select, cx, useConfirm } from "../ui";
+import { useTypedConfirm } from "./dataKit";
+
+const SERVICE_NAME = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 
 const DESTS = ["db-destinations"] as const;
 
@@ -33,6 +36,7 @@ function defaultForkName(src: string, d: Date): string {
 export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment }) {
   const qc = useQueryClient();
   const { confirm, node } = useConfirm();
+  const typed = useTypedConfirm();
   const canEdit = useCaps(svc.project_id).canEdit;
   const key = ["pitr", svc.id, env.id];
   const q = useQuery({
@@ -91,6 +95,8 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
   const atDate = at ? new Date(at) : latest;
   const atValid = !!atDate && !!earliest && !!latest && !isNaN(atDate.getTime()) && atDate >= earliest && atDate <= new Date();
   const forkDefault = atDate && !isNaN(atDate.getTime()) ? defaultForkName(svc.name, atDate) : `${svc.name}-restored`;
+  const forkFinal = forkName.trim() || forkDefault;
+  const forkValid = mode !== "new" || (SERVICE_NAME.test(forkFinal) && forkFinal !== "shared");
 
   const settings = (
     <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_140px]">
@@ -133,37 +139,57 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
     });
 
   const doRestore = () => {
-    if (!atDate) return;
+    if (!atDate || !atValid || !forkValid) return;
     const iso = atDate.toISOString();
-    const name = forkName.trim() || forkDefault;
-    confirm({
-      title: t("이 시점으로 복원"),
-      danger: mode === "inplace",
-      message:
-        mode === "inplace" ? (
+    const name = forkFinal;
+    const start = async () => {
+      await api.pitrRestore(svc.id, env.id, mode === "inplace" ? { target_time: iso, in_place: true } : { target_time: iso, new_service_name: name });
+      setNotice(t("복원을 시작했습니다. 진행 상황은 아래와 이벤트에서 볼 수 있습니다."));
+      await qc.invalidateQueries({ queryKey: key });
+    };
+    if (mode === "inplace") {
+      // Overwriting live data: the service name has to be typed. Errors stay in the dialog.
+      typed.confirm({
+        title: t("이 서비스의 데이터를 덮어쓸까요?"),
+        message: (
           <>
-            {tr("{name}의 현재 데이터를 {time} 시점의 데이터로 {overwrite}.", {
-              name: <span className="font-mono text-foreground">{svc.name}</span>,
-              time: <b>{fmtAbs(iso)}</b>,
-              overwrite: <b>{t("덮어씁니다")}</b>,
-            })}
-            {st.kind === "postgres" ? t(" 복원하는 동안 데이터베이스가 멈춥니다.") : t(" 복원 대상 데이터베이스의 사용자 DB를 지운 뒤 다시 만듭니다.")}
-          </>
-        ) : (
-          <>
-            {tr("새 서비스 {name}를 만들고 {time} 시점의 데이터로 채웁니다. 원본 {source}은 그대로입니다.", {
-              name: <span className="font-mono text-foreground">{name}</span>,
-              time: <b>{fmtAbs(iso)}</b>,
-              source: <span className="font-mono text-foreground">{svc.name}</span>,
-            })}
+            <p>
+              {tr("{name}의 현재 데이터를 {time} 시점의 데이터로 {overwrite}.", {
+                name: <span className="font-mono text-foreground">{svc.name}</span>,
+                time: <b>{fmtAbs(iso)}</b>,
+                overwrite: <b>{t("덮어씁니다")}</b>,
+              })}
+              {st.kind === "postgres" ? t(" 복원하는 동안 데이터베이스가 멈춥니다.") : t(" 복원 대상 데이터베이스의 사용자 DB를 지운 뒤 다시 만듭니다.")}
+            </p>
+            <p className="text-sm">
+              <b>{t("그 시각 이후에 쓴 데이터는 사라집니다.")}</b> {t("확실하지 않으면 새 서비스로 복원해 먼저 확인하세요.")}
+            </p>
           </>
         ),
+        confirmLabel: t("덮어쓰고 복원"),
+        expected: svc.name,
+        run: async () => {
+          setBusy("restore");
+          setError(null);
+          setNotice(null);
+          try {
+            await start();
+          } finally {
+            setBusy(null);
+          }
+        },
+      });
+      return;
+    }
+    confirm({
+      title: t("이 시점으로 복원"),
+      message: tr("새 서비스 {name}를 만들고 {time} 시점의 데이터로 채웁니다. 원본 {source}은 그대로입니다.", {
+        name: <span className="font-mono text-foreground">{name}</span>,
+        time: <b>{fmtAbs(iso)}</b>,
+        source: <span className="font-mono text-foreground">{svc.name}</span>,
+      }),
       confirmLabel: t("복원"),
-      run: () =>
-        run("restore", async () => {
-          await api.pitrRestore(svc.id, env.id, mode === "inplace" ? { target_time: iso, in_place: true } : { target_time: iso, new_service_name: name });
-          setNotice(t("복원을 시작했습니다. 진행 상황은 아래와 이벤트에서 볼 수 있습니다."));
-        }),
+      run: () => run("restore", start),
     });
   };
 
@@ -295,6 +321,14 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
                     className="tabular-nums"
                   />
                 </Field>
+                <Timeline
+                  className="sm:col-span-2"
+                  earliest={earliest}
+                  latest={latest}
+                  value={atDate && !isNaN(atDate.getTime()) ? atDate : latest}
+                  lastBase={c.last_base_at ? new Date(c.last_base_at) : null}
+                  onChange={(d) => setAt(toLocalInput(d))}
+                />
                 <div>
                   <span className={LABEL_CLS}>{t("복원 대상")}</span>
                   <div className="flex h-[42px] items-center">
@@ -310,8 +344,12 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
                   </div>
                 </div>
                 {mode === "new" && (
-                  <Field label={t("새 서비스 이름")} className="sm:col-span-2">
-                    <Input mono value={forkName} onChange={(e) => setForkName(e.target.value.toLowerCase())} placeholder={forkDefault} aria-label={t("새 서비스 이름")} />
+                  <Field
+                    label={t("새 서비스 이름")}
+                    className="sm:col-span-2"
+                    hint={forkValid ? undefined : <span className="text-danger">{t("소문자, 숫자, -만 쓸 수 있고 40자까지입니다.")}</span>}
+                  >
+                    <Input mono value={forkName} onChange={(e) => setForkName(e.target.value.toLowerCase())} placeholder={forkDefault} aria-label={t("새 서비스 이름")} invalid={!forkValid} />
                   </Field>
                 )}
               </div>
@@ -351,7 +389,7 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
               {earliest && latest && (
                 <Button
                   variant={mode === "inplace" ? "danger" : "primary"}
-                  disabled={!atValid || restoring}
+                  disabled={!atValid || restoring || !forkValid}
                   loading={busy === "restore"}
                   onClick={doRestore}
                   {...lock(canEdit)}
@@ -365,7 +403,115 @@ export function PitrSection({ svc, env }: { svc: CanvasService; env: Environment
         {notice && <Notice onDismiss={() => setNotice(null)}>{notice}</Notice>}
         {error ? <ErrorBox error={error} /> : null}
         {node}
+        {typed.node}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Restore window as a bar: archived range (earliest → latest) and the part not yet archived (latest → now, archived
+ * on restore). A range slider and presets pick the time; the datetime input above stays the precise control.
+ */
+function Timeline({
+  earliest,
+  latest,
+  value,
+  lastBase,
+  onChange,
+  className,
+}: {
+  earliest: Date;
+  latest: Date;
+  value: Date;
+  lastBase: Date | null;
+  onChange: (d: Date) => void;
+  className?: string;
+}) {
+  const min = earliest.getTime();
+  const now = Math.max(Date.now(), latest.getTime());
+  const span = Math.max(1000, now - min);
+  const pct = (ms: number) => `${Math.max(0, Math.min(100, ((ms - min) / span) * 100))}%`;
+  const v = Math.max(min, Math.min(now, value.getTime()));
+  const clampSet = (ms: number) => onChange(new Date(Math.max(min, Math.min(now, Math.floor(ms / 1000) * 1000))));
+  const presets: [string, number][] = [
+    [t("5분 전"), 5 * 60_000],
+    [t("1시간 전"), 3_600_000],
+    [t("6시간 전"), 6 * 3_600_000],
+    [t("1일 전"), 86_400_000],
+  ];
+  const rel = (ms: number) => {
+    const d = Math.round((Date.now() - ms) / 60_000);
+    if (d < 1) return t("지금");
+    if (d < 60) return t("{n}분 전", { n: d });
+    if (d < 60 * 48) return t("{n}시간 전", { n: Math.round(d / 60) });
+    return t("{n}일 전", { n: Math.round(d / 1440) });
+  };
+  return (
+    <div className={cx("space-y-2", className)}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs text-gray-500">
+        <span>
+          {tr("선택: {abs} · {rel} · {utc}", {
+            abs: <b className="tabular-nums text-foreground">{fmtAbs(new Date(v).toISOString())}</b>,
+            rel: rel(v),
+            utc: <span className="font-mono tabular-nums">{new Date(v).toISOString().replace("T", " ").slice(0, 19)} UTC</span>,
+          })}
+        </span>
+        <span className="flex flex-wrap gap-1">
+          {presets.map(([label, back]) => {
+            const ms = Date.now() - back;
+            return (
+              <button
+                key={label}
+                type="button"
+                disabled={ms < min}
+                onClick={() => clampSet(ms)}
+                className="cursor-pointer rounded border border-gray-200 px-1.5 py-0.5 hover:bg-gray-100 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {label}
+              </button>
+            );
+          })}
+          <button type="button" onClick={() => clampSet(latest.getTime())} className="cursor-pointer rounded border border-gray-200 px-1.5 py-0.5 hover:bg-gray-100 hover:text-foreground">
+            {t("마지막 보관 시각")}
+          </button>
+        </span>
+      </div>
+      <div className="relative h-8">
+        <div className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 overflow-hidden rounded-full bg-gray-100" aria-hidden>
+          <div className="absolute inset-y-0 left-0 bg-pink-500/60" style={{ width: pct(latest.getTime()) }} />
+          <div
+            className="absolute inset-y-0 right-0 bg-[repeating-linear-gradient(135deg,var(--color-pink-300)_0_4px,transparent_4px_8px)] opacity-60"
+            style={{ left: pct(latest.getTime()) }}
+          />
+        </div>
+        {lastBase && lastBase.getTime() >= min && (
+          <span className="absolute top-1/2 h-4 w-0.5 -translate-y-1/2 bg-foreground/50" style={{ left: pct(lastBase.getTime()) }} title={t("마지막 기준 백업 {time}", { time: fmtAbs(lastBase.toISOString()) })} aria-hidden />
+        )}
+        <input
+          type="range"
+          min={min}
+          max={now}
+          step={1000}
+          value={v}
+          onChange={(e) => clampSet(Number(e.target.value))}
+          aria-label={t("복원할 시각")}
+          aria-valuetext={fmtAbs(new Date(v).toISOString())}
+          className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent focus:outline-none [&::-moz-range-thumb]:size-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white [&::-moz-range-thumb]:bg-pink-500 [&::-moz-range-track]:bg-transparent [&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:size-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:bg-pink-500 [&::-webkit-slider-thumb]:shadow focus-visible:[&::-webkit-slider-thumb]:ring-4 focus-visible:[&::-webkit-slider-thumb]:ring-pink-500/40"
+        />
+      </div>
+      <div className="flex justify-between text-[11px] tabular-nums text-gray-500">
+        <span>{fmtAbs(earliest.toISOString())}</span>
+        <span className="flex items-center gap-3">
+          <span className="flex items-center gap-1">
+            <span className="inline-block size-2 rounded-sm bg-pink-500/60" aria-hidden /> {t("보관됨")}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block size-2 rounded-sm bg-[repeating-linear-gradient(135deg,var(--color-pink-300)_0_2px,transparent_2px_4px)]" aria-hidden /> {t("복원할 때 보관")}
+          </span>
+          <span>{t("지금")}</span>
+        </span>
+      </div>
+    </div>
   );
 }

@@ -37,7 +37,7 @@ export function GitHubOnboarding({ me }: { me: Me | undefined }) {
     const next = new URLSearchParams(params.toString());
     next.delete("welcome");
     const q = next.toString();
-    router.replace(q ? `?${q}` : pathname, { scroll: false });
+    router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
   }, [welcome, params, router, pathname]);
 
   if (!me) return null;
@@ -54,16 +54,24 @@ export function GitHubOnboarding({ me }: { me: Me | undefined }) {
         <>
           <Button onClick={later}>{t("나중에")}</Button>
           {/* OAuth 승인은 GitHub 화면으로 이동해야 하므로 API 경로로 바로 간다. 승인 뒤 계정 화면으로 돌아온다. */}
-          <a href="/api/github/oauth/start?from=account">
-            <Button variant="primary">
-              <BrandIcon name="github" className="size-4" /> {t("GitHub 연결")}
-            </Button>
+          <a href="/api/github/oauth/start?from=account" className="inline-flex h-[34px] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-pink-500 bg-pink-500 px-3 text-sm leading-5 text-white hover:border-pink-600 hover:bg-pink-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-600">
+            <BrandIcon name="github" className="size-4" /> {t("GitHub 연결")}
           </a>
         </>
       }
     >
-      <div className="space-y-3 text-sm text-gray-600">
+      <div className="space-y-4 text-sm text-gray-600">
         <p>{t("Aven에서는 GitHub 연결이 사람마다 따로입니다. 내 계정을 연결해야 내 저장소 목록을 보고, 비공개 저장소를 배포하고, 커밋에 배포 상태를 표시할 수 있습니다.")}</p>
+        <ol className="space-y-2">
+          {[t("GitHub 연결을 누르면 GitHub 승인 화면으로 이동합니다."), t("GitHub에서 Aven 앱을 승인합니다."), t("계정 화면으로 돌아오면 바로 저장소를 배포할 수 있습니다.")].map((step, i) => (
+            <li key={i} className="flex items-start gap-3">
+              <span aria-hidden className="flex size-5 shrink-0 items-center justify-center rounded-full bg-pink-500/15 text-xs font-semibold tabular-nums text-pink-500">
+                {i + 1}
+              </span>
+              <span className="pt-px">{step}</span>
+            </li>
+          ))}
+        </ol>
         <p>{t("내가 만든 프로젝트는 내 GitHub 연결을 씁니다. 다른 사람의 연결은 쓰지 않습니다.")}</p>
         <p className="text-xs text-gray-500">{t("나중에 계정 › GitHub 연결에서 언제든 연결하거나 해제할 수 있습니다.")}</p>
       </div>

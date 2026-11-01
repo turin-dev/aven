@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strconv"
 	"time"
 
@@ -239,7 +240,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, r *store.AlertRule) {
 	val, have := 0.0, false
 	for _, in := range e.targets(ctx, r) {
 		v, ok := e.Value(ctx, r.Metric, in)
-		if !ok {
+		// NaN/Inf는 데이터가 없는 것으로 본다(비교가 항상 거짓이고 JSON으로 내보낼 수 없다).
+		if !ok || math.IsNaN(v) || math.IsInf(v, 0) {
 			continue
 		}
 		if !have || (r.Comparator == "<" && v < val) || (r.Comparator != "<" && v > val) {

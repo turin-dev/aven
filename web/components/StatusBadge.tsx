@@ -53,32 +53,37 @@ export function statusTone(s: S): Tone {
   return TONE[s] ?? "neutral";
 }
 
+// -700 text on a -100 (light) / -200 (dark) fill: every pair is at least 5.5:1 (WCAG AA). The light theme used
+// -500 text before, which put WARNING/SLEEP at 1.8:1 and SUCCESS at 3.1:1.
 const BADGE: Record<Tone, string> = {
-  success: "text-green-500 bg-green-100 dark:text-green-700 dark:bg-green-200",
-  progress: "text-blue-500 bg-blue-100 dark:text-blue-700 dark:bg-blue-200",
-  warning: "text-yellow-500 bg-yellow-100 dark:text-yellow-700 dark:bg-yellow-200",
-  danger: "text-red-500 bg-red-100 dark:text-red-700 dark:bg-red-200",
-  neutral: "bg-gray-200 text-gray-500",
-  accent: "text-pink-500 bg-pink-100 dark:text-pink-700 dark:bg-pink-200",
-  sleep: "text-yellow-500 bg-yellow-100 dark:text-yellow-700 dark:bg-yellow-200",
+  success: "text-green-700 bg-green-100 dark:bg-green-200",
+  progress: "text-blue-700 bg-blue-100 dark:bg-blue-200",
+  warning: "text-yellow-700 bg-yellow-100 dark:bg-yellow-200",
+  danger: "text-red-700 bg-red-100 dark:bg-red-200",
+  neutral: "text-gray-700 bg-gray-100 dark:bg-gray-200",
+  accent: "text-pink-700 bg-pink-100 dark:bg-pink-200",
+  sleep: "text-yellow-700 bg-yellow-100 dark:bg-yellow-200",
 };
 
-const QUEUED_BADGE = "text-gray-500 bg-gray-100 dark:text-gray-700 dark:bg-gray-200";
-
 /**
- * Deployment-badge colours that differ from the shared tone (§1.6): QUEUED is gray,
- * WAITING (CI / needs approval) is yellow. Canvas text tones keep using `statusTone`.
+ * Tone for deployment UI (badge, pill, dot): QUEUED is gray and WAITING (CI / needs approval) is yellow (§1.6),
+ * so a deployment shows the same colour in the list, the detail header and the activity feed.
+ * Canvas text tones keep using `statusTone`.
  */
+export function deploymentTone(status: S): Tone {
+  if (status === "queued") return "neutral";
+  if (status === "waiting") return "warning";
+  return statusTone(status);
+}
+
 function badgeCls(status: S): string {
-  if (status === "queued") return QUEUED_BADGE;
-  if (status === "waiting") return BADGE.warning;
-  return BADGE[statusTone(status)];
+  return BADGE[deploymentTone(status)];
 }
 
 /** Tinted badge used in deployment rows. */
 export function StatusBadge({ status, className, label }: { status: S; className?: string; label?: string }) {
   return (
-    <div
+    <span
       className={cx(
         "flex shrink-0 items-center justify-center whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-medium uppercase leading-[18px] sm:px-2 sm:py-1",
         badgeCls(status),
@@ -86,13 +91,13 @@ export function StatusBadge({ status, className, label }: { status: S; className
       )}
     >
       {label ?? STATUS_LABEL[status] ?? status}
-    </div>
+    </span>
   );
 }
 
 export function ToneBadge({ tone, children, className }: { tone: Tone; children: ReactNode; className?: string }) {
   return (
-    <div
+    <span
       className={cx(
         "flex shrink-0 items-center justify-center whitespace-nowrap rounded-md px-1.5 py-0.5 text-xs font-medium uppercase leading-[18px] sm:px-2 sm:py-1",
         BADGE[tone],
@@ -100,23 +105,23 @@ export function ToneBadge({ tone, children, className }: { tone: Tone; children:
       )}
     >
       {children}
-    </div>
+    </span>
   );
 }
 
 const PILL: Record<Tone, string> = {
   success: "border-green-300 bg-green-50 text-success",
   progress: "border-blue-200 bg-blue-50 text-blue-600",
-  warning: "border-yellow-200 bg-yellow-50 text-yellow-600",
+  warning: "border-yellow-300 bg-yellow-50 text-yellow-600",
   danger: "border-red-200 bg-red-50 text-danger",
-  neutral: "border-gray-200 bg-gray-50 text-gray-500",
+  neutral: "border-gray-200 bg-gray-50 text-gray-600",
   accent: "border-pink-300 bg-pink-50 text-pink-600",
-  sleep: "border-yellow-200 bg-yellow-50 text-yellow-600",
+  sleep: "border-yellow-300 bg-yellow-50 text-yellow-600",
 };
 
 /** Outlined round pill used in the deployment detail header. */
 export function StatusPill({ status, className }: { status: S; className?: string }) {
-  const tone = statusTone(status);
+  const tone = deploymentTone(status);
   return (
     <span
       className={cx(
@@ -125,7 +130,7 @@ export function StatusPill({ status, className }: { status: S; className?: strin
         className,
       )}
     >
-      {tone === "progress" && <span className="size-1.5 animate-soft-pulse rounded-full bg-current" />}
+      {(tone === "progress" || status === "queued") && <span aria-hidden="true" className="size-1.5 animate-soft-pulse rounded-full bg-current" />}
       {STATUS_LABEL[status] ?? status}
     </span>
   );
@@ -150,8 +155,11 @@ export function StatusIcon({ status, className }: { status: S; className?: strin
     case "sleeping":
       return <Moon aria-hidden="true" className={cx(cls, "text-yellow-600")} />;
     case "scheduled":
-    case "waiting":
       return <Clock aria-hidden="true" className={cx(cls, "text-pink-600")} />;
+    case "waiting":
+      return <Clock aria-hidden="true" className={cx(cls, "text-yellow-600")} />;
+    case "queued":
+      return <Clock aria-hidden="true" className={cx(cls, "text-gray-500")} />;
     case "offline":
       return <PauseCircle aria-hidden="true" className={cx(cls, "text-gray-400")} />;
   }
@@ -160,7 +168,7 @@ export function StatusIcon({ status, className }: { status: S; className?: strin
 }
 
 export function StatusDot({ status, className }: { status: S; className?: string }) {
-  const tone = statusTone(status);
+  const tone = deploymentTone(status);
   return (
     <span
       aria-hidden="true"

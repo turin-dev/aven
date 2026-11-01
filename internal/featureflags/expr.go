@@ -442,16 +442,17 @@ func compare(a any, op string, b any) (any, bool, error) {
 			}
 			return false, true, nil
 		default:
-			return false, true, errors.New("contains expects a string or list")
+			return false, true, nil // 숫자 등에는 맞지 않는다(SDK와 같다)
 		}
 	case "matches":
 		x, xok := a.(string)
 		y, yok := b.(string)
 		if !xok || !yok {
-			return false, true, errors.New("matches expects strings")
+			return false, true, nil
 		}
+		// 속성 값에서 온 잘못된 정규식은 맞지 않는 것으로 본다(SDK와 같다). 리터럴은 저장할 때 검사한다.
 		matched, err := regexp.MatchString(y, x)
-		return matched, true, err
+		return err == nil && matched, true, nil
 	case "<", "<=", ">", ">=":
 		if x, ok := number(a); ok {
 			y, yok := number(b)
@@ -488,13 +489,46 @@ func compare(a any, op string, b any) (any, bool, error) {
 	return false, true, nil
 }
 
+// equal은 JSON 값으로서 같은지 본다(숫자는 값, 목록·객체는 원소마다). SDK의 equal과 같다.
 func equal(a, b any) bool {
 	if x, ok := number(a); ok {
-		if y, yes := number(b); yes {
-			return x == y
-		}
+		y, yes := number(b)
+		return yes && x == y
 	}
-	return fmt.Sprintf("%T:%v", a, a) == fmt.Sprintf("%T:%v", b, b)
+	switch x := a.(type) {
+	case nil:
+		return b == nil
+	case string:
+		y, ok := b.(string)
+		return ok && x == y
+	case bool:
+		y, ok := b.(bool)
+		return ok && x == y
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !equal(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			w, ok := y[k]
+			if !ok || !equal(v, w) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func number(v any) (float64, bool) {
@@ -521,11 +555,26 @@ func scalarKey(v any) (string, bool) {
 	case bool:
 		return strconv.FormatBool(x), true
 	default:
-		if n, ok := number(v); ok {
-			return strconv.FormatFloat(n, 'g', -1, 64), true
+		if n, ok := number(v); ok && !math.IsInf(n, 0) && !math.IsNaN(n) {
+			return jsNumber(n), true
 		}
 	}
 	return "", false
+}
+
+// jsNumber는 JavaScript의 String(n)과 같은 글자로 숫자를 쓴다. SDK가 bucket(attr)의 숫자 속성을
+// String(value)로 해시하므로 서버도 같아야 같은 사용자가 같은 bucket에 든다(예: 1234567 → "1234567", 1e21 → "1e+21").
+func jsNumber(n float64) string {
+	if n == 0 {
+		return "0" // -0도 "0"
+	}
+	if abs := math.Abs(n); abs >= 1e21 || abs < 1e-6 {
+		s := strconv.FormatFloat(n, 'e', -1, 64) // 1e+21, 1.5e-07
+		mant, exp, _ := strings.Cut(s, "e")
+		sign, digits := exp[:1], strings.TrimLeft(exp[1:], "0")
+		return mant + "e" + sign + digits
+	}
+	return strconv.FormatFloat(n, 'f', -1, 64)
 }
 
 // StableBucket returns the same [0,1) value for a flag and targeting key everywhere:

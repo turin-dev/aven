@@ -52,6 +52,9 @@ func (n notNode) match(s *store.TraceSpan) bool { return !n.n.match(s) }
 
 // ParseFilter는 검색어를 해석한다. 빈 검색어는 모든 span과 맞는다.
 func ParseFilter(q string) (*Filter, error) {
+	if len(q) > maxFilterBytes {
+		return nil, fmt.Errorf("filter is longer than %d bytes", maxFilterBytes)
+	}
 	toks, err := tokenize(q)
 	if err != nil {
 		return nil, err
@@ -117,9 +120,16 @@ func tokenize(q string) ([]string, error) {
 	return toks, nil
 }
 
+// 검색어 길이와 괄호·부정 중첩 상한(재귀 파서가 스택과 시간을 끝없이 쓰지 않게).
+const (
+	maxFilterBytes = 4096
+	maxFilterDepth = 32
+)
+
 type parser struct {
-	toks []string
-	i    int
+	toks  []string
+	i     int
+	depth int
 }
 
 func (p *parser) peek() string {
@@ -175,6 +185,10 @@ func (p *parser) and() (node, error) {
 }
 
 func (p *parser) unary() (node, error) {
+	if p.depth++; p.depth > maxFilterDepth {
+		return nil, fmt.Errorf("filter is nested deeper than %d levels", maxFilterDepth)
+	}
+	defer func() { p.depth-- }()
 	t := p.peek()
 	switch {
 	case t == "(":

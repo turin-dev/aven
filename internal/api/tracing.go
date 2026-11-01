@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -52,7 +53,7 @@ type tracingBody struct {
 
 func decodeTracingBody(w http.ResponseWriter, r *http.Request) (*tracingBody, bool) {
 	var body tracingBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Enabled == nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&body); err != nil || body.Enabled == nil {
 		writeErr(w, http.StatusBadRequest, "enabled must be a boolean")
 		return nil, false
 	}
@@ -118,19 +119,25 @@ func (s *Server) putEnvTracing(w http.ResponseWriter, r *http.Request) {
 	for _, id := range body.ServiceIDs {
 		want[id] = true
 	}
+	// 모르는 서비스가 있으면 아무것도 바꾸지 않는다(일부만 바뀐 채 404가 되지 않게).
+	known := map[string]bool{}
+	for _, st := range settings {
+		known[st.ServiceID] = true
+	}
+	for id := range want {
+		if !known[id] {
+			writeErr(w, http.StatusNotFound, "service not found in this environment (or is a database)")
+			return
+		}
+	}
 	for _, st := range settings {
 		if len(want) > 0 && !want[st.ServiceID] {
 			continue
 		}
-		delete(want, st.ServiceID)
 		if _, err := s.Store.SetTracingSetting(ctx, st.InstanceID, *body.Enabled); err != nil {
 			s.storeErr(w, err)
 			return
 		}
-	}
-	if len(want) > 0 {
-		writeErr(w, http.StatusNotFound, "service not found in this environment (or is a database)")
-		return
 	}
 	s.applyTracingRoutes(r)
 	s.listTracingSettings(w, r)

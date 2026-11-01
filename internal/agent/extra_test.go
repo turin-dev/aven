@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -593,5 +594,80 @@ func TestValidateRoutesRejectsHeaderInjection(t *testing.T) {
 	r := proxy.Route{Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:80"}, SetHeaders: map[string]string{"X-Keel-Gateway": "x"}}
 	if ValidateRoutesWith([]proxy.Route{r}, nil) == nil {
 		t.Fatal("remote nodes must not accept header injection")
+	}
+}
+
+// 잠든 host 하나에 동시에 몰린 요청은 서버에 wake 요청 하나만 보내고 모두 그 답을 받는다.
+func TestWakeCoalescesConcurrentRequestsPerHost(t *testing.T) {
+	h := &Handler{Docker: &fakeDocker{}, Proxy: &fakeProxy{}}
+	in := make(chan []byte, 4)
+	out := make(chan agentprotocol.Message, 64)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go h.Serve(ctx, func(c context.Context) ([]byte, error) {
+		select {
+		case b := <-in:
+			return b, nil
+		case <-c.Done():
+			return nil, c.Err()
+		}
+	}, func(_ context.Context, m agentprotocol.Message) error { out <- m; return nil })
+	deadline := time.Now().Add(2 * time.Second)
+	for h.getLink() == nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	const n = 20
+	type result struct {
+		res agentprotocol.WakeResult
+		err error
+	}
+	results := make(chan result, n+1)
+	for i := 0; i < n; i++ {
+		go func() {
+			r, err := h.wake(context.Background(), "a.example.com")
+			results <- result{r, err}
+		}()
+	}
+	// 다른 host는 따로 요청한다.
+	go func() {
+		r, err := h.wake(context.Background(), "b.example.com")
+		results <- result{r, err}
+	}()
+	reqs := map[string]string{} // host → id
+	for len(reqs) < 2 {
+		select {
+		case m := <-out:
+			var w agentprotocol.WakeRequest
+			json.Unmarshal(m.Payload, &w)
+			if _, dup := reqs[w.Host]; dup {
+				t.Fatalf("second wake request for %s", w.Host)
+			}
+			reqs[w.Host] = m.ID
+		case <-time.After(3 * time.Second):
+			t.Fatalf("wake requests sent: %v", reqs)
+		}
+	}
+	// 첫 요청이 나간 뒤 같은 host로 온 요청도 진행 중인 요청에 붙는다.
+	time.Sleep(50 * time.Millisecond)
+	for _, id := range reqs {
+		in <- []byte(`{"id":"` + id + `","operation":"wake","reply":true,"payload":{"network":"keel-env_abcdefghijklm","container":"keel-web-abcdefgh-1","port":80}}`)
+	}
+	for i := 0; i < n+1; i++ {
+		r := <-results
+		if r.err != nil || r.res.Container != "keel-web-abcdefgh-1" {
+			t.Fatalf("wake: %v %+v", r.err, r.res)
+		}
+	}
+	select {
+	case m := <-out:
+		t.Fatalf("unexpected extra message %+v", m)
+	default:
+	}
+	// 끝난 요청은 지워져 다음 wake는 서버에 다시 묻는다.
+	h.wakeMu.Lock()
+	left := len(h.wakes)
+	h.wakeMu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d wake flights left", left)
 	}
 }

@@ -240,7 +240,6 @@ func TestPickPromotion(t *testing.T) {
 		{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 100}},
 		{ServiceID: "r2", OK: true, Probe: Probe{Role: "replica", Offset: 300}},
 		{ServiceID: "r3", OK: false, Probe: Probe{Role: "replica", Offset: 900}},
-		{ServiceID: "r4", OK: true, Probe: Probe{Role: "primary", Offset: 999}},
 	}
 	if id, ok := PickPromotion(st, "root"); !ok || id != "r2" {
 		t.Errorf("got %s %v", id, ok)
@@ -250,6 +249,47 @@ func TestPickPromotion(t *testing.T) {
 	}
 	if LagBytes(500, 300) != 200 || LagBytes(300, 500) != 0 {
 		t.Error("lag")
+	}
+}
+
+// 자동 failover는 주 노드가 둘이 될 수 있으면 멈춘다.
+func TestFailoverSplitBrainGuards(t *testing.T) {
+	down := MemberState{ServiceID: "root", OK: false, Fails: 3}
+	cases := []struct {
+		name    string
+		states  []MemberState
+		want    string // 승격할 구성원("" = 승격하지 않는다)
+		blocked bool
+	}{
+		{"healthy replicas after primary loss", []MemberState{down,
+			{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 10}},
+			{ServiceID: "r2", OK: true, Probe: Probe{Role: "replica", Offset: 20}}}, "r2", false},
+		{"another member already primary", []MemberState{down,
+			{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 10}},
+			{ServiceID: "r2", Name: "pg-replica-2", OK: true, Probe: Probe{Role: "primary", Offset: 20}}}, "", true},
+		{"replica still streaming from primary (partition)", []MemberState{down,
+			{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 10, Streaming: true}},
+			{ServiceID: "r2", OK: true, Probe: Probe{Role: "replica", Offset: 20}}}, "", true},
+		{"unreachable member does not block", []MemberState{down,
+			{ServiceID: "r1", OK: false, Probe: Probe{Role: "primary", Streaming: true}},
+			{ServiceID: "r2", OK: true, Probe: Probe{Role: "replica", Offset: 20}}}, "r2", false},
+		{"replica without a WAL position is never promoted", []MemberState{down,
+			{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 0}}}, "", false},
+		{"recorded primary itself is ignored", []MemberState{{ServiceID: "root", OK: true, Probe: Probe{Role: "primary", Streaming: true}},
+			{ServiceID: "r1", OK: true, Probe: Probe{Role: "replica", Offset: 5}}}, "r1", false},
+	}
+	for _, c := range cases {
+		why := FailoverBlocked(c.states, "root")
+		if (why != "") != c.blocked {
+			t.Errorf("%s: blocked=%q", c.name, why)
+		}
+		id, ok := PickPromotion(c.states, "root")
+		if id != c.want || ok != (c.want != "") {
+			t.Errorf("%s: promote %q %v, want %q", c.name, id, ok, c.want)
+		}
+	}
+	if why := FailoverBlocked([]MemberState{down, {ServiceID: "r2", Name: "pg-replica-2", OK: true, Probe: Probe{Role: "primary"}}}, "root"); !strings.Contains(why, "pg-replica-2") {
+		t.Errorf("reason should name the member: %q", why)
 	}
 }
 

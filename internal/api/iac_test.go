@@ -190,7 +190,7 @@ func TestIACPlanApplyStagesChanges(t *testing.T) {
 
 	// 봉인된 변수는 값을 바꿀 수 없다.
 	(*w.Variables)["SECRET"] = iac.Variable{Value: "other"}
-	if p := f.iacPlan(d); len(p.Errors) != 1 || !strings.Contains(p.Errors[0], "sealed") {
+	if p := f.iacPlan(d); len(p.Errors) != 1 || !strings.Contains(p.Errors[0], "(web): variables.SECRET: is sealed") {
 		t.Errorf("sealed: %v", p.Errors)
 	}
 }
@@ -229,8 +229,17 @@ func TestIACCreateAndDestroyServices(t *testing.T) {
 	if len(p.Errors) != 0 {
 		t.Fatalf("errors: %v", p.Errors)
 	}
-	if got := changeKeys(p); got != "create service.worker,create service.cache,destroy service.other" {
+	// 새 서비스는 기본값과 다른 설정과 변수를 줄마다 보여 준다(from 없음, 값은 가린다).
+	if got := changeKeys(p); got != "create service.worker,change service.worker.replicas,change service.worker.variables.MODE,create service.cache,destroy service.other" {
 		t.Fatalf("changes: %s", got)
+	}
+	for _, c := range p.Changes {
+		if c.Resource == "service.worker" && c.Action == "change" && (len(c.From) != 0 || c.Destructive) {
+			t.Errorf("create field line must be an addition: %+v", c)
+		}
+		if c.Field == "variables.MODE" && string(c.To) != `"«hidden»"` {
+			t.Errorf("create plan leaks a variable value: %s", c.To)
+		}
 	}
 	if p.Summary.Create != 2 || p.Summary.Destroy != 1 || !p.Destructive {
 		t.Errorf("summary: %+v", p.Summary)
@@ -384,5 +393,82 @@ func TestIACApplyDeploy(t *testing.T) {
 	svcs := out["services"].([]any)
 	if len(svcs) != 1 || svcs[0].(map[string]any)["deployment_id"] == nil || len(f.queued()) != 1 {
 		t.Errorf("deploy: %v queued=%v", svcs, f.queued())
+	}
+}
+
+func (f *ghFixture) iacPlanRaw(body string) *iacPlan {
+	f.t.Helper()
+	code, out := f.call(f.srv.planIACConfig, "POST", "/x", body, f.iacPV())
+	if code != 200 {
+		f.t.Fatalf("plan: %d %v", code, out)
+	}
+	b, _ := json.Marshal(out)
+	var p iacPlan
+	json.Unmarshal(b, &p)
+	return &p
+}
+
+// API로 보낸 정의도 CLI와 같이 엄격하게 읽는다. 예전에는 "setings" 같은 오타가 조용히 무시되어 변경 없는 plan이 나왔다.
+func TestIACPlanRejectsUnknownFieldsWithPaths(t *testing.T) {
+	f := newGHFixture(t)
+	for _, tc := range []struct{ body, want string }{
+		{`{}`, "definition: is required"},
+		{`{"definition":{"version":1,"services":[{"name":"web","setings":{"replicas":3}}]}}`, "services[0].setings: unknown field"},
+		{`{"definition":{"version":1,"services":[{"name":"web","variables":{"PORT":8080}}]}}`, "services[0].variables.PORT:"},
+		{`{"definition":{"version":1,"services":[{"name":"web","settings":{"replicas":"three"}}]}}`, "services[0] (web): settings.replicas: must be an integer (got string)"},
+		{`{"definition":{"version":1,"services":[{"name":"web","settings":{"replicaz":3}}]}}`, "services[0] (web): settings.replicaz: unsupported setting"},
+		{`{"definition":{"version":1,"services":[{"name":"web"},{"name":"Bad_Name"}]}}`, "services[1] (Bad_Name): name: must be lowercase"},
+		{`{"definition":{"version":1,"services":[{"name":"web"},{"name":"new","source_type":"repo"}]}}`, "services[1] (new): settings.repo_url:"},
+	} {
+		p := f.iacPlanRaw(tc.body)
+		if len(p.Errors) == 0 || !strings.Contains(strings.Join(p.Errors, "; "), tc.want) {
+			t.Errorf("%s: errors %v, want %q", tc.body, p.Errors, tc.want)
+		}
+		if p.PlanHash != "" && strings.Contains(tc.want, "unknown field") {
+			t.Errorf("%s: an undecodable definition must not get a plan hash", tc.body)
+		}
+	}
+	code, out := f.call(f.srv.applyIACConfig, "POST", "/x", `{"definition":{"version":1,"services":[],"extra":1},"plan_hash":"x"}`, f.iacPV())
+	if code != 422 || !strings.Contains(out["error"].(string), "definition.extra: unknown field") {
+		t.Errorf("apply with unknown field: %d %v", code, out)
+	}
+}
+
+// 참조가 있는 값도 참조 밖의 글자(인라인 비밀번호 등)는 plan에서 가린다.
+func TestIACVarValueMasksLiteralsAroundReferences(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"sk-live", "«hidden»"},
+		{"${{db.DATABASE_URL}}", "${{db.DATABASE_URL}}"},
+		{"postgres://user:secret@${{db.HOST}}/x", "«hidden»${{db.HOST}}«hidden»"},
+		{"${{ a.X }}:${{b.Y}}", "${{ a.X }}«hidden»${{b.Y}}"},
+		{"", "«hidden»"},
+	} {
+		if got := string(iacVarValue(tc.in, false)); got != `"`+tc.want+`"` {
+			t.Errorf("%q: got %s, want %q", tc.in, got, tc.want)
+		}
+	}
+	if got := string(iacVarValue("postgres://user:secret@${{db.HOST}}/x", true)); !strings.Contains(got, "secret") {
+		t.Errorf("show_values must show the value: %s", got)
+	}
+
+	f := newGHFixture(t)
+	web, _ := f.st.GetInstanceFor(f.ctx, f.web.ID, f.prod.ID)
+	web.Variables = map[string]string{"KEEP": "1"}
+	f.st.UpdateInstanceConfig(f.ctx, web)
+	d := f.iacExport(false)
+	vs := *iacSvc(d, "web").Variables
+	vs["DB_URL"] = iac.Variable{Value: "postgres://user:secret@${{db.HOST}}/x"}
+	p := f.iacPlan(d)
+	found := false
+	for _, c := range p.Changes {
+		if c.Field == "variables.DB_URL" {
+			found = true
+			if strings.Contains(string(c.To), "secret") || string(c.To) != `"«hidden»${{db.HOST}}«hidden»"` {
+				t.Errorf("plan leaks the inline password: %s", c.To)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no DB_URL change: %s %v", changeKeys(p), p.Errors)
 	}
 }

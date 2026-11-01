@@ -44,12 +44,13 @@ type Collector struct {
 	// iface는 gateway 주소를 가진 인터페이스 이름을 찾는다(테스트에서 바꾼다).
 	iface func(gw []netip.Addr) (string, error)
 
-	epMu      sync.RWMutex
-	endpoints map[string]map[netip.Addr]Endpoint // env → 주소 → 정체
-	subnets   map[string][]netip.Prefix
-	gateways  map[string][]netip.Addr
-	refreshed time.Time
-	refreshMu sync.Mutex
+	epMu         sync.RWMutex
+	endpoints    map[string]map[netip.Addr]Endpoint // env → 주소 → 정체
+	subnets      map[string][]netip.Prefix
+	gateways     map[string][]netip.Addr
+	refreshed    time.Time
+	refreshTried time.Time
+	refreshMu    sync.Mutex
 
 	mu     sync.Mutex
 	seq    uint64
@@ -232,7 +233,8 @@ func (c *Collector) lookup(env string, a netip.Addr) (Endpoint, bool, bool) {
 
 func (c *Collector) refreshSoon() {
 	c.epMu.RLock()
-	recent := time.Since(c.refreshed) < 3*time.Second
+	// 성공한 시각뿐 아니라 시도한 시각도 본다. docker가 응답하지 않으면 모르는 주소의 새 연결마다 5초씩 캡처가 멈췄다.
+	recent := time.Since(c.refreshed) < 3*time.Second || time.Since(c.refreshTried) < 3*time.Second
 	c.epMu.RUnlock()
 	if recent {
 		return
@@ -248,6 +250,9 @@ func (c *Collector) refresh(ctx context.Context) {
 		return
 	}
 	defer c.refreshMu.Unlock()
+	c.epMu.Lock()
+	c.refreshTried = time.Now()
+	c.epMu.Unlock()
 	nets, err := c.Docker.ManagedNetworks(ctx)
 	if err != nil {
 		c.log().Debug("network logs: list networks", "err", err)
@@ -355,8 +360,9 @@ func (c *Collector) record(e Event) {
 	c.seq++
 	e.ID = fmt.Sprintf("%s-%d-%d", c.NodeID, c.epoch, c.seq)
 	c.ring = append(c.ring, e)
-	if len(c.ring) > ringSize {
-		c.ring = append([]Event(nil), c.ring[len(c.ring)-ringSize:]...)
+	// 넘칠 때마다 1024개를 복사하면 기록 하나에 O(ringSize)다. 두 배까지 두었다가 한 번에 줄인다(Subscribe는 마지막 ringSize개만 준다).
+	if len(c.ring) >= 2*ringSize {
+		c.ring = append(make([]Event, 0, 2*ringSize), c.ring[len(c.ring)-ringSize:]...)
 	}
 	c.publish(e)
 }
@@ -395,7 +401,11 @@ func (c *Collector) Subscribe() (past []Event, ch chan Event, cancel func()) {
 		s := c.status
 		past = append(past, Event{Kind: "status", Status: &s})
 	}
-	past = append(past, c.ring...)
+	recent := c.ring
+	if len(recent) > ringSize {
+		recent = recent[len(recent)-ringSize:]
+	}
+	past = append(past, recent...)
 	ch = make(chan Event, 1024)
 	c.subs[ch] = struct{}{}
 	return past, ch, func() {

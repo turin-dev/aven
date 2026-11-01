@@ -29,15 +29,13 @@ const (
 	legacyCookieName = "keel_session"
 )
 
+// requestSessionCookie is the session cookie of r (aven_session, else the legacy keel_session), with the
+// same duplicate-cookie rule as sessionCookieFrom.
 func requestSessionCookie(r *http.Request) (*http.Cookie, error) {
-	if c, err := r.Cookie(cookieName); err == nil {
+	if c, ok := sessionCookieFrom(r); ok {
 		return c, nil
 	}
-	c, err := r.Cookie(legacyCookieName)
-	if err == nil {
-		compat.NoteLegacyResource("session-cookie", "cookie "+legacyCookieName, "cookie "+cookieName)
-	}
-	return c, err
+	return nil, http.ErrNoCookie
 }
 
 func hasAPITokenPrefix(tok string) bool {
@@ -225,7 +223,7 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			}
 			s.lim().agentIP.fail(key)
 		}
-		if c, err := requestSessionCookie(r); err == nil {
+		if c, ok := sessionCookieFrom(r); ok {
 			if p, refresh := s.sessionPrincipal(r.Context(), c.Value); p != nil {
 				if p.ViewAsBy != nil {
 					if !viewAsAllowed(r) {
@@ -250,6 +248,31 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 		}
 		writeErr(w, 401, "unauthorized")
 	})
+}
+
+// sessionCookieFrom은 요청의 세션 쿠키다. 같은 이름의 쿠키가 여러 개면(형제 subdomain이 Domain=으로 심은 쿠키 등,
+// "cookie tossing") 어느 것이 진짜인지 알 수 없으므로 없는 것으로 본다. aven은 Domain 없이 Path=/ 하나만 쓴다.
+// The new name is checked first; the legacy keel_session is used only when no aven_session is sent.
+func sessionCookieFrom(r *http.Request) (*http.Cookie, bool) {
+	for _, name := range []string{cookieName, legacyCookieName} {
+		var found *http.Cookie
+		for _, c := range r.Cookies() {
+			if c.Name != name {
+				continue
+			}
+			if found != nil {
+				return nil, false
+			}
+			found = c
+		}
+		if found != nil {
+			if name == legacyCookieName {
+				compat.NoteLegacyResource("session-cookie", "cookie "+legacyCookieName, "cookie "+cookieName)
+			}
+			return found, true
+		}
+	}
+	return nil, false
 }
 
 // startSession은 새 세션을 만들고 쿠키를 붙인다.

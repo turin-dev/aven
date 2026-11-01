@@ -1,25 +1,28 @@
 "use client";
 
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, ArrowUp, RotateCw, Search } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ArrowDown, ArrowUp, Check, Clock, Copy, Download, RotateCw, Search, WrapText } from "lucide-react";
 import type { StreamState } from "@/lib/useLogStream";
+import {
+  TS_RE,
+  fromUtcHms,
+  highlightTerms,
+  levelOf,
+  makeFilter,
+  markSegments,
+  matchRanges,
+  parseAnsi,
+  stripAnsi,
+  type AnsiStyle,
+  type Level,
+} from "@/lib/logs";
 import { cx } from "./ui";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { t } from "@/lib/i18n";
 
+export { levelOf, makeFilter } from "@/lib/logs";
+
 export type LogLine = { text: string; service?: string; at?: number; replica?: string; stream?: "stdout" | "stderr" };
-
-const TS_RE = /^(\d{2}:\d{2}:\d{2}) (.*)$/s;
-
-type Level = "error" | "warn" | "stage" | "ok" | "info";
-
-export function levelOf(body: string): Level {
-  if (body.startsWith("==>")) return "stage";
-  if (/\berror\b|\bfatal\b|panic:/i.test(body)) return "error";
-  if (/^warn(ing)?\b|\bWARN\b/.test(body)) return "warn";
-  if (/healthcheck OK|배포 완료/.test(body)) return "ok";
-  return "info";
-}
 
 const BAR: Record<Level, string> = {
   error: "bg-red-500",
@@ -36,32 +39,24 @@ const TEXT: Record<Level, string> = {
   info: "text-foreground",
 };
 
-/** Tokens split by spaces (quotes keep phrases); "-term" excludes. All tokens must match. */
-export function makeFilter(q: string): (s: string) => boolean {
-  const toks = (q.match(/-?"[^"]*"|\S+/g) ?? []).map((tok) => {
-    const neg = tok.startsWith("-") && tok.length > 1;
-    const raw = (neg ? tok.slice(1) : tok).replace(/^"|"$/g, "").toLowerCase();
-    return { neg, raw };
-  });
-  if (!toks.length) return () => true;
-  return (s) => {
-    const l = s.toLowerCase();
-    return toks.every((tok) => (tok.raw ? l.includes(tok.raw) === !tok.neg : true));
-  };
-}
-
-type Row = { n: number; date: string; carried: boolean; body: string; level: Level; service?: string; replica?: string; stream?: string };
+type Row = {
+  n: number;
+  /** Epoch ms of the line (or of the last stamped line above it when `carried`). */
+  ts: number | null;
+  carried: boolean;
+  /** Raw message (may hold ANSI escapes). */
+  body: string;
+  /** Message without escapes: filtering, highlighting, copying. */
+  plain: string;
+  level: Level;
+  service?: string;
+  replica?: string;
+  stream?: string;
+};
 const p2 = (n: number) => String(n).padStart(2, "0");
-/** Local "M/DD HH:MM:SS". */
+/** Local "YYYY-MM-DD HH:MM:SS". */
 function fmtLocal(d: Date) {
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
-}
-/** Server log prefixes are UTC HH:MM:SS; anchor them to the deployment's UTC date. */
-function fromUtcHms(base: Date, hms: string): Date {
-  const [h, m, s] = hms.split(":").map(Number);
-  const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), h, m, s));
-  if (d.getTime() < base.getTime() - 3600_000) d.setUTCDate(d.getUTCDate() + 1);
-  return d;
 }
 export function tzLabel(): string {
   try {
@@ -81,9 +76,93 @@ const ROW_BG: Record<Level, string> = {
   ok: "",
   info: "",
 };
-const RowView = memo(function RowView({ r, cols }: { r: Row; cols: Cols }) {
+
+/* ANSI colours map to theme tokens so they stay readable in light and dark mode. */
+const FG: Record<string, string> = {
+  black: "text-gray-500",
+  red: "text-red-600",
+  green: "text-green-600",
+  yellow: "text-yellow-600",
+  blue: "text-blue-600",
+  magenta: "text-pink-600",
+  cyan: "text-cyan-600",
+  white: "text-gray-600",
+  "bright-black": "text-gray-400",
+  "bright-red": "text-red-500",
+  "bright-green": "text-green-500",
+  "bright-yellow": "text-yellow-500",
+  "bright-blue": "text-blue-500",
+  "bright-magenta": "text-pink-500",
+  "bright-cyan": "text-cyan-500",
+  "bright-white": "text-foreground",
+};
+const BG: Record<string, string> = {
+  black: "bg-gray-200",
+  red: "bg-red-100",
+  green: "bg-green-100",
+  yellow: "bg-yellow-100",
+  blue: "bg-blue-100",
+  magenta: "bg-pink-100",
+  cyan: "bg-cyan-100",
+  white: "bg-gray-100",
+  "bright-black": "bg-gray-200",
+  "bright-red": "bg-red-200",
+  "bright-green": "bg-green-200",
+  "bright-yellow": "bg-yellow-200",
+  "bright-blue": "bg-blue-200",
+  "bright-magenta": "bg-pink-200",
+  "bright-cyan": "bg-cyan-200",
+  "bright-white": "bg-gray-50",
+};
+function segClass(st?: AnsiStyle): string | undefined {
+  if (!st) return undefined;
   return (
-    <div role="row" className="font-mono text-xs hover:bg-gray-50" style={{ display: "grid", gridTemplateColumns: gridCols(cols), contain: "layout" }}>
+    cx(
+      st.fg && FG[st.fg],
+      st.bg && BG[st.bg],
+      st.bold && "font-bold",
+      st.dim && "opacity-70",
+      st.italic && "italic",
+      st.underline && "underline",
+    ) || undefined
+  );
+}
+function segStyle(st?: AnsiStyle): CSSProperties | undefined {
+  if (!st) return undefined;
+  const color = st.fg && !FG[st.fg] ? st.fg : undefined;
+  const backgroundColor = st.bg && !BG[st.bg] ? st.bg : undefined;
+  return color || backgroundColor ? { color, backgroundColor } : undefined;
+}
+
+function Body({ body, plain, terms }: { body: string; plain: string; terms: string[] }) {
+  const segs = markSegments(parseAnsi(body), matchRanges(plain, terms));
+  if (segs.length === 1 && !segs[0].st && !segs[0].mark) return <>{segs[0].text || " "}</>;
+  return (
+    <>
+      {segs.map((s, i) =>
+        s.mark ? (
+          <mark key={i} className={cx("rounded-[2px] bg-yellow-200 text-inherit", segClass(s.st))} style={segStyle(s.st)}>
+            {s.text}
+          </mark>
+        ) : (
+          <span key={i} className={segClass(s.st)} style={segStyle(s.st)}>
+            {s.text}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+const RowView = memo(function RowView({ r, i, cols, wrap, terms }: { r: Row; i: number; cols: Cols; wrap: boolean; terms: string[] }) {
+  const date = r.ts !== null ? fmtLocal(new Date(r.ts)) : "";
+  return (
+    <div
+      role="row"
+      data-i={i}
+      className="font-mono text-xs hover:bg-gray-50"
+      style={{ display: "grid", gridTemplateColumns: gridCols(cols, wrap), ...(wrap ? null : { width: "max-content", minWidth: "100%" }) }}
+    >
       <div
         role="cell"
         className={cx(
@@ -96,7 +175,7 @@ const RowView = memo(function RowView({ r, cols }: { r: Row; cols: Cols }) {
           <span className="group relative flex h-full shrink-0 items-stretch pl-3">
             <span className={cx("h-full w-[4px] rounded-full", BAR[r.level])} />
           </span>
-          <span className="whitespace-nowrap pl-2.5 tabular-nums">{r.date}</span>
+          {cols.time && <span className="whitespace-nowrap pl-2.5 tabular-nums">{date}</span>}
         </div>
       </div>
       {cols.service && (
@@ -110,14 +189,18 @@ const RowView = memo(function RowView({ r, cols }: { r: Row; cols: Cols }) {
           {r.stream === "stderr" && <span className="ml-1 text-danger/80">err</span>}
         </div>
       )}
-      <div role="cell" className={cx("min-w-0 whitespace-normal break-all py-1 pl-2 pr-2 tabular-nums", ROW_BG[r.level])}>
-        <div className={cx("inline-block select-text whitespace-pre-wrap px-1 text-left", TEXT[r.level])}>{r.body || " "}</div>
+      <div role="cell" className={cx("min-w-0 py-1 pl-2 pr-2 tabular-nums", ROW_BG[r.level])}>
+        <div className={cx("select-text px-1 text-left", wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre", TEXT[r.level])}>
+          <Body body={r.body} plain={r.plain} terms={terms} />
+        </div>
       </div>
     </div>
   );
 });
-function gridCols(c: Cols) {
-  return [c.time ? "196px" : "0px", c.service ? "140px" : null, c.replica ? "110px" : null, "minmax(0,1fr)"].filter(Boolean).join(" ");
+const TIME_W = 196;
+const BAR_W = 24;
+function gridCols(c: Cols, wrap = true) {
+  return [c.time ? `${TIME_W}px` : `${BAR_W}px`, c.service ? "140px" : null, c.replica ? "110px" : null, wrap ? "minmax(0,1fr)" : "auto"].filter(Boolean).join(" ");
 }
 
 export function LogToolbar({ children }: { children: ReactNode }) {
@@ -176,7 +259,7 @@ export function LogFilter({
           aria-label={t("로그 필터")}
           spellCheck={false}
           autoComplete="off"
-          className="relative m-0 block h-5 w-full resize-none overflow-x-hidden whitespace-pre-wrap bg-transparent font-mono text-sm leading-5 text-foreground caret-foreground focus:outline-none"
+          className="relative m-0 block h-5 w-full resize-none overflow-x-hidden whitespace-pre-wrap bg-transparent pr-8 font-mono text-sm leading-5 text-foreground caret-foreground focus:outline-none"
         />
       </div>
       <div title={t("입력창 포커스")} className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md border border-neutral-light bg-secondaryBg" aria-hidden="true">
@@ -203,6 +286,53 @@ const STATE: Record<StreamState, { text: string; cls: string }> = {
   error: { text: t("연결 끊김"), cls: "bg-red-600" },
 };
 
+/** A boolean view preference kept in localStorage (read after mount so SSR markup matches). */
+function usePref(key: string, initial: boolean) {
+  const [v, setV] = useState(initial);
+  useEffect(() => {
+    try {
+      const s = window.localStorage.getItem(key);
+      if (s !== null) setV(s === "1");
+    } catch {}
+  }, [key]);
+  const set = (next: boolean) => {
+    setV(next);
+    try {
+      window.localStorage.setItem(key, next ? "1" : "0");
+    } catch {}
+  };
+  return [v, set] as const;
+}
+
+type LevelFilter = "all" | "warn" | "error";
+const levelOk = (lv: Level, f: LevelFilter) => f === "all" || lv === "error" || (f === "warn" && lv === "warn");
+
+/** Largest i in [0, n) with offsets[i] <= y. */
+function rowAt(offsets: Float64Array, n: number, y: number) {
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (offsets[mid] <= y) lo = mid;
+    else hi = mid - 1;
+  }
+  return Math.max(0, lo);
+}
+
+const LINE_H = 16;
+const ROW_PAD = 8;
+const CHAR_W = 7.2;
+const OVERSCAN = 800;
+const heightKey = (r: Row) => `${r.level}\u0000${r.body}`;
+
+const TOOL_BTN =
+  "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-xs text-gray-600 hover:bg-gray-100 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 aria-pressed:bg-gray-100 aria-pressed:text-foreground [&_svg]:size-3.5";
+
+/**
+ * Log viewer: virtualized rows (variable heights, measured and cached per line text), ANSI colours,
+ * filter highlighting, follow-tail that pauses when you scroll up. `tools` adds level filter, wrap,
+ * timestamp, copy and download controls.
+ */
 export function LogTable({
   lines,
   state,
@@ -215,6 +345,8 @@ export function LogTable({
   showService,
   showReplica,
   showTime = true,
+  tools = false,
+  downloadName = "logs.txt",
 }: {
   lines: LogLine[];
   state?: StreamState;
@@ -228,62 +360,253 @@ export function LogTable({
   showService?: boolean;
   showReplica?: boolean;
   showTime?: boolean;
+  /** Show the level filter, wrap / timestamp toggles and copy / download buttons. */
+  tools?: boolean;
+  downloadName?: string;
 }) {
-  const cols = useMemo(() => ({ time: showTime, service: !!showService, replica: !!showReplica }), [showTime, showService, showReplica]);
-  const ref = useRef<HTMLDivElement>(null);
+  const [wrapPref, setWrap] = usePref("aven.logs.wrap", true);
+  const [timePref, setTimePref] = usePref("aven.logs.time", true);
+  const [level, setLevel] = useState<LevelFilter>("all");
+  const [copied, setCopied] = useState(false);
+  const wrap = !tools || wrapPref;
+  const time = showTime && (!tools || timePref);
+  const cols = useMemo(() => ({ time, service: !!showService, replica: !!showReplica }), [time, showService, showReplica]);
+  const scroller = useRef<HTMLDivElement>(null);
+  const rowsBox = useRef<HTMLDivElement>(null);
   const [stick, setStick] = useState(true);
   const [tz, setTz] = useState(t("현지"));
   useEffect(() => setTz(tzLabel() || t("현지")), []);
-  const stickRef = useRef(stick);
-  stickRef.current = stick;
+
   const rows = useMemo(() => {
     const base = baseDate ? new Date(baseDate) : new Date();
-    const out: Row[] = [];
-    let last = "";
-    lines.forEach((l, i) => {
+    const out: Row[] = new Array(lines.length);
+    let last: number | null = null;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
       const m = TS_RE.exec(l.text);
-      let date: string;
+      let ts: number | null;
       let carried = false;
-      if (m) date = last = fmtLocal(fromUtcHms(base, m[1]));
-      else if (l.at) date = last = fmtLocal(new Date(l.at));
+      if (m) ts = last = fromUtcHms(base, m[1]).getTime();
+      else if (l.at) ts = last = l.at;
       else {
-        date = last;
+        ts = last;
         carried = true;
       }
       const body = m ? m[2] : l.text;
-      const lv = levelOf(body);
-      out.push({ n: i + 1, date, carried, body, level: lv === "info" && l.stream === "stderr" && /\bwarn/i.test(body) ? "warn" : lv, service: l.service, replica: l.replica, stream: l.stream });
-    });
+      const plain = stripAnsi(body);
+      const lv = levelOf(plain);
+      out[i] = {
+        n: i + 1,
+        ts,
+        carried,
+        body,
+        plain,
+        level: lv === "info" && l.stream === "stderr" && /\bwarn/i.test(plain) ? "warn" : lv,
+        service: l.service,
+        replica: l.replica,
+        stream: l.stream,
+      };
+    }
     return out;
   }, [lines, baseDate]);
+  const counts = useMemo(() => {
+    if (!tools) return { error: 0, warn: 0 };
+    let error = 0;
+    let warn = 0;
+    for (const r of rows) {
+      if (r.level === "error") error++;
+      else if (r.level === "warn") warn++;
+    }
+    return { error, warn };
+  }, [rows, tools]);
+  const q = filter.trim();
   const pred = useMemo(() => makeFilter(filter), [filter]);
+  const terms = useMemo(() => highlightTerms(filter), [filter]);
   const shown = useMemo(
-    () => (filter.trim() ? rows.filter((r) => pred(`${r.service ?? ""} ${r.replica ?? ""} ${r.body}`)) : rows),
-    [rows, pred, filter],
+    () =>
+      q || level !== "all"
+        ? rows.filter((r) => levelOk(r.level, level) && (!q || pred(`${r.service ?? ""} ${r.replica ?? ""} ${r.plain}`)))
+        : rows,
+    [rows, pred, q, level],
   );
+  const filtered = !!q || level !== "all";
+
+  /* ── Virtual window ── */
+  const heights = useRef(new Map<string, number>());
+  const [hv, setHv] = useState(0);
+  const [vp, setVp] = useState({ top: 0, h: 600, w: 800 });
+  const fixedW = (time ? TIME_W : BAR_W) + (showService ? 140 : 0) + (showReplica ? 110 : 0) + 24;
+  const offsets = useMemo(() => {
+    const per = Math.max(10, Math.floor((vp.w - fixedW) / CHAR_W));
+    const est = (r: Row) => {
+      if (!wrap) return LINE_H + ROW_PAD;
+      let n = 0;
+      for (const part of r.plain.split("\n")) n += Math.max(1, Math.ceil(part.length / per));
+      return n * LINE_H + ROW_PAD;
+    };
+    const o = new Float64Array(shown.length + 1);
+    const hs = heights.current;
+    for (let i = 0; i < shown.length; i++) o[i + 1] = o[i] + (hs.get(heightKey(shown[i])) ?? est(shown[i]));
+    return o;
+    // hv re-runs this after new measurements land in the cache.
+  }, [shown, hv, wrap, vp.w, fixedW]);
+  const total = offsets[shown.length];
+  const viewTop = stick ? Math.max(0, total - vp.h) : vp.top;
+  const first = shown.length ? rowAt(offsets, shown.length, viewTop - OVERSCAN) : 0;
+  const last = shown.length ? Math.min(shown.length, rowAt(offsets, shown.length, viewTop + vp.h + OVERSCAN) + 1) : 0;
+
+  // Measure rendered rows, cache their heights and keep the view steady (or pinned to the bottom).
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (el && stick) el.scrollTop = el.scrollHeight;
-  }, [shown, stick]);
+    const box = rowsBox.current;
+    const el = scroller.current;
+    if (!el) return;
+    let changed = false;
+    let delta = 0;
+    if (box) {
+      const anchor = el.scrollTop;
+      for (const child of Array.from(box.children) as HTMLElement[]) {
+        const i = Number(child.dataset.i);
+        const r = shown[i];
+        if (!r) continue;
+        const h = child.offsetHeight;
+        const before = offsets[i + 1] - offsets[i];
+        if (h && Math.abs(h - before) > 0.5) {
+          heights.current.set(heightKey(r), h);
+          changed = true;
+          if (offsets[i + 1] <= anchor) delta += h - before;
+        }
+      }
+    }
+    if (stick) el.scrollTop = el.scrollHeight;
+    else if (delta) el.scrollTop += delta;
+    if (changed) setHv((v) => v + 1);
+  });
+
   useEffect(() => {
-    const el = ref.current;
+    const el = scroller.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
-      if (stickRef.current) el.scrollTop = el.scrollHeight;
+      setVp((v) => {
+        if (v.h === el.clientHeight && v.w === el.clientWidth) return v;
+        if (v.w !== el.clientWidth) heights.current.clear();
+        return { top: el.scrollTop, h: el.clientHeight, w: el.clientWidth };
+      });
     });
     ro.observe(el);
-    if (el.firstElementChild) ro.observe(el.firstElementChild);
     return () => ro.disconnect();
-  }, [shown.length === 0]);
+  }, []);
+  useEffect(() => {
+    heights.current.clear();
+    setHv((v) => v + 1);
+  }, [wrap, cols]);
+
+  const lastScroll = useRef({ top: 0, height: 0 });
   const onScroll = () => {
-    const el = ref.current;
-    if (el) setStick(el.scrollHeight - el.scrollTop - el.clientHeight < 32);
+    const el = scroller.current;
+    if (!el) return;
+    const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const prev = lastScroll.current;
+    const up = el.scrollTop < prev.top - 2 && el.scrollHeight >= prev.height;
+    lastScroll.current = { top: el.scrollTop, height: el.scrollHeight };
+    if (dist < 32) setStick(true);
+    else if (up) setStick(false);
+    setVp((v) => (v.top === el.scrollTop ? v : { ...v, top: el.scrollTop }));
   };
+
+  // Lines that arrived while you were reading further up.
+  const pausedAt = useRef<number | null>(null);
+  if (stick) pausedAt.current = null;
+  else if (pausedAt.current === null) pausedAt.current = shown.length;
+  const unseen = pausedAt.current === null ? 0 : Math.max(0, shown.length - pausedAt.current);
+
+  const asText = () =>
+    shown
+      .map((r) => `${time && r.ts !== null ? fmtLocal(new Date(r.ts)) + " " : ""}${r.service ? `[${r.service}] ` : ""}${r.replica ? `${r.replica} ` : ""}${r.plain}`)
+      .join("\n");
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(asText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      /* clipboard denied */
+    }
+  };
+  const download = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([asText()], { type: "text/plain" }));
+    a.download = downloadName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 0);
+  };
+
+  const levelOpts: [LevelFilter, string, number | null][] = [
+    ["all", t("전체"), null],
+    ["warn", t("경고 이상"), counts.warn + counts.error],
+    ["error", t("오류만"), counts.error],
+  ];
+
   return (
     <div className={cx("relative flex min-h-0 flex-col bg-background", className)}>
+      {tools && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-b-neutral bg-secondaryBg px-6 py-1.5 font-sans">
+          <div role="radiogroup" aria-label={t("로그 레벨")} className="flex items-center gap-0.5">
+            {levelOpts.map(([v, label, n]) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={level === v}
+                onClick={() => setLevel(v)}
+                className={cx(TOOL_BTN, level === v && "bg-gray-100 text-foreground")}
+              >
+                {label}
+                {n !== null && n > 0 && (
+                  <span className={cx("rounded-full px-1.5 tabular-nums", v === "error" ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-600")}>
+                    {n.toLocaleString()}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto flex items-center gap-0.5">
+            <button type="button" aria-pressed={wrapPref} onClick={() => setWrap(!wrapPref)} className={TOOL_BTN} title={t("긴 줄 바꿈")}>
+              <WrapText aria-hidden /> <span className="hidden md:inline">{t("줄 바꿈")}</span>
+            </button>
+            {showTime && (
+              <button type="button" aria-pressed={timePref} onClick={() => setTimePref(!timePref)} className={TOOL_BTN} title={t("시간 표시")}>
+                <Clock aria-hidden /> <span className="hidden md:inline">{t("시간")}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={copy}
+              disabled={!shown.length}
+              className={cx(TOOL_BTN, "disabled:cursor-not-allowed disabled:opacity-50")}
+              aria-label={filtered ? t("필터된 로그 복사") : t("로그 복사")}
+              title={copied ? t("복사됨") : filtered ? t("필터된 로그 복사") : t("로그 복사")}
+            >
+              {copied ? <Check aria-hidden className="text-success" /> : <Copy aria-hidden />}
+              <span className="hidden md:inline" aria-live="polite">
+                {copied ? t("복사됨") : t("복사")}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={download}
+              disabled={!shown.length}
+              className={cx(TOOL_BTN, "disabled:cursor-not-allowed disabled:opacity-50")}
+              aria-label={t("로그 내려받기")}
+              title={t("로그 내려받기")}
+            >
+              <Download aria-hidden />
+            </button>
+          </div>
+        </div>
+      )}
       <div role="rowgroup" className="relative w-full shrink-0 bg-secondaryBg after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']">
-        <div role="row" className="grid w-full select-none text-left text-xs font-medium text-neutral-secondary" style={{ gridTemplateColumns: cols.time ? `${gridCols(cols)}` : gridCols(cols) }}>
-          {showTime ? (
+        <div role="row" className="grid w-full select-none text-left text-xs font-medium text-neutral-secondary" style={{ gridTemplateColumns: gridCols(cols) }}>
+          {time ? (
             <div role="columnheader" className="relative flex items-center whitespace-nowrap bg-secondaryBg px-2 py-1.5 pl-6">
               {t("날짜")} <span className="ml-1 text-gray-400">({tz})</span>
             </div>
@@ -304,15 +627,17 @@ export function LogTable({
             {t("메시지")}
             {state && (
               <span className="ml-auto flex items-center gap-1.5 pr-3 text-xs font-normal">
-                <span className={cx("size-1.5 rounded-full", STATE[state].cls)} />
-                <span className="hidden sm:inline">{STATE[state].text}</span>
+                <span className={cx("size-1.5 rounded-full", STATE[state].cls)} aria-hidden />
+                <span className="hidden sm:inline" role="status">
+                  {STATE[state].text}
+                </span>
                 {(state === "error" || state === "done") && onReconnect && (
-                  <button type="button" onClick={onReconnect} className="ml-1 flex cursor-pointer items-center gap-1 rounded px-1 text-gray-600 hover:text-foreground">
-                    <RotateCw className="size-3" /> {t("다시 연결")}
+                  <button type="button" onClick={onReconnect} className="ml-1 flex cursor-pointer items-center gap-1 rounded px-1 text-gray-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500">
+                    <RotateCw className="size-3" aria-hidden /> {t("다시 연결")}
                   </button>
                 )}
                 <span className="ml-2 tabular-nums text-gray-400">
-                  {filter.trim() ? `${shown.length.toLocaleString()} / ` : ""}
+                  {filtered ? `${shown.length.toLocaleString()} / ` : ""}
                   {t("{count}줄", { count: rows.length.toLocaleString() })}
                 </span>
               </span>
@@ -321,23 +646,33 @@ export function LogTable({
         </div>
       </div>
       <div
-        ref={ref}
+        ref={scroller}
         onScroll={onScroll}
         role="log"
+        aria-live="off"
+        aria-label={t("로그")}
+        tabIndex={0}
         data-noscroll
-        className="min-h-0 flex-1 overflow-y-auto font-mono text-xs [overflow-anchor:none]"
+        className={cx(
+          "min-h-0 flex-1 overflow-y-auto font-mono text-xs [overflow-anchor:none] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-pink-500/40",
+          wrap ? "overflow-x-hidden" : "overflow-x-auto",
+        )}
       >
-        <div>
-          {shown.length === 0 ? (
-            <LogEmpty
-              title={rows.length && filter.trim() ? t("이 필터에 맞는 로그가 없습니다") : state === "connecting" ? t("로그를 불러오는 중…") : undefined}
-              sub={rows.length && filter.trim() ? t("검색어를 줄이거나 지워 보세요.") : state === "connecting" ? t("로그를 가져오는 동안 잠시 기다려 주세요.") : emptyText}
-            />
-          ) : (
-            shown.map((r) => <RowView key={r.n} r={r} cols={cols} />)
-          )}
-          {footer}
-        </div>
+        {shown.length === 0 ? (
+          <LogEmpty
+            title={rows.length && filtered ? t("이 필터에 맞는 로그가 없습니다") : state === "connecting" ? t("로그를 불러오는 중…") : undefined}
+            sub={rows.length && filtered ? t("검색어를 줄이거나 지워 보세요.") : state === "connecting" ? t("로그를 가져오는 동안 잠시 기다려 주세요.") : emptyText}
+          />
+        ) : (
+          <div style={{ paddingTop: offsets[first], paddingBottom: total - offsets[last] }}>
+            <div ref={rowsBox}>
+              {shown.slice(first, last).map((r, k) => (
+                <RowView key={r.n} r={r} i={first + k} cols={cols} wrap={wrap} terms={terms} />
+              ))}
+            </div>
+          </div>
+        )}
+        {footer}
       </div>
       <div className="absolute bottom-4 right-4 flex flex-col gap-2">
         <button
@@ -346,23 +681,29 @@ export function LogTable({
           title={t("맨 위로")}
           onClick={() => {
             setStick(false);
-            ref.current?.scrollTo({ top: 0 });
+            scroller.current?.scrollTo({ top: 0 });
           }}
-          className="flex size-9 cursor-pointer items-center justify-center rounded-md border border-gray-200 bg-secondaryBg text-gray-600 hover:border-gray-300 hover:text-foreground"
+          className="flex size-9 cursor-pointer items-center justify-center rounded-md border border-gray-200 bg-secondaryBg text-gray-600 hover:border-gray-300 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500"
         >
-          <ArrowUp className="size-4" />
+          <ArrowUp className="size-4" aria-hidden />
         </button>
         <button
           type="button"
-          aria-label={t("맨 아래로")}
-          title={t("맨 아래로")}
+          aria-label={unseen ? t("맨 아래로 (새 로그 {count}줄)", { count: unseen }) : t("맨 아래로")}
+          title={stick ? t("최신 로그를 따라가는 중") : t("맨 아래로 이동해 최신 로그 따라가기")}
+          aria-pressed={stick}
           onClick={() => setStick(true)}
           className={cx(
-            "flex size-9 cursor-pointer items-center justify-center rounded-md border bg-secondaryBg hover:text-foreground",
+            "relative flex size-9 cursor-pointer items-center justify-center rounded-md border bg-secondaryBg hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500",
             stick ? "border-gray-200 text-gray-600" : "border-pink-500 text-pink-600",
           )}
         >
-          <ArrowDown className="size-4" />
+          <ArrowDown className="size-4" aria-hidden />
+          {unseen > 0 && (
+            <span className="absolute -left-2 -top-2 min-w-5 rounded-full bg-pink-500 px-1 text-center font-sans text-[10px] font-semibold leading-5 text-white tabular-nums">
+              {unseen > 999 ? "999+" : unseen}
+            </span>
+          )}
         </button>
       </div>
     </div>

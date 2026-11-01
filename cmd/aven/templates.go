@@ -84,7 +84,7 @@ func cmdTemplates(c *config, args []string) {
 	}
 	switch sub {
 	case "list", "ls":
-		fl := flag.NewFlagSet("templates list", flag.ExitOnError)
+		fl := newFlagSet("templates list")
 		q := fl.String("q", "", "search text")
 		cat := fl.String("category", "", "category")
 		tag := fl.String("tag", "", "tag")
@@ -163,7 +163,7 @@ func cmdTemplates(c *config, args []string) {
 			fmt.Println("\n" + t.Readme)
 		}
 	case "deploy":
-		fl := flag.NewFlagSet("templates deploy", flag.ExitOnError)
+		fl := newFlagSet("templates deploy")
 		inputs := kvList{}
 		fl.Var(inputs, "input", "template input KEY=VALUE (repeatable)")
 		tf := addTargetFlags(fl)
@@ -179,7 +179,7 @@ func cmdTemplates(c *config, args []string) {
 		}
 		fmt.Printf("deploying template %s to %s: %s\n", key, l.Environment, names(svcs, func(s namedSvc) string { return s.Name }))
 	case "publish":
-		fl := flag.NewFlagSet("templates publish", flag.ExitOnError)
+		fl := newFlagSet("templates publish")
 		vis := fl.String("visibility", "", "private (default) | workspace | public")
 		key := fl.String("key", "", "template key (default: the definition's key or name)")
 		workspace := fl.String("workspace", "", "workspace ID (default: server default workspace)")
@@ -213,7 +213,7 @@ func cmdTemplates(c *config, args []string) {
 		}
 		io.Copy(os.Stdout, resp.Body)
 	case "export-env":
-		fl := flag.NewFlagSet("templates export-env", flag.ExitOnError)
+		fl := newFlagSet("templates export-env")
 		secrets := fl.String("secrets", "generate", "generate (replace secrets with ${{ secret(32) }}) | inputs (turn them into required inputs)")
 		tf := addTargetFlags(fl)
 		fl.Parse(args)

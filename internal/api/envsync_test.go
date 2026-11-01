@@ -304,3 +304,22 @@ func TestSyncPristineIsCreate(t *testing.T) {
 		t.Errorf("worker: %v", wk)
 	}
 }
+
+func TestMaskVarHidesLiteralPartsAroundReferences(t *testing.T) {
+	for in, want := range map[string]string{
+		"postgres://user:secret@${{db.HOST}}/x": "•••${{db.HOST}}•••",
+		"${{db.DATABASE_URL}}":                  "${{db.DATABASE_URL}}",
+		"${{ a.X }}${{b.Y}}":                    "${{ a.X }}${{b.Y}}",
+		"Bearer s3cret":                         "•••",
+		"":                                      "•••",
+		"${{shared.HOST}}:${{shared.PORT}}":     "${{shared.HOST}}•••${{shared.PORT}}",
+	} {
+		got := maskVar(in, true)
+		if got == nil || *got != want {
+			t.Errorf("maskVar(%q) = %v, want %q", in, got, want)
+		}
+		if strings.Contains(*got, "secret") || strings.Contains(*got, "s3cret") {
+			t.Errorf("maskVar(%q) leaks the literal: %q", in, *got)
+		}
+	}
+}

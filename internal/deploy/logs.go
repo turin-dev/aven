@@ -50,7 +50,11 @@ func (m *Manager) saveRuntimeLogs(ctx context.Context, d *store.Deployment, name
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		m.driverForNode(nodeID).FollowLogs(ctx, n, "1000", false, func(l node.LogLine) { all = append(all, entry(n, l)) })
+		m.driverForNode(nodeID).FollowLogs(ctx, n, "1000", false, func(l node.LogLine) {
+			e := entry(n, l)
+			e.Msg = truncateLine(e.Msg) // 보관 파일은 다시 읽을 때 1 MiB를 넘는 줄에서 멈춘다
+			all = append(all, e)
+		})
 		cancel()
 	}
 	if len(all) == 0 {

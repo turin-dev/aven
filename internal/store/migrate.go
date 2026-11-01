@@ -62,6 +62,8 @@ var migrations = []func(ctx context.Context, tx *Store) error{
 	migrateOwnerTools,
 	migrateServiceHolds,
 	migrateGitHubTokenRefresh,
+	migrateHotIndexes,
+	migrateOrphanSettings,
 }
 
 // noForeignKeyMigrations는 외래 키 검사를 끄고 돌리는 마이그레이션이다(테이블을 다시 만드는 경우). PRAGMA foreign_keys는
@@ -700,8 +702,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			if err := migrations[v](ctx, tx); err != nil {
 				return err
 			}
-			_, err := tx.q.ExecContext(ctx, `UPDATE schema_version SET version=?`, v+1)
-			return err
+			return tx.bumpSchemaVersion(ctx, v)
 		})
 		if err != nil {
 			return fmt.Errorf("migration %d: %w", v+1, err)
@@ -729,9 +730,21 @@ func (s *Store) migrateWithoutForeignKeys(ctx context.Context, v int) error {
 		if broken {
 			return errors.New("foreign key check failed after migration")
 		}
-		_, err = tx.q.ExecContext(ctx, `UPDATE schema_version SET version=?`, v+1)
-		return err
+		return tx.bumpSchemaVersion(ctx, v)
 	})
+}
+
+// bumpSchemaVersion은 버전을 v에서 v+1로 올린다. 다른 프로세스가 같은 DB를 동시에 이전해 버전이 이미 바뀌었으면
+// 트랜잭션을 되돌리도록 에러를 낸다(같은 마이그레이션을 두 번 적용하지 않는다).
+func (tx *Store) bumpSchemaVersion(ctx context.Context, v int) error {
+	res, err := tx.q.ExecContext(ctx, `UPDATE schema_version SET version=? WHERE version=?`, v+1, v)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return fmt.Errorf("schema version changed concurrently (expected %d)", v)
+	}
+	return nil
 }
 
 func (s *Store) tableExists(ctx context.Context, name string) bool {

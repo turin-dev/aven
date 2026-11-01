@@ -261,6 +261,11 @@ func validateEntry(k, v string) error {
 	if strings.ContainsAny(v, "\n\r\x00") {
 		return fmt.Errorf("%w: %s 값에 줄바꿈을 넣을 수 없습니다", ErrConfig, k)
 	}
+	if strings.Contains(v, `\`) {
+		// systemd EnvironmentFile은 따옴표 없는 값의 \를 이스케이프로 읽고(끝의 \는 다음 줄을 잇는다) docker --env-file은
+		// 그대로 둔다. 두 실행 방식이 같은 값을 보도록 받지 않는다.
+		return fmt.Errorf("%w: %s 값에 백슬래시(\\)를 넣을 수 없습니다(systemd와 docker가 다르게 읽습니다)", ErrConfig, k)
+	}
 	if v != strings.TrimSpace(v) {
 		return fmt.Errorf("%w: %s 값의 앞뒤 공백을 빼세요", ErrConfig, k)
 	}

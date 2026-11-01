@@ -2,6 +2,8 @@
 
 import { useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Box, ChartNoAxesColumn, FileText, Gauge, LayoutTemplate, Network, Server, Settings, ShieldCheck, SquareTerminal, Waypoints, type LucideIcon } from "lucide-react";
+import { t } from "./i18n";
 
 export const PANEL_TABS = ["deployments", "backups", "code", "data", "bucket", "variables", "metrics", "shell", "settings", "admin"] as const;
 export type PanelTab = (typeof PANEL_TABS)[number];
@@ -112,7 +114,25 @@ export function useCtxHref() {
   const ctx = ctxFrom(params);
   return useCallback(
     (path: string, extra?: Record<string, string | null | undefined>) => withCtx(path, ctx, extra),
+    // ctx.ws matters too: without it, links built on /?ws=A kept pointing at A after switching to ?ws=B,
+    // and following one silently switched the workspace back.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [ctx.project, ctx.env],
+    [ctx.project, ctx.env, ctx.ws],
   );
 }
+
+/** Pages of the left rail. Shared by the rail, the command palette and the top bar breadcrumb. */
+export type ShellNavItem = { href: string; label: string; icon: LucideIcon; match: (path: string) => boolean; bottom?: boolean };
+export const SHELL_NAV: ShellNavItem[] = [
+  { href: "/", label: t("아키텍처"), icon: Network, match: (p) => p === "/" },
+  { href: "/observability/", label: t("관측"), icon: ChartNoAxesColumn, match: (p) => p.startsWith("/observability") },
+  { href: "/logs/", label: t("로그"), icon: FileText, match: (p) => p.startsWith("/logs") },
+  { href: "/traces/", label: t("트레이스"), icon: Waypoints, match: (p) => p.startsWith("/traces") },
+  { href: "/nodes/", label: t("노드"), icon: Server, match: (p) => p.startsWith("/nodes") },
+  { href: "/sandboxes/", label: t("샌드박스"), icon: Box, match: (p) => p.startsWith("/sandboxes") },
+  { href: "/usage/", label: t("사용량"), icon: Gauge, match: (p) => p.startsWith("/usage") },
+  { href: "/templates/", label: t("템플릿"), icon: LayoutTemplate, match: (p) => p.startsWith("/templates") },
+  { href: "/cli/", label: "CLI", icon: SquareTerminal, match: (p) => p.startsWith("/cli") },
+  { href: "/settings/", label: t("설정"), icon: Settings, match: (p) => p.startsWith("/settings"), bottom: true },
+  { href: "/admin/", label: t("어드민"), icon: ShieldCheck, match: (p) => p.startsWith("/admin"), bottom: true },
+];

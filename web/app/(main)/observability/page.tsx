@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useMemo, useState, type ReactNode } from "react";
+import { Suspense, useMemo, type ReactNode } from "react";
 import { AlertTriangle, ArrowUpRight } from "lucide-react";
 import { METRIC_RANGES, isTerminal, sse, type CanvasService, type EnvLogLine, type MetricPoint, type MetricRange } from "@/lib/api";
 import { useCanvas, useCaps, useEnvMetrics, useEvents } from "@/lib/queries";
@@ -108,12 +108,16 @@ function ObservabilityInner() {
   const ws = useWorkspace();
   const envId = ws.env?.id;
   const canvas = useCanvas(envId);
-  const [range, setRange] = useState<MetricRange>("6h");
-  const metrics = useEnvMetrics(envId, range);
-  const events = useEvents(ws.pid, envId, 50);
   const href = useCtxHref();
   const params = useSearchParams();
   const router = useRouter();
+  // ?range= keeps the time picker across reloads and shared links. On a custom dashboard no range means
+  // "each widget's own range"; the overview falls back to 6 hours.
+  const rangeParam = params.get("range");
+  const pickedRange = (METRIC_RANGES as string[]).includes(rangeParam ?? "") ? (rangeParam as MetricRange) : null;
+  const range: MetricRange = pickedRange ?? "6h";
+  const metrics = useEnvMetrics(envId, range);
+  const events = useEvents(ws.pid, envId, 50);
   const services = useMemo(() => canvas.data?.services ?? [], [canvas.data]);
   const names = useMemo(() => new Map(services.map((s) => [s.id, s.name])), [services]);
   const open = (sid: string, extra: { dep?: string } = {}) => canvasHref({ svc: sid, dep: extra.dep ?? null }, ctxFrom(params));
@@ -122,7 +126,8 @@ function ObservabilityInner() {
   const dashboards = useDashboards(ws.pid);
   const dashId = params.get("dash");
   const dash = dashboards.data?.find((d) => d.id === dashId) ?? null;
-  const setDash = (id: string | null) => router.replace(href("/observability/", { dash: id }), { scroll: false });
+  const setDash = (id: string | null) => router.replace(href("/observability/", { dash: id, range: pickedRange }), { scroll: false });
+  const setRange = (r: MetricRange | "widget") => router.replace(href("/observability/", { dash: dashId, range: r === "widget" ? null : r }), { scroll: false });
 
   const cpu = useMemo(() => perService(metrics.data?.services ?? [], services, (p) => p.cpu_percent), [metrics.data, services]);
   const mem = useMemo(() => perService(metrics.data?.services ?? [], services, (p) => p.memory_bytes), [metrics.data, services]);
@@ -154,15 +159,22 @@ function ObservabilityInner() {
           <span className="text-sm text-gray-500">{t("{env} 환경", { env: ws.env?.name ?? "" })}</span>
           <span className="h-5 w-px bg-gray-200" aria-hidden="true" />
           {ws.pid && <DashboardSelector pid={ws.pid} value={dash?.id ?? null} onChange={setDash} canEdit={caps.canEdit} />}
-          {!dash && (
-            <div className="ml-auto">
+          <div className="ml-auto">
+            {dash ? (
+              <Segmented
+                label={t("기간")}
+                value={pickedRange ?? "widget"}
+                onChange={setRange}
+                options={[{ value: "widget" as const, label: t("위젯별") }, ...METRIC_RANGES.map((r) => ({ value: r, label: RANGE_LABEL[r] }))]}
+              />
+            ) : (
               <Segmented label={t("기간")} value={range} onChange={setRange} options={METRIC_RANGES.map((r) => ({ value: r, label: RANGE_LABEL[r] }))} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {dash && ws.pid && envId ? (
-          <DashboardView dashboard={dash} pid={ws.pid} envs={ws.envs} currentEnv={envId} canEdit={caps.canEdit} ctx={ctxFrom(params)} />
+          <DashboardView dashboard={dash} pid={ws.pid} envs={ws.envs} currentEnv={envId} canEdit={caps.canEdit} ctx={ctxFrom(params)} range={pickedRange} />
         ) : (
         <>
         <div className="mb-4 grid grid-cols-2 divide-gray-200 rounded-lg border border-gray-200 bg-background dark:bg-secondaryBg max-lg:[&>*:nth-child(n+3)]:border-t max-lg:[&>*:nth-child(even)]:border-l lg:grid-cols-4 lg:divide-x">

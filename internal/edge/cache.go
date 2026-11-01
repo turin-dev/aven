@@ -89,6 +89,8 @@ type decision struct {
 	ttl      time.Duration
 	swr, sie time.Duration
 	html     bool
+	// heuristic이면 응답에 명시한 기간 없이 Default TTL로 저장한다.
+	heuristic bool
 }
 
 // 정적 자산과 Force 모드 HTML의 Default TTL. 그 밖의 응답(JSON 등)은 명시한 max-age가 있어야 캐시한다.
@@ -151,7 +153,33 @@ func decide(cdn CDN, status int, h http.Header, override *ActionParams) decision
 		return d // 휴리스틱 기간은 성공 응답에만
 	}
 	if IsStaticType(ct) || (d.html && cdn.HTMLCaching == "force") {
-		d.store, d.ttl = true, time.Duration(cdn.DefaultTTLSeconds)*time.Second
+		d.store, d.ttl, d.heuristic = true, time.Duration(cdn.DefaultTTLSeconds)*time.Second, true
+	}
+	return d
+}
+
+// assetTypes는 쿠키가 있는 요청에서도 휴리스틱으로 캐시하는 정적 자산이다(사용자마다 다르게 만드는 일이 드물다).
+// PDF, ZIP, CSV, XML처럼 로그인한 사용자에게 내려 주는 문서(청구서, 내보내기)는 여기 없다.
+var assetTypes = []string{"image/*", "font/*", "text/css*", "text/javascript*", "application/javascript*", "application/x-javascript*",
+	"application/wasm*", "application/font*", "application/vnd.ms-fontobject*"}
+
+func isAssetType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	for _, p := range assetTypes {
+		if wildcardMatch(p, ct) {
+			return true
+		}
+	}
+	return false
+}
+
+// decideFor는 요청을 고려한 저장 결정이다. 쿠키를 보낸 요청의 응답은 origin이 Cache-Control로 허락했거나
+// (명시 TTL), 정적 자산이거나, HTML Force 모드일 때만 휴리스틱으로 저장한다. 세션 쿠키로 만든 개인 문서를
+// 다른 사람에게 주지 않기 위해서다.
+func decideFor(cdn CDN, status int, h http.Header, override *ActionParams, reqCookie bool) decision {
+	d := decide(cdn, status, h, override)
+	if d.store && d.heuristic && reqCookie && !d.html && !isAssetType(h.Get("Content-Type")) {
+		d.store = false
 	}
 	return d
 }
@@ -190,9 +218,14 @@ func canonicalQuery(raw string) string {
 	return strings.Join(parts, "&")
 }
 
-// primaryKey는 Vary를 반영하기 전의 캐시 키다(인스턴스, 호스트, 경로, 정렬한 쿼리, 인코딩).
-func primaryKey(instanceID, host string, u *url.URL, enc string) string {
-	return instanceID + "\x00" + host + "\x00" + u.EscapedPath() + "?" + canonicalQuery(u.RawQuery) + "\x00" + enc
+// primaryKey는 Vary를 반영하기 전의 캐시 키다(인스턴스, scheme, 호스트, 경로, 정렬한 쿼리, 인코딩).
+// scheme이 키에 없으면 http 요청에 origin이 준 https 리다이렉트가 https 요청에도 나가 리다이렉트 고리가 생긴다.
+func primaryKey(instanceID string, secure bool, host string, u *url.URL, enc string) string {
+	scheme := "http"
+	if secure {
+		scheme = "https"
+	}
+	return instanceID + "\x00" + scheme + "\x00" + host + "\x00" + u.EscapedPath() + "?" + canonicalQuery(u.RawQuery) + "\x00" + enc
 }
 
 // entry는 저장한 응답 하나다.
@@ -306,7 +339,15 @@ func (c *Cache) put(pk string, reqHeader http.Header, e *entry) bool {
 	e.key = varyKey(pk, names, reqHeader)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.vary[pk] = names
+	// Vary 이름은 있는 것만 기억한다. 대부분의 응답은 없으므로, 쿼리를 바꿔 가며 보낸 요청마다 표가 자라지 않는다.
+	if len(names) > 0 {
+		if len(c.vary) >= 4*len(c.items)+1024 {
+			c.vary = map[string][]string{} // 다음 저장 때 다시 배운다(LRU에서 빠진 키의 이름이 쌓이지 않게)
+		}
+		c.vary[pk] = names
+	} else {
+		delete(c.vary, pk)
+	}
 	if old := c.items[e.key]; old != nil {
 		c.removeLocked(old)
 	}

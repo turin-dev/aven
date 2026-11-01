@@ -29,6 +29,7 @@ import { toast } from "@/lib/uiState";
 import { Button, Dialog, ErrorBox, IconButton, Input, Segmented, Select, Spinner, Textarea, Toggle, cx, errorMessage, useConfirm } from "../ui";
 import { FIELD, SettingItem as Item, ToggleCard, WarnBanner } from "./settings/primitives";
 import { t, tr } from "@/lib/i18n";
+import { actionProblem, clauseProblem, invalidIPs, type ActionProblem, type ClauseProblem } from "./networking/validate";
 
 
 export function EdgeSettings({ svc, env }: { svc: CanvasService; env: Environment }) {
@@ -199,6 +200,7 @@ type Duration = "" | "1h" | "3h" | "12h" | "24h";
 
 function UnderAttackSection({ s, busy, start, stop }: { s: EdgeSettingsT; busy: string | null; start: (d: Duration) => Promise<boolean>; stop: () => Promise<boolean> }) {
   const [duration, setDuration] = useState<Duration>("");
+  const { confirm, node } = useConfirm();
   const [, tick] = useState(0);
   useEffect(() => {
     if (!s.under_attack_active) return;
@@ -240,12 +242,26 @@ function UnderAttackSection({ s, busy, start, stop }: { s: EdgeSettingsT; busy: 
             <option value="12h">{t("12시간")}</option>
             <option value="24h">{t("24시간")}</option>
           </Select>
-          <Button variant="danger" disabled={!s.available} loading={busy === "ua"} onClick={() => start(duration)}>
+          <Button
+            variant="danger"
+            disabled={!s.available}
+            loading={busy === "ua"}
+            onClick={() =>
+              confirm({
+                title: t("공격 방어 모드 켜기"),
+                message: t("새 방문자는 모두 브라우저 확인을 거쳐야 하고, 브라우저가 아닌 API 클라이언트와 웹훅은 막힙니다. 이 서비스의 모든 공개 도메인에 적용됩니다."),
+                confirmLabel: t("활성화"),
+                danger: true,
+                run: () => start(duration),
+              })
+            }
+          >
             {busy !== "ua" && <Shield className="text-white" />}
             <span className="inline-block min-w-0">{t("활성화")}</span>
           </Button>
         </div>
       )}
+      {node}
     </Item>
   );
 }
@@ -280,7 +296,11 @@ function WAFSection({ s, busy, patch }: { s: EdgeSettingsT; busy: string | null;
     splitList(deny).join(",") !== w.deny_ips.join(",") ||
     JSON.stringify(rate) !== JSON.stringify(w.rate_limit) ||
     managed !== w.managed_rules;
-  const reqInvalid = rlOn && (!/^\d+$/.test(rlReq) || Number(rlReq) < 1);
+  const reqInvalid = rlOn && (!/^\d+$/.test(rlReq) || Number(rlReq) < 1 || Number(rlReq) > 1_000_000);
+  const badAllow = invalidIPs(splitList(allow));
+  const badDeny = invalidIPs(splitList(deny));
+  const tooMany = splitList(allow).length > 256 || splitList(deny).length > 256;
+  const invalid = reqInvalid || badAllow.length > 0 || badDeny.length > 0 || tooMany;
   const reset = () => {
     setAllow(w.allow_ips.join("\n"));
     setDeny(w.deny_ips.join("\n"));
@@ -295,20 +315,22 @@ function WAFSection({ s, busy, patch }: { s: EdgeSettingsT; busy: string | null;
         className="grid gap-4"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!dirty || reqInvalid) return;
+          if (!dirty || invalid) return;
           void patch("waf", { waf: { allow_ips: splitList(allow), deny_ips: splitList(deny), rate_limit: rate, managed_rules: managed } }, t("방화벽 설정을 저장했습니다"));
         }}
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="grid content-start gap-1.5 text-xs font-semibold text-gray-600">
             {t("허용 IP / CIDR")}
-            <Textarea mono rows={3} value={allow} onChange={(e) => setAllow(e.target.value)} placeholder={"203.0.113.7\n198.51.100.0/24"} />
+            <Textarea mono rows={3} value={allow} onChange={(e) => setAllow(e.target.value)} placeholder={"203.0.113.7\n198.51.100.0/24"} aria-invalid={badAllow.length > 0 || undefined} />
             <span className="font-normal text-gray-500">{t("WAF 검사(차단 목록, 요청 제한, 관리형 규칙, 공격 방어 모드)를 건너뜁니다")}</span>
+            <IPListError bad={badAllow} />
           </label>
           <label className="grid content-start gap-1.5 text-xs font-semibold text-gray-600">
             {t("차단 IP / CIDR")}
-            <Textarea mono rows={3} value={deny} onChange={(e) => setDeny(e.target.value)} placeholder={"192.0.2.0/24\n2001:db8::/32"} />
+            <Textarea mono rows={3} value={deny} onChange={(e) => setDeny(e.target.value)} placeholder={"192.0.2.0/24\n2001:db8::/32"} aria-invalid={badDeny.length > 0 || undefined} />
             <span className="font-normal text-gray-500">{t("403으로 거절합니다. 한 줄에 하나 또는 쉼표로 구분")}</span>
+            <IPListError bad={badDeny} />
           </label>
         </div>
         <div className="grid gap-3">
@@ -325,13 +347,16 @@ function WAFSection({ s, busy, patch }: { s: EdgeSettingsT; busy: string | null;
                 ))}
               </Select>
               <span className="text-xs text-gray-500">{t("클라이언트 IP(IPv6는 /64)마다, 넘으면 429")}</span>
+              {reqInvalid && <span className="basis-full text-xs text-red-600">{t("요청 수는 1부터 1,000,000 사이의 정수입니다")}</span>}
             </div>
           )}
+          {rlOn && !reqInvalid && <p className="text-xs text-gray-500">{t("클라이언트 IP 하나가 {window} 동안 {count}회를 넘게 요청하면 429로 거절합니다.", { count: Number(rlReq).toLocaleString(), window: (WINDOWS.find((o) => o.value === rlWin)?.label ?? t("{seconds}초", { seconds: rlWin })) })}</p>}
           <ToggleCard checked={managed} onChange={setManaged} label={t("관리형 규칙으로 흔한 공격 요청 차단")} />
         </div>
         {dirty && (
-          <div className="flex gap-2">
-            <Button type="submit" variant="primary" loading={busy === "waf"} disabled={reqInvalid}>
+          <div className="flex flex-wrap gap-2">
+            {tooMany && <p className="basis-full text-xs text-red-600">{t("허용·차단 목록은 각각 256개까지입니다")}</p>}
+            <Button type="submit" variant="primary" loading={busy === "waf"} disabled={invalid}>
               {t("저장")}
             </Button>
             <Button variant="outline" onClick={reset}>
@@ -341,6 +366,15 @@ function WAFSection({ s, busy, patch }: { s: EdgeSettingsT; busy: string | null;
         )}
       </form>
     </Item>
+  );
+}
+
+function IPListError({ bad }: { bad: string[] }) {
+  if (!bad.length) return null;
+  return (
+    <span className="font-normal text-red-600" role="alert">
+      {t("IP 주소나 CIDR이 아닙니다: {entries}", { entries: bad.slice(0, 5).join(", ") + (bad.length > 5 ? " …" : "") })}
+    </span>
   );
 }
 
@@ -373,8 +407,13 @@ function clauseText(c: EdgeClause) {
 function exprText(e: EdgeExpr): string {
   const flat = flatConditions(e);
   if (flat) return flat.clauses.map(clauseText).join(flat.join === "and" ? t(" 그리고 ") : t(" 또는 "));
-  return t("중첩 조건(JSON)");
+  if ("not" in e) return t("다음이 아닐 때: {cond}", { cond: exprText(e.not) });
+  const list = "and" in e ? e.and : "or" in e ? e.or : [];
+  const parts = list.map((x) => (isClauseExpr(x) ? exprText(x) : `(${exprText(x)})`));
+  return parts.join("and" in e ? t(" 그리고 ") : t(" 또는 "));
 }
+
+const isClauseExpr = (e: EdgeExpr) => "attr" in e;
 
 function actionText(r: EdgeRule) {
   const p = r.then.params ?? {};
@@ -382,11 +421,11 @@ function actionText(r: EdgeRule) {
     case "block":
       return t("차단 {status}", { status: p.status ?? 403 });
     case "redirect":
-      return `${p.status ?? 302} → ${p.location ?? p.host}`;
+      return t("{status} 리다이렉트 → {to}", { status: p.status ?? 302, to: p.location ?? p.host ?? "" });
     case "cache_override":
       return p.bypass ? t("캐시 우회") : t("{seconds}초 캐시", { seconds: p.ttl_seconds ?? "" });
     case "rewrite":
-      return `→ ${p.path}`;
+      return t("경로를 {path}로 다시 씀", { path: p.path ?? "" });
     case "set_header":
       return `${p.target === "request" ? t("요청") : t("응답")} ${p.name}: ${p.value || t("(삭제)")}`;
     default:
@@ -401,6 +440,7 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
   const [editing, setEditing] = useState<{ index: number; rule: EdgeRule } | null>(null);
   const [json, setJson] = useState<string | null>(null);
   const [jsonErr, setJsonErr] = useState<unknown>(null);
+  const { confirm, node: confirmNode } = useConfirm();
   const dirty = JSON.stringify(rules) !== JSON.stringify(s.rules.rules);
   const ordered = (list: EdgeRule[]): EdgeRuleset => ({ version: 1, rules: list.map((r, i) => ({ ...r, priority: (i + 1) * 10 })) });
   const move = (i: number, d: number) => {
@@ -422,8 +462,11 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
               <Toggle checked={r.enabled !== false} onChange={(v) => setRules(rules.map((x, j) => (j === i ? { ...x, enabled: v } : x)))} label={t("규칙 켜기")} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{r.description || t("규칙 {n}", { n: i + 1 })}</div>
-                <div className="truncate font-mono text-xs text-gray-500" title={exprText(r.if)}>
-                  {exprText(r.if)} → {actionText(r)}
+                <div className="truncate text-xs text-gray-500" title={`${exprText(r.if)} → ${actionText(r)}`}>
+                  <span className="text-gray-400">{t("만약")} </span>
+                  <span className="font-mono">{exprText(r.if)}</span>
+                  <span className="text-gray-400"> → </span>
+                  <span className="font-medium text-gray-600">{actionText(r)}</span>
                 </div>
               </div>
               <IconButton size="sm" label={t("위로")} disabled={i === 0} onClick={() => move(i, -1)}>
@@ -435,7 +478,19 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
               <IconButton size="sm" label={t("편집")} onClick={() => setEditing({ index: i, rule: r })}>
                 <Pencil />
               </IconButton>
-              <IconButton size="sm" label={t("삭제")} onClick={() => setRules(rules.filter((_, j) => j !== i))}>
+              <IconButton
+                size="sm"
+                label={t("규칙 삭제")}
+                onClick={() =>
+                  confirm({
+                    title: t("규칙 삭제"),
+                    message: t("“{name}” 규칙을 목록에서 뺍니다. 저장을 눌러야 실제로 적용됩니다.", { name: r.description || t("규칙 {n}", { n: i + 1 }) }),
+                    confirmLabel: t("삭제"),
+                    danger: true,
+                    run: () => setRules((cur) => cur.filter((_, j) => j !== i)),
+                  })
+                }
+              >
                 <Trash2 />
               </IconButton>
             </li>
@@ -475,6 +530,7 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
         </Button>
         {dirty && (
           <>
+            <span className="basis-full text-xs text-yellow-600">{t("저장하지 않은 규칙 변경이 있습니다")}</span>
             <Button variant="primary" loading={busy === "rules"} onClick={() => save(ordered(rules))}>
               {t("저장")}
             </Button>
@@ -487,6 +543,7 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
       {editing && (
         <RuleDialog
           rule={editing.rule}
+          isNew={editing.index < 0}
           cdn={s.cdn.enabled}
           onClose={() => setEditing(null)}
           onDone={(r) => {
@@ -516,6 +573,10 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
                   setJsonErr(t("JSON 형식 오류: {error}", { error: errorMessage(e) }));
                   return;
                 }
+                if (!parsed || typeof parsed !== "object" || parsed.version !== 1 || !Array.isArray(parsed.rules)) {
+                  setJsonErr(t("JSON은 version 1과 rules 배열이 있는 객체여야 합니다"));
+                  return;
+                }
                 setJsonErr(null);
                 if (await save(parsed)) setJson(null);
                 // The save error is rendered behind the dialog, so show it here (saved rules are unchanged).
@@ -536,13 +597,62 @@ function RulesSection({ s, busy, save, lastError }: { s: EdgeSettingsT; busy: st
         <ErrorBox error={jsonErr} className="mb-3" />
         <Textarea mono rows={20} className="w-full" value={json ?? ""} onChange={(e) => setJson(e.target.value)} aria-label={t("엣지 규칙 JSON")} />
       </Dialog>
+      {confirmNode}
     </Item>
   );
 }
 
 const ACTIONS: EdgeActionName[] = ["block", "allow", "challenge", "redirect", "cache_override", "rewrite", "set_header"];
 
-function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boolean; onClose: () => void; onDone: (r: EdgeRule) => void }) {
+function clauseProblemText(p: ClauseProblem) {
+  switch (p) {
+    case "empty":
+      return t("값을 입력하세요");
+    case "too_many":
+      return t("목록은 64개까지입니다");
+    case "too_long":
+      return t("값은 256자까지입니다");
+    case "wildcards":
+      return t("패턴에는 *를 8개까지 쓸 수 있습니다");
+    case "key":
+      return t("헤더 이름을 입력하세요(영문, 숫자, - 등 공백 없이)");
+    case "ip":
+      return t("IP 주소나 CIDR을 입력하세요");
+    case "ipv4":
+      return t("IPv4 주소나 CIDR을 입력하세요");
+    case "method":
+      return t("GET, POST 같은 HTTP 메서드를 입력하세요");
+  }
+}
+
+function actionProblemText(p: ActionProblem) {
+  switch (p) {
+    case "block_status":
+      return t("차단 상태 코드는 400부터 499 사이입니다");
+    case "body_long":
+      return t("응답 본문은 4096바이트까지입니다");
+    case "redirect_target":
+      return t("리다이렉트할 호스트나 URL을 입력하세요");
+    case "redirect_location":
+      return t("https://로 시작하는 전체 URL을 입력하세요");
+    case "redirect_host":
+      return t("올바른 호스트 이름을 입력하세요");
+    case "redirect_status":
+      return t("리다이렉트 상태 코드는 301, 302, 307, 308 중 하나입니다");
+    case "ttl":
+      return t("캐시 기간은 1초부터 30일(2592000초)까지입니다");
+    case "rewrite_path":
+      return t("새 경로는 /로 시작하고 공백이나 #이 없어야 합니다");
+    case "header_name":
+      return t("헤더 이름을 입력하세요(영문, 숫자, - 등 공백 없이)");
+    case "header_reserved":
+      return t("이 헤더는 규칙으로 바꿀 수 없습니다");
+    case "header_value":
+      return t("헤더 값에는 줄바꿈을 쓸 수 없고 2048자까지입니다");
+  }
+}
+
+function RuleDialog({ rule, isNew, cdn, onClose, onDone }: { rule: EdgeRule; isNew: boolean; cdn: boolean; onClose: () => void; onDone: (r: EdgeRule) => void }) {
   const flat = flatConditions(rule.if);
   const [desc, setDesc] = useState(rule.description ?? "");
   const [join, setJoin] = useState<"and" | "or">(flat?.join ?? "and");
@@ -554,10 +664,15 @@ function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boole
   const setClause = (i: number, c: Partial<EdgeClause>) => setClauses(clauses.map((x, j) => (j === i ? { ...x, ...c } : x)));
   const setParam = (k: keyof EdgeActionParams, v: unknown) => setP((cur) => ({ ...cur, [k]: v === "" || v === undefined ? undefined : v }));
 
+  const clauseProblems = clauses.map(clauseProblem);
+  const [tried, setTried] = useState(false);
   const submit = () => {
+    setTried(true);
     let cond: EdgeExpr;
     if (flat) {
       if (clauses.length === 0) return setErr(t("조건을 하나 이상 추가하세요"));
+      const bad = clauseProblems.findIndex(Boolean);
+      if (bad >= 0) return setErr(t("조건 {n}: {problem}", { n: bad + 1, problem: clauseProblemText(clauseProblems[bad]!) }));
       cond = joinConditions(join, clauses);
     } else {
       try {
@@ -579,6 +694,9 @@ function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boole
     const params: EdgeActionParams = {};
     for (const k of keep[action]) if (p[k] !== undefined) (params as Record<string, unknown>)[k] = p[k];
     if (action === "cache_override" && !cdn) return setErr(t("캐시 재정의는 CDN 캐싱을 켠 뒤에 쓸 수 있습니다"));
+    const ap = actionProblem({ action, params });
+    if (ap) return setErr(actionProblemText(ap));
+    setErr(null);
     onDone({
       ...rule,
       description: desc.trim() || undefined,
@@ -592,7 +710,7 @@ function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boole
       open
       wide
       onClose={onClose}
-      title={rule.id ? t("규칙 편집") : t("규칙 추가")}
+      title={isNew ? t("규칙 추가") : t("규칙 편집")}
       footer={
         <>
           <Button variant="outline" onClick={onClose}>
@@ -628,6 +746,7 @@ function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boole
             <>
               {clauses.map((c, i) => {
                 const list = c.op === "in" || c.op === "not_in";
+                const problem = tried ? clauseProblems[i] : null;
                 return (
                   <div key={i} className="flex flex-wrap items-center gap-2">
                     <Select
@@ -671,13 +790,15 @@ function RuleDialog({ rule, cdn, onClose, onDone }: { rule: EdgeRule; cdn: boole
                       mono
                       className={cx(FIELD, "min-w-40 flex-1")}
                       aria-label={t("값")}
-                      placeholder={list ? t("쉼표로 구분") : c.attr === "http.path" ? "/admin*" : ""}
+                      invalid={!!problem}
+                      placeholder={list ? t("쉼표로 구분") : c.attr === "http.path" ? "/admin*" : c.attr === "ip.src" || c.attr === "ipv4.src" ? "203.0.113.0/24" : c.attr === "http.method" ? "POST" : ""}
                       value={Array.isArray(c.value) ? c.value.join(", ") : c.value}
                       onChange={(e) => setClause(i, { value: list ? splitList(e.target.value) : e.target.value })}
                     />
                     <IconButton size="sm" label={t("조건 삭제")} onClick={() => setClauses(clauses.filter((_, j) => j !== i))}>
                       <X />
                     </IconButton>
+                    {problem && <span className="basis-full text-xs text-red-600">{clauseProblemText(problem)}</span>}
                   </div>
                 );
               })}

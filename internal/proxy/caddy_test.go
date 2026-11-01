@@ -283,7 +283,7 @@ func TestRedirectAndAuthAndTrust(t *testing.T) {
 	_, s := buildCfg(t, c, []Route{
 		{Hosts: []string{"www.example.com"}, Redirect: &Redirect{To: "example.com", Permanent: true}},
 		{Hosts: []string{"tmp.example.com"}, Redirect: &Redirect{To: "https://example.com/x/", Permanent: false}},
-		{Hosts: []string{"p.example.com"}, Upstreams: []string{"keel-a-1:1"}, Auth: &BasicAuth{User: "bob", Hash: "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ0123"}},
+		{Hosts: []string{"p.example.com"}, Upstreams: []string{"keel-a-1:1"}, Auth: &BasicAuth{User: "bob", Hash: "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234"}},
 		{Hosts: []string{"t.example.com"}, Upstreams: []string{"keel-a-1:1"}, TLS: TLSOff, TrustProto: true},
 	})
 	for _, want := range []string{`"status_code":308`, `"status_code":307`, `https://example.com{http.request.uri}`, `https://example.com/x{http.request.uri}`,
@@ -463,13 +463,19 @@ func TestHandleTLSAsk(t *testing.T) {
 		t.Error("normal host must not be handled")
 	}
 	for target, want := range map[string]int{
-		TLSAskPath + "?domain=a.example.com":  200,
-		TLSAskPath + "?domain=A.Example.com.": 200,
-		TLSAskPath + "?domain=b.example.com":  404,
-		TLSAskPath + "?domain=*.example.com":  400,
-		TLSAskPath + "?domain=a%20b":          400,
-		TLSAskPath:                            400,
-		"/other?domain=a.example.com":         404,
+		TLSAskPath + "?domain=a.example.com":   200,
+		TLSAskPath + "?domain=A.Example.com.":  200,
+		TLSAskPath + "?domain=b.example.com":   404,
+		TLSAskPath + "?domain=*.example.com":   400,
+		TLSAskPath + "?domain=a%20b":           400,
+		TLSAskPath + "?domain=a..example.com":  400,
+		TLSAskPath + "?domain=-a.example.com":  400,
+		TLSAskPath + "?domain=a_b.example.com": 400,
+		TLSAskPath + "?domain=192.168.0.1":     400,
+		TLSAskPath + "?domain=localhost":       400,
+		TLSAskPath + "?domain=.example.com":    400,
+		TLSAskPath:                             400,
+		"/other?domain=a.example.com":          404,
 	} {
 		if h, code := do(TLSAskHost, target); !h || code != want {
 			t.Errorf("%s: handled=%v code=%d want %d", target, h, code, want)

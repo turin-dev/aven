@@ -4,10 +4,11 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Copy, X } from "lucide-react";
 import { SEALED_VALUE } from "@/lib/api";
-import { DotenvError, parseRaw, renderRaw } from "@/lib/dotenv";
+import { DotenvError, diffVars, parseRaw, renderRaw } from "@/lib/dotenv";
 import { toast } from "@/lib/uiState";
 import { t } from "@/lib/i18n";
 import { Button, cx, useEscape } from "../../ui";
+import { highlightEnv, highlightJson, type Tok } from "./highlight";
 
 /** Server/parser messages (English) → Korean UI copy. Unknown messages pass through. */
 export function koParseError(msg: string): string {
@@ -31,6 +32,7 @@ export function CodeEditor({
   describedBy,
   errorLine,
   onSubmit,
+  highlight,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -42,9 +44,13 @@ export function CodeEditor({
   errorLine?: number;
   /** ⌘/Ctrl+Enter. */
   onSubmit?: () => void;
+  /** Colours the text (drawn under a transparent textarea, so editing stays native). */
+  highlight?: (text: string) => Tok[][];
 }) {
   const gutter = useRef<HTMLDivElement>(null);
+  const layer = useRef<HTMLPreElement>(null);
   const lines = Math.max(1, value.split("\n").length);
+  const colored = useMemo(() => (highlight && value ? highlight(value) : null), [highlight, value]);
   return (
     <div className="flex h-full min-h-0 w-full overflow-hidden text-base sm:text-[13px]">
       <div
@@ -59,44 +65,55 @@ export function CodeEditor({
         ))}
         <div className="h-4" />
       </div>
-      <textarea
-        autoFocus
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        wrap="off"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
-            e.preventDefault();
-            onSubmit();
-          }
-        }}
-        onScroll={(e) => {
-          if (gutter.current) gutter.current.scrollTop = e.currentTarget.scrollTop;
-        }}
-        placeholder={placeholder}
-        aria-label={ariaLabel}
-        aria-invalid={invalid}
-        aria-describedby={describedBy}
-        className="h-full w-full min-w-0 flex-1 resize-none overflow-auto bg-transparent px-3 py-2 font-mono leading-[1.5] text-foreground placeholder-gray-500 focus:outline-none"
-      />
+      <div className="relative min-w-0 flex-1 overflow-hidden">
+        {colored && (
+          <pre ref={layer} aria-hidden="true" className="pointer-events-none absolute left-0 top-0 m-0 whitespace-pre px-3 py-2 font-mono leading-[1.5]">
+            {colored.map((toks, i) => (
+              <div key={i} className={cx("min-h-[1.5em]", errorLine === i + 1 && "bg-red-500/10")}>
+                {toks.map((tk, j) => (
+                  <span key={j} className={tk.cls}>
+                    {tk.text}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </pre>
+        )}
+        <textarea
+          autoFocus
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          wrap="off"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && onSubmit) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+          onScroll={(e) => {
+            const { scrollTop, scrollLeft } = e.currentTarget;
+            if (gutter.current) gutter.current.scrollTop = scrollTop;
+            if (layer.current) layer.current.style.transform = `translate(${-scrollLeft}px, ${-scrollTop}px)`;
+          }}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          aria-invalid={invalid}
+          aria-describedby={describedBy}
+          className={cx(
+            "relative h-full w-full resize-none overflow-auto bg-transparent px-3 py-2 font-mono leading-[1.5] placeholder-gray-500 focus:outline-none",
+            colored ? "text-transparent caret-foreground selection:bg-pink-500/25" : "text-foreground",
+          )}
+        />
+      </div>
     </div>
   );
 }
-type Diff = { added: number; changed: number; removed: number };
-function diffOf(prev: Record<string, string>, next: Record<string, string>, keep: Set<string>): Diff {
-  let added = 0;
-  let changed = 0;
-  let removed = 0;
-  for (const [k, v] of Object.entries(next)) {
-    if (!(k in prev)) added++;
-    else if (prev[k] !== v && !(keep.has(k) && v === SEALED_VALUE)) changed++;
-  }
-  for (const k of Object.keys(prev)) if (!(k in next) && !keep.has(k)) removed++;
-  return { added, changed, removed };
-}
+
+/** Comment above the sealed variables in the .env view. */
+const sealedNote = () => t("봉인된 변수는 값을 볼 수 없고 이 편집기로 바뀌지 않습니다(지우려면 변수 목록에서 삭제하세요).");
 
 /**
  * RAW editor, modeled on Railway's dashboard. Two modes:
@@ -126,14 +143,27 @@ export function RawEditor({
 }) {
   const structured = !!vars && !!onApplyVars;
   const [format, setFormat] = useState<"env" | "json">("env");
-  const [text, setText] = useState(() => (structured ? renderRaw("env", vars!, sealed) : initial));
+  const [text, setText] = useState(() => (structured ? renderRaw("env", vars!, sealed, sealedNote()) : initial));
+  // What the editor opened with (per format): closing with other text asks first.
+  const [pristine, setPristine] = useState(text);
+  const dirty = text !== pristine;
+  const [askClose, setAskClose] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const [applyErr, setApplyErr] = useState<string | null>(null);
   const uid = useId();
   const titleId = `${uid}-title`;
   const errId = `${uid}-err`;
   const sumId = `${uid}-sum`;
   const keep = useMemo(() => new Set(sealed), [sealed]);
-  useEscape(onClose);
+  const requestClose = () => (dirty ? setAskClose(true) : onClose());
+  useEscape(() => (askClose ? setAskClose(false) : requestClose()));
+  // Reloading or leaving the page would lose the edit too.
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
 
   // Parse while typing (structured mode only; text mode is parsed by the caller).
   const parsed = useMemo((): { ok: true; next: Record<string, string> } | { ok: false; msg: string; line?: number } | null => {
@@ -147,8 +177,8 @@ export function RawEditor({
       return { ok: false, msg: koParseError((e as Error).message), line: e instanceof DotenvError ? e.line : undefined };
     }
   }, [structured, format, text, validate]);
-  const diff = parsed?.ok && vars ? diffOf(vars, parsed.next, keep) : null;
-  const nChanges = diff ? diff.added + diff.changed + diff.removed : 0;
+  const diff = parsed?.ok && vars ? diffVars(vars, parsed.next, keep) : null;
+  const nChanges = diff ? diff.added.length + diff.changed.length + diff.removed.length : 0;
 
   // Show parse errors only after the user pauses typing, so half-typed lines don't flash red.
   const [settled, setSettled] = useState(true);
@@ -166,7 +196,10 @@ export function RawEditor({
       const cur = parseRaw(format, text);
       // 편집기에 없는 봉인 변수는 형식을 바꿔도 주석으로만 다시 보여 준다.
       const hidden = sealed.filter((k) => !(k in cur));
-      setText(renderRaw(f, { ...Object.fromEntries(hidden.map((k) => [k, SEALED_VALUE])), ...cur }, hidden));
+      const next = renderRaw(f, { ...Object.fromEntries(hidden.map((k) => [k, SEALED_VALUE])), ...cur }, hidden, sealedNote());
+      setText(next);
+      // Only a format switch: still clean if nothing was edited.
+      if (!dirty) setPristine(next);
       setFormat(f);
       setApplyErr(null);
     } catch (e) {
@@ -174,7 +207,16 @@ export function RawEditor({
     }
   };
   const apply = () => {
-    if (!structured) return onApply?.(text);
+    if (!structured) {
+      // Text mode: the caller parses. Show its parse error here instead of losing the edit.
+      try {
+        onApply?.(text);
+      } catch (e) {
+        setSettled(true);
+        setApplyErr(koParseError((e as Error).message));
+      }
+      return;
+    }
     if (!parsed) return;
     if (!parsed.ok) {
       setSettled(true);
@@ -199,7 +241,7 @@ export function RawEditor({
   return createPortal(
     <div
       className="pointer-events-auto fixed inset-0 z-[10000] flex animate-fade-in items-end justify-stretch bg-black/[.45] dark:bg-black/80 sm:items-center sm:justify-center sm:px-5"
-      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+      onMouseDown={(e) => e.target === e.currentTarget && requestClose()}
     >
       <div
         role="dialog"
@@ -209,7 +251,7 @@ export function RawEditor({
       >
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           aria-label={t("닫기")}
           title={t("닫기 (Esc)")}
           className="absolute right-6 top-6 z-10 flex size-[26px] cursor-pointer items-center justify-center rounded-md text-foreground hover:bg-gray-100"
@@ -267,6 +309,7 @@ export function RawEditor({
                 setApplyErr(null);
               }}
               onSubmit={apply}
+              highlight={format === "json" ? highlightJson : highlightEnv}
               placeholder={format === "json" ? '{\n  "PORT": "3000"\n}' : "DATABASE_URL=${{postgres.DATABASE_URL}}\nPORT=3000\n# " + t("주석 줄은 무시됩니다")}
               ariaLabel={format === "json" ? t("JSON 형식으로 변수 편집") : t(".env 형식으로 변수 편집")}
               invalid={!!err}
@@ -286,23 +329,57 @@ export function RawEditor({
                 ) : (
                   <>
                     {[
-                      diff.added && <span key="a" className="text-success">{t("추가 {n}", { n: diff.added })}</span>,
-                      diff.changed && <span key="c" className="text-pink-600">{t("변경 {n}", { n: diff.changed })}</span>,
-                      diff.removed && <span key="r" className="text-danger">{t("삭제 {n}", { n: diff.removed })}</span>,
+                      diff.added.length > 0 && <span key="a" className="text-success">{t("추가 {n}", { n: diff.added.length })}</span>,
+                      diff.changed.length > 0 && <span key="c" className="text-pink-600">{t("변경 {n}", { n: diff.changed.length })}</span>,
+                      diff.removed.length > 0 && <span key="r" className="text-danger">{t("삭제 {n}", { n: diff.removed.length })}</span>,
                     ]
                       .filter(Boolean)
                       .flatMap((n, i) => (i ? [<span key={`s${i}`}> · </span>, n] : [n]))}
                     <span> · {t("적용하면 배포 대기 변경으로 들어갑니다")}</span>
+                    <span> · </span>
+                    <button type="button" onClick={() => setShowDiff((v) => !v)} aria-expanded={showDiff} className="cursor-pointer underline hover:text-foreground">
+                      {showDiff ? t("변경 내용 숨기기") : t("변경 내용 보기")}
+                    </button>
                   </>
                 )}
               </p>
             ) : null}
+            {!err && diff && showDiff && nChanges > 0 && (
+              <ul aria-label={t("변경 내용")} className="mt-2 max-h-28 overflow-y-auto rounded-md border border-gray-200 px-3 py-2 font-mono">
+                {(
+                  [
+                    ["+", diff.added, "text-success", t("추가")],
+                    ["~", diff.changed, "text-pink-600", t("변경")],
+                    ["−", diff.removed, "text-danger", t("삭제")],
+                  ] as const
+                ).flatMap(([sign, keys, cls, label]) =>
+                  keys.map((k) => (
+                    <li key={sign + k} className={cls}>
+                      <span aria-hidden>{sign} </span>
+                      <span className="sr-only">{label} </span>
+                      {k}
+                    </li>
+                  )),
+                )}
+              </ul>
+            )}
           </div>
+          {askClose && (
+            <div role="alertdialog" aria-label={t("저장하지 않은 변경")} className="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-warn-surface p-3 text-sm text-warn">
+              <span className="mr-auto">{t("적용하지 않은 편집이 있습니다. 닫으면 사라집니다.")}</span>
+              <Button type="button" size="sm" variant="outline" autoFocus onClick={() => setAskClose(false)}>
+                {t("계속 편집")}
+              </Button>
+              <Button type="button" size="sm" variant="danger" onClick={onClose}>
+                {t("버리고 닫기")}
+              </Button>
+            </div>
+          )}
           <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
             <Button type="button" variant="ghost" className="mr-auto -ml-3 text-gray-600" onClick={copy}>
               <Copy className="text-gray-500" /> {format === "json" ? t("JSON 복사") : t("ENV 복사")}
             </Button>
-            <Button type="button" variant="outline" onClick={onClose}>
+            <Button type="button" variant="outline" onClick={requestClose}>
               {t("취소")}
             </Button>
             <Button

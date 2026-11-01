@@ -11,10 +11,30 @@ import { fmtTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { qk } from "@/lib/queries";
 import { toast } from "@/lib/uiState";
+import { useUnsavedGuard } from "./SettingsGuard";
 import { Button, Card, ErrorBox, Field, Input, cx, useConfirm } from "./ui";
 
 const LABEL: Record<UsageLimitStatus["exceeded"][number], string> = { cpu_core_hours: "CPU", memory_gb_hours: t("메모리"), egress_gb: t("송신 트래픽") };
 const num = (v: number) => (v < 10 ? v.toFixed(2) : v < 1000 ? v.toFixed(1) : Math.round(v).toLocaleString());
+
+/** Thin usage bar: pink below 80%, amber from 80%, red at or above 100%. */
+export function UsageMeter({ used, limit, label }: { used: number; limit: number; label: string }) {
+  const ratio = limit > 0 ? used / limit : 1;
+  const pct = Math.min(100, Math.max(0, ratio * 100));
+  return (
+    <div
+      className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(pct)}
+      aria-valuetext={`${Math.round(ratio * 100)}%`}
+    >
+      <div className={cx("h-full rounded-full transition-[width] motion-reduce:transition-none", ratio >= 1 ? "bg-red-600" : ratio >= 0.8 ? "bg-yellow-600" : "bg-pink-500")} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
 
 /** Polled every minute: the server re-checks limits every 5 minutes. */
 export function useUsageLimit(pid: string | null | undefined) {
@@ -44,11 +64,40 @@ export function UsageLimitSettings({ project, canEdit }: { project: Project; can
   const vals = [parse(cpu), parse(mem), parse(egress)];
   const valid = vals.every((v) => v === undefined || (Number.isFinite(v) && v > 0 && v <= 1e9));
   const mtd = status.data?.month_to_date;
-  const field = (label: string, unit: string, v: string, set: (s: string) => void, used?: number) => (
-    <Field label={label} hint={used !== undefined ? `${unit} · ${t("이번 달 {used}", { used: num(used) })}` : unit}>
-      <Input type="number" min={0} step="any" value={v} disabled={!canEdit} onChange={(e) => (set(e.target.value), setSaved(false))} placeholder={t("없음")} />
-    </Field>
-  );
+  const dirty =
+    vals[0] !== (cur?.cpu_core_hours ?? undefined) ||
+    vals[1] !== (cur?.memory_gb_hours ?? undefined) ||
+    vals[2] !== (cur?.egress_gb ?? undefined) ||
+    (!!cur && action !== cur.action) ||
+    (!cur && vals.some((v) => v !== undefined));
+  useUnsavedGuard(dirty && canEdit);
+  const field = (label: string, unit: string, v: string, set: (s: string) => void, used?: number) => {
+    const lim = parse(v);
+    const bad = lim !== undefined && !(Number.isFinite(lim) && lim > 0 && lim <= 1e9);
+    const pct = used !== undefined && lim !== undefined && !bad ? Math.round((used / lim) * 100) : null;
+    return (
+      <div>
+        <Field
+          label={label}
+          hint={
+            bad ? (
+              <span className="text-danger">{t("0보다 큰 값을 입력하거나 비워 두세요.")}</span>
+            ) : used !== undefined ? (
+              <span className="tabular-nums">
+                {unit} · {t("이번 달 {used}", { used: num(used) })}
+                {pct !== null && <span className={cx(pct >= 100 ? "text-danger" : pct >= 80 && "text-warn")}> · {pct}%</span>}
+              </span>
+            ) : (
+              unit
+            )
+          }
+        >
+          <Input type="number" min={0} step="any" value={v} invalid={bad} disabled={!canEdit} onChange={(e) => (set(e.target.value), setSaved(false))} placeholder={t("없음")} />
+        </Field>
+        {pct !== null && <UsageMeter used={used!} limit={lim!} label={t("{label} 한도 사용률", { label })} />}
+      </div>
+    );
+  };
   return (
     <form
       onSubmit={async (e) => {
@@ -77,13 +126,14 @@ export function UsageLimitSettings({ project, canEdit }: { project: Project; can
         description={t("한도에 닿으면 서비스를 멈추거나 알림만 보낼 수 있습니다.")}
         footer={
           canEdit ? (
-            <Button type="submit" variant="primary" loading={busy} disabled={!valid}>
+            <Button type="submit" variant="primary" loading={busy} disabled={!valid || !dirty}>
               {t("저장")}
             </Button>
           ) : undefined
         }
       >
         <div className="space-y-5">
+          <ErrorBox error={status.error} />
           <div className="grid gap-4 sm:grid-cols-3">
             {field("CPU", t("코어·시간 / 월"), cpu, setCpu, mtd?.cpu_core_hours)}
             {field(t("메모리"), t("GB·시간 / 월"), mem, setMem, mtd?.memory_gb_hours)}
@@ -197,7 +247,6 @@ export function UsageLimitBanner({ pid, canAdmin }: { pid: string; canAdmin: boo
           </div>
           <div className="grid gap-3 sm:grid-cols-3">
             {bars.map(([k, lim, used, unit]) => {
-              const pct = Math.min(100, (used / lim!) * 100);
               const over = s.exceeded.includes(k);
               return (
                 <div key={k}>
@@ -207,16 +256,7 @@ export function UsageLimitBanner({ pid, canAdmin }: { pid: string; canAdmin: boo
                       {num(used)} / {num(lim!)} {unit}
                     </span>
                   </div>
-                  <div
-                    className="mt-1 h-1.5 rounded-full bg-gray-100"
-                    role="progressbar"
-                    aria-label={t("{label} 한도 사용률", { label: LABEL[k] })}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(pct)}
-                  >
-                    <div className={cx("h-full rounded-full", over ? "bg-red-600" : pct >= 80 ? "bg-yellow-600" : "bg-pink-500")} style={{ width: `${pct}%` }} />
-                  </div>
+                  <UsageMeter used={over ? Math.max(used, lim!) : used} limit={lim!} label={t("{label} 한도 사용률", { label: LABEL[k] })} />
                 </div>
               );
             })}

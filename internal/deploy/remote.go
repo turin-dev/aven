@@ -366,10 +366,12 @@ func (m *Manager) remoteBuildImage(ctx context.Context, t *Target, d *store.Depl
 	buildVars := withBuildCommand(&d.Spec, vars.Vars, b)
 	labels := map[string]string{node.LabelManaged: "true", node.LabelService: t.Service.ID, node.LabelDeploy: d.ID}
 	var used string
+	line, flush := limitedLog(b.Line)
 	err = stage(ctx, m.Timeouts.Build, "build", func(ctx context.Context) (err error) {
 		used, err = rd.buildImage(ctx, agentprotocol.BuildRequest{Workspace: workspace, RootDir: d.Spec.RootDir, Builder: builder,
-			DockerfilePath: d.Spec.DockerfilePath, Image: image, Labels: labels, Vars: buildVars, Secrets: d.Spec.BuildSecrets}, b.Line)
+			DockerfilePath: d.Spec.DockerfilePath, Image: image, Labels: labels, Vars: buildVars, Secrets: d.Spec.BuildSecrets}, line)
 		return err
 	})
+	flush()
 	return used, err
 }

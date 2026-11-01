@@ -7,6 +7,7 @@ import (
 	"github.com/turin-dev/aven/internal/compat"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
 	"github.com/turin-dev/aven/internal/node"
@@ -123,6 +124,9 @@ func (m *Manager) AllocateTCPPort(ctx context.Context) (int, error) {
 // 실제로 bind가 되는지도 확인한다: 로컬 노드는 직접, 원격 노드는 agent의 port.free로(모르는 옛 agent면 확인 없이 배정하고,
 // 충돌은 agent가 publish할 때 드러난다).
 func (m *Manager) AllocateTCPPortFor(ctx context.Context, nodeID string) (int, error) {
+	// 호출자는 고른 포트를 나중에 인스턴스에 저장한다. 그 사이 다른 요청이 같은 포트를 고르지 않게 잠깐 예약한다.
+	m.tcpAllocMu.Lock()
+	defer m.tcpAllocMu.Unlock()
 	insts, err := m.Store.ListInstances(ctx)
 	if err != nil {
 		return 0, err
@@ -133,6 +137,28 @@ func (m *Manager) AllocateTCPPortFor(ctx context.Context, nodeID string) (int, e
 			used[in.TCPProxy.PublicPort] = true
 		}
 	}
+	now := time.Now()
+	for p, at := range m.tcpReserved {
+		if now.Sub(at) > tcpReserveFor {
+			delete(m.tcpReserved, p)
+		} else {
+			used[p] = true
+		}
+	}
+	p, err := m.pickTCPPort(ctx, nodeID, used)
+	if err == nil {
+		if m.tcpReserved == nil {
+			m.tcpReserved = map[int]time.Time{}
+		}
+		m.tcpReserved[p] = now
+	}
+	return p, err
+}
+
+// tcpReserveFor는 AllocateTCPPortFor가 고른 포트를 다른 요청에 주지 않는 시간이다(그 안에 인스턴스에 저장된다).
+const tcpReserveFor = 2 * time.Minute
+
+func (m *Manager) pickTCPPort(ctx context.Context, nodeID string, used map[int]bool) (int, error) {
 	bind := m.Cfg.ProxyBind
 	probes := 0
 	for p := m.Cfg.TCPPortMin; p <= m.Cfg.TCPPortMax; p++ {

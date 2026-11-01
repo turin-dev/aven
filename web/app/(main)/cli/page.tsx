@@ -1,46 +1,118 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download, SquareTerminal } from "lucide-react";
 import { api, type CliDownload } from "@/lib/api";
+import { fmtBytes } from "@/lib/format";
 import { t, tr } from "@/lib/i18n";
 import { useCtxHref } from "@/lib/nav";
-import { Card, CopyButton, CopyField, EmptyState, ErrorBox, LABEL_CLS, PageBody, PageShell, RowList, Spinner, cx } from "@/components/ui";
+import { Card, CopyButton, CopyField, EmptyState, ErrorBox, LABEL_CLS, PageBody, PageShell, RowList, Segmented, Spinner, cx } from "@/components/ui";
 
-const OS_LABEL: Record<CliDownload["os"], string> = { linux: "Linux", darwin: "macOS", windows: "Windows" };
-const ARCH_LABEL: Record<CliDownload["arch"], string> = { amd64: "x86_64 (amd64)", arm64: "ARM64" };
+type OS = CliDownload["os"];
+type Arch = CliDownload["arch"];
 
-/** Best guess of the visitor's platform, used only to highlight a row. */
-function detectOS(): CliDownload["os"] | null {
+const OS_LABEL: Record<OS, string> = { linux: "Linux", darwin: "macOS", windows: "Windows" };
+const ARCH_LABEL: Record<Arch, string> = { amd64: "x86_64 (amd64)", arm64: "ARM64" };
+const OS_ORDER: OS[] = ["darwin", "linux", "windows"];
+
+/** Best guess of the visitor's platform. Only picks the default tab and highlights a row. */
+function detectOS(): OS | null {
   if (typeof navigator === "undefined") return null;
   const ua = navigator.userAgent;
   if (/Windows/i.test(ua)) return "windows";
   if (/Mac OS X|Macintosh/i.test(ua)) return "darwin";
-  if (/Linux|X11/i.test(ua)) return "linux";
+  if (/Linux|X11/i.test(ua) && !/Android/i.test(ua)) return "linux";
   return null;
 }
 
-function formatSize(bytes: number): string {
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+/** Browsers hide the CPU on most platforms; Macs report "Intel" even on Apple silicon, which most Macs now are. */
+function guessArch(os: OS): Arch {
+  if (typeof navigator === "undefined") return "amd64";
+  if (/aarch64|arm64|armv8/i.test(navigator.userAgent)) return "arm64";
+  return os === "darwin" ? "arm64" : "amd64";
 }
+
+/** Copyable command block with a label, matching the install card rows. */
+function Snippet({ label, value, copyLabel }: { label: string; value: string; copyLabel: string }) {
+  return (
+    <div>
+      <div className={LABEL_CLS}>{label}</div>
+      <CopyField value={value} label={copyLabel} />
+    </div>
+  );
+}
+
+function InstallSteps({ os, arch, files, origin }: { os: OS; arch: Arch; files: CliDownload[]; origin: string }) {
+  const https = origin.startsWith("https://");
+  const file = files.find((f) => f.os === os && f.arch === arch) ?? files.find((f) => f.os === os);
+  if (!file) return <p className="text-sm text-gray-500">{t("이 서버에는 {os}용 CLI 바이너리가 없습니다.", { os: OS_LABEL[os] })}</p>;
+  const url = `${origin}${file.url}`;
+
+  if (os === "windows") {
+    return (
+      <div className="space-y-5">
+        <Snippet label={t("1. 내려받기 (PowerShell)")} value={`Invoke-WebRequest ${url} -OutFile aven.exe`} copyLabel={t("다운로드 명령")} />
+        <Snippet label={t("2. 체크섬 확인")} value={`(Get-FileHash aven.exe -Algorithm SHA256).Hash -eq "${file.sha256.toUpperCase()}"`} copyLabel={t("체크섬 확인 명령")} />
+        <p className="text-xs text-gray-500">{t("True가 나오면 aven.exe를 PATH에 있는 폴더로 옮기세요.")}</p>
+        <Snippet label={t("3. 로그인")} value={`.\\aven.exe login ${origin}`} copyLabel={t("로그인 명령")} />
+      </div>
+    );
+  }
+
+  const sum = os === "darwin" ? "shasum -a 256" : "sha256sum";
+  return (
+    <div className="space-y-5">
+      {https ? (
+        <div>
+          <Snippet label={t("설치 스크립트")} value={`curl -fsSL ${origin}/install.sh | sh -s -- --server ${origin}`} copyLabel={t("설치 명령")} />
+          <p className="mt-2 text-xs text-gray-500">
+            {tr("root가 아니면 {path}에 설치합니다({flag}로 변경). SHA-256 체크섬을 확인한 뒤 설치합니다.", {
+              path: <code className="font-mono">~/.local/bin/aven</code>,
+              flag: <code className="font-mono">--dir</code>,
+            })}
+          </p>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">{t("설치 스크립트는 HTTPS로 접속한 서버에서만 동작합니다. 아래 명령으로 바이너리를 직접 설치하세요.")}</p>
+      )}
+      <Snippet
+        label={https ? t("직접 설치") : t("1. 내려받기")}
+        value={`curl -fLo aven ${url} && echo "${file.sha256}  aven" | ${sum} -c - && chmod +x aven && sudo mv aven /usr/local/bin/aven`}
+        copyLabel={t("다운로드 명령")}
+      />
+      <Snippet label={https ? t("설치 후 로그인") : t("2. 로그인")} value={`aven login ${origin}`} copyLabel={t("로그인 명령")} />
+    </div>
+  );
+}
+
+const NEXT_STEPS: [string, string][] = [
+  ["aven link", t("이 디렉터리를 프로젝트·환경·서비스에 연결")],
+  ["aven up", t("이 디렉터리를 올려 빌드하고 배포")],
+  ["aven logs", t("실행 중인 배포의 로그 보기")],
+  ["aven variables", t("서비스 변수 보기·바꾸기")],
+  ["aven run -- <cmd>", t("서비스 변수를 넣고 로컬 명령 실행")],
+];
 
 function CliInner() {
   const href = useCtxHref();
   const q = useQuery({ queryKey: ["cli-downloads"], queryFn: api.cliDownloads, staleTime: 60_000 });
   // window is only available after hydration (static export).
   const [origin, setOrigin] = useState("");
-  const [os, setOS] = useState<CliDownload["os"] | null>(null);
+  const [detected, setDetected] = useState<OS | null>(null);
+  const [os, setOS] = useState<OS | null>(null);
+  const [arch, setArch] = useState<Arch | null>(null);
   useEffect(() => {
     setOrigin(window.location.origin);
-    setOS(detectOS());
+    setDetected(detectOS());
   }, []);
 
-  const files = q.data?.files ?? [];
-  const https = origin.startsWith("https://");
-  const has = (name: string) => files.some((f) => f.name === name);
-  const unixCmd = `curl -fsSL ${origin}/install.sh | sh -s -- --server ${origin}`;
-  const winCmd = `Invoke-WebRequest ${origin}/downloads/aven-windows-amd64.exe -OutFile aven.exe`;
+  const files = useMemo(() => q.data?.files ?? [], [q.data]);
+  const oses = OS_ORDER.filter((o) => files.some((f) => f.os === o));
+  const curOS: OS | null = os ?? (detected && oses.includes(detected) ? detected : oses[0] ?? null);
+  const arches = curOS ? (["amd64", "arm64"] as Arch[]).filter((a) => files.some((f) => f.os === curOS && f.arch === a)) : [];
+  const guessed = curOS ? guessArch(curOS) : "amd64";
+  const curArch: Arch | null = arch && arches.includes(arch) ? arch : arches.includes(guessed) ? guessed : arches[0] ?? null;
 
   return (
     <PageShell title="CLI" close={{ href: href("/"), label: t("CLI 닫기") }}>
@@ -69,60 +141,62 @@ function CliInner() {
                 </>
               }
             >
-              <div className="space-y-5">
-                <div>
-                  <div className={LABEL_CLS}>Linux · macOS</div>
-                  {https ? (
-                    <CopyField value={unixCmd} label={t("설치 명령")} />
-                  ) : (
-                    <p className="text-sm text-gray-500">{t("설치 스크립트는 HTTPS로 접속한 서버에서만 동작합니다. 아래에서 바이너리를 직접 내려받으세요.")}</p>
-                  )}
-                  <p className="mt-2 text-xs text-gray-500">
-                    {tr("root가 아니면 {path}에 설치합니다({flag}로 변경). SHA-256 체크섬을 확인한 뒤 설치합니다.", {
-                      path: <code className="font-mono">~/.local/bin/aven</code>,
-                      flag: <code className="font-mono">--dir</code>,
-                    })}
-                  </p>
-                </div>
-                {has("aven-windows-amd64.exe") && (
-                  <div>
-                    <div className={LABEL_CLS}>Windows (PowerShell)</div>
-                    <CopyField value={winCmd} label={t("다운로드 명령")} />
+              {curOS && (
+                <div className="space-y-5">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Segmented label={t("운영체제")} value={curOS} onChange={(v) => setOS(v)} options={oses.map((o) => ({ value: o, label: OS_LABEL[o] }))} />
+                    {arches.length > 1 && curArch && (
+                      <Segmented size="sm" label={t("CPU 아키텍처")} value={curArch} onChange={(v) => setArch(v)} options={arches.map((a) => ({ value: a, label: a === "amd64" ? "x86_64" : "ARM64" }))} />
+                    )}
                   </div>
-                )}
-                <div>
-                  <div className={LABEL_CLS}>{t("설치 후 로그인")}</div>
-                  <CopyField value={`aven login ${origin}`} label={t("로그인 명령")} />
+                  {curArch && <InstallSteps os={curOS} arch={curArch} files={files} origin={origin} />}
                 </div>
-              </div>
+              )}
+            </Card>
+
+            <Card title={t("시작하기")} description={t("로그인한 뒤 자주 쓰는 명령입니다. 전체 목록은 aven --help로 봅니다.")} flush>
+              <RowList bare className="border-t-0">
+                {NEXT_STEPS.map(([cmd, what]) => (
+                  <li key={cmd} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5">
+                    <code className="min-w-[180px] font-mono text-sm text-foreground">{cmd}</code>
+                    <span className="flex-1 text-sm text-gray-600">{what}</span>
+                  </li>
+                ))}
+              </RowList>
             </Card>
 
             <Card title={t("직접 다운로드")} description={t("플랫폼별 단일 실행 파일입니다. 내려받은 뒤 PATH에 있는 디렉터리로 옮기고 실행 권한을 주세요(chmod +x).")} flush>
               <RowList bare className="border-t-0">
-                {files.map((f) => (
-                  <li key={f.name} className={cx("flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3", f.os === os && "bg-gray-100")}>
-                    <div className="min-w-[180px] flex-1">
-                      <div className="text-sm font-medium">
-                        {OS_LABEL[f.os]} <span className="text-gray-500">{ARCH_LABEL[f.arch]}</span>
-                        {f.os === os && <span className="ml-2 rounded bg-pink-100 px-1.5 py-0.5 text-xs font-medium text-pink-600">{t("이 기기")}</span>}
+                {files.map((f) => {
+                  const mine = f.os === curOS && f.arch === curArch;
+                  return (
+                    <li key={f.name} className={cx("flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3", mine && "bg-gray-100")}>
+                      <div className="min-w-[180px] flex-1">
+                        <div className="text-sm font-medium">
+                          {OS_LABEL[f.os]} <span className="text-gray-500">{ARCH_LABEL[f.arch]}</span>
+                          {f.os === detected && f.arch === guessArch(f.os) && (
+                            <span className="ml-2 rounded bg-pink-100 px-1.5 py-0.5 text-xs font-medium text-pink-600">{t("이 기기")}</span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex min-w-0 items-center gap-1 font-mono text-xs tabular-nums text-gray-500">
+                          <span className="truncate" title={f.sha256}>
+                            {f.name} · {fmtBytes(f.size)} · sha256 {f.sha256.slice(0, 12)}…
+                          </span>
+                          <CopyButton value={f.sha256} label={t("{name} SHA-256 복사", { name: f.name })} className="size-6" />
+                        </div>
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1 font-mono text-xs tabular-nums text-gray-500">
-                        <span className="truncate" title={f.sha256}>
-                          {f.name} · {formatSize(f.size)} · sha256 {f.sha256.slice(0, 12)}…
-                        </span>
-                        <CopyButton value={f.sha256} label={t("{name} SHA-256 복사", { name: f.name })} className="size-6" />
-                      </div>
-                    </div>
-                    <a
-                      href={f.url}
-                      download={f.name}
-                      className="flex h-[34px] shrink-0 items-center gap-2 rounded-md border border-gray-200 bg-gray-100 px-3 text-sm hover:border-gray-300 hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
-                    >
-                      <Download className="size-4" aria-hidden="true" />
-                      {t("다운로드")}
-                    </a>
-                  </li>
-                ))}
+                      <a
+                        href={f.url}
+                        download={f.name}
+                        aria-label={t("{name} 다운로드", { name: f.name })}
+                        className="flex h-[34px] shrink-0 items-center gap-2 rounded-md border border-gray-200 bg-gray-100 px-3 text-sm hover:border-gray-300 hover:bg-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-600"
+                      >
+                        <Download className="size-4" aria-hidden="true" />
+                        {t("다운로드")}
+                      </a>
+                    </li>
+                  );
+                })}
               </RowList>
             </Card>
           </>

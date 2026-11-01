@@ -7,11 +7,12 @@
 package iac
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v4"
@@ -79,36 +80,37 @@ func (v Variable) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.Value)
 }
 
-// Validate checks the structure and normalizes nil collections (so hashing is stable).
+// Validate checks the structure and normalizes nil collections (so hashing is stable). Errors name the offending
+// path (services[2].name, services[0].settings.port) so a long file can be fixed without guessing.
 func (d *Definition) Validate() error {
 	if d.Version != Version {
-		return fmt.Errorf("version must be %d", Version)
+		return fmt.Errorf("version: must be %d (got %d)", Version, d.Version)
 	}
 	if d.Partial != "" && !ValidPartial(d.Partial) {
-		return errors.New("partial must be 1-64 letters, digits, dots, underscores or hyphens")
+		return errors.New("partial: must be 1-64 letters, digits, dots, underscores or hyphens")
 	}
 	if len(d.ProjectName) > 64 || strings.ContainsAny(d.ProjectName, "\n\r\t") {
-		return errors.New("project_name must be at most 64 characters and contain no line breaks")
+		return errors.New("project_name: must be at most 64 characters and contain no line breaks")
 	}
 	if len(d.Services) > 500 {
-		return errors.New("a configuration may contain at most 500 services")
+		return errors.New("services: a configuration may contain at most 500 services")
 	}
-	seen := make(map[string]bool, len(d.Services))
+	seen := make(map[string]int, len(d.Services))
 	for i := range d.Services {
 		s := &d.Services[i]
 		if s.Name == "" {
-			return fmt.Errorf("services[%d].name is required", i)
+			return fmt.Errorf("services[%d].name: is required", i)
 		}
-		if seen[s.Name] {
-			return fmt.Errorf("service %q is declared more than once", s.Name)
+		if first, dup := seen[s.Name]; dup {
+			return fmt.Errorf("services[%d].name: service %q is already declared at services[%d]", i, s.Name, first)
 		}
-		seen[s.Name] = true
+		seen[s.Name] = i
 		if s.Settings == nil {
 			s.Settings = map[string]json.RawMessage{}
 		}
-		for k, raw := range s.Settings {
-			if !json.Valid(raw) {
-				return fmt.Errorf("service %q: setting %q is not valid JSON", s.Name, k)
+		for _, k := range sortedKeys(s.Settings) {
+			if !json.Valid(s.Settings[k]) {
+				return fmt.Errorf("services[%d].settings.%s: is not valid JSON", i, k)
 			}
 		}
 		if s.Variables != nil && *s.Variables == nil {
@@ -119,6 +121,15 @@ func (d *Definition) Validate() error {
 		d.Services = []Service{}
 	}
 	return nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Decode reads JSON or YAML. YAML is normalized through JSON so the API and CLI share
@@ -140,16 +151,107 @@ func Decode(data []byte, format string) (*Definition, error) {
 	default:
 		return nil, fmt.Errorf("unsupported configuration format %q", format)
 	}
-	var d Definition
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&d); err != nil {
+	return DecodeJSON(raw)
+}
+
+var (
+	definitionFields = []string{"version", "project_name", "partial", "services"}
+	serviceFields    = []string{"name", "source_type", "database_kind", "settings", "variables"}
+)
+
+// DecodeJSON strictly decodes and validates a JSON definition. Unlike encoding/json errors, every error carries the
+// path of the offending value (services[1].variables.API_KEY: ...) and unknown keys list the allowed ones, so a typo
+// such as "setings" fails instead of being silently ignored.
+func DecodeJSON(raw []byte) (*Definition, error) {
+	top, err := strictObject(raw, "definition", definitionFields)
+	if err != nil {
 		return nil, err
+	}
+	var d Definition
+	if v, ok := top["version"]; ok {
+		if err := json.Unmarshal(v, &d.Version); err != nil {
+			return nil, errors.New("version: must be an integer")
+		}
+	}
+	for key, dst := range map[string]*string{"project_name": &d.ProjectName, "partial": &d.Partial} {
+		if v, ok := top[key]; ok && string(v) != "null" {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return nil, fmt.Errorf("%s: must be a string", key)
+			}
+		}
+	}
+	if v, ok := top["services"]; ok && string(v) != "null" {
+		var items []json.RawMessage
+		if err := json.Unmarshal(v, &items); err != nil {
+			return nil, errors.New("services: must be a list")
+		}
+		d.Services = make([]Service, 0, len(items))
+		for i, item := range items {
+			svc, err := decodeService(item, fmt.Sprintf("services[%d]", i))
+			if err != nil {
+				return nil, err
+			}
+			d.Services = append(d.Services, svc)
+		}
 	}
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
 	return &d, nil
+}
+
+func decodeService(raw json.RawMessage, path string) (Service, error) {
+	var s Service
+	obj, err := strictObject(raw, path, serviceFields)
+	if err != nil {
+		return s, err
+	}
+	for key, dst := range map[string]*string{"name": &s.Name, "source_type": &s.SourceType, "database_kind": &s.DatabaseKind} {
+		if v, ok := obj[key]; ok && string(v) != "null" {
+			if err := json.Unmarshal(v, dst); err != nil {
+				return s, fmt.Errorf("%s.%s: must be a string", path, key)
+			}
+		}
+	}
+	if v, ok := obj["settings"]; ok && string(v) != "null" {
+		if err := json.Unmarshal(v, &s.Settings); err != nil {
+			return s, fmt.Errorf("%s.settings: must be an object", path)
+		}
+	}
+	if v, ok := obj["variables"]; ok && string(v) != "null" {
+		var vars map[string]json.RawMessage
+		if err := json.Unmarshal(v, &vars); err != nil {
+			return s, fmt.Errorf("%s.variables: must be an object of string values", path)
+		}
+		out := make(map[string]Variable, len(vars))
+		for _, k := range sortedKeys(vars) {
+			var val Variable
+			if err := val.UnmarshalJSON(vars[k]); err != nil {
+				return s, fmt.Errorf("%s.variables.%s: %w", path, k, err)
+			}
+			out[k] = val
+		}
+		s.Variables = &out
+	}
+	return s, nil
+}
+
+// strictObject decodes a JSON object and rejects keys that are not in allowed.
+func strictObject(raw []byte, path string, allowed []string) (map[string]json.RawMessage, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
+		var syntax *json.SyntaxError
+		if errors.As(err, &syntax) {
+			return nil, fmt.Errorf("%s: invalid JSON at byte %d: %v", path, syntax.Offset, err)
+		}
+		return nil, fmt.Errorf("%s: must be an object", path)
+	}
+	for _, k := range sortedKeys(obj) {
+		if !slices.Contains(allowed, k) {
+			return nil, fmt.Errorf("%s.%s: unknown field (allowed: %s)", path, k, strings.Join(allowed, ", "))
+		}
+	}
+	return obj, nil
 }
 
 // MarshalJSON renders an indented JSON definition.
