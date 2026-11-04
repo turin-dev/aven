@@ -19,6 +19,11 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: make server agents cli
+      - name: Cross-build Windows CLI
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven
+          GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven-server
 
   web:
     runs-on: ubuntu-latest

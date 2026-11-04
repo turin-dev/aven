@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,8 @@ type ListeningPorts struct {
 	// Containers는 실제로 읽은 실행 중인 컨테이너 수다(0이면 읽을 컨테이너가 없었다).
 	Containers int `json:"containers"`
 }
+
+var ErrPortDetectionHostUnsupported = errors.New("automatic port detection is unavailable on native Windows hosts; configure a service port manually")
 
 // Listener는 /proc/net/tcp{,6}의 LISTEN 소켓 하나다.
 type Listener struct {
@@ -183,6 +186,9 @@ func (d *Docker) ContainerPIDs(ctx context.Context, names []string) (map[string]
 // InstanceListeningPorts는 이 노드에서 도는 인스턴스의 app 컨테이너(replica 전체, 최대 MaxPortScanContainers개)가
 // listen 중인 포트의 합집합이다. keel.managed 라벨이 있는 컨테이너만 본다.
 func (d *Docker) InstanceListeningPorts(ctx context.Context, instanceID string) (*ListeningPorts, error) {
+	if runtime.GOOS == "windows" {
+		return nil, ErrPortDetectionHostUnsupported
+	}
 	return InstanceListeningPorts(ctx, d, "/proc", instanceID)
 }
 

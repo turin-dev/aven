@@ -128,6 +128,7 @@ func (m *Manager) syncProxy(ctx context.Context) map[string]error {
 				for _, dm := range doms {
 					rt := m.hostRoute(ctx, in, dm)
 					rt.Upstreams = []string{wake}
+					rt.Wake = nk == store.LocalNodeID && m.Cfg.WakeSecret != ""
 					routes[nk] = append(routes[nk], rt)
 				}
 				continue

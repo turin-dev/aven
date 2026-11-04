@@ -14,7 +14,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -935,7 +934,7 @@ func (s *Server) restartServer(w http.ResponseWriter, r *http.Request) {
 	}
 	restart := s.restartFn
 	if restart == nil {
-		restart = func() { syscall.Kill(os.Getpid(), syscall.SIGTERM) }
+		restart = restartCurrentProcess
 	}
 	time.AfterFunc(500*time.Millisecond, restart)
 }

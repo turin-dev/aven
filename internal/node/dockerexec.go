@@ -53,19 +53,16 @@ func ClampTermSize(cols, rows int) (int, int) {
 	return min(cols, 1000), min(rows, 1000)
 }
 
-// DockerSocket은 Engine API unix socket 경로다. DOCKER_HOST가 unix://면 그것을 쓰고, 다른 scheme이면 오류다.
+// DockerSocket은 Engine API endpoint다. 플랫폼에서 지원하는 로컬 socket 형식만 허용한다.
 func DockerSocket() (string, error) {
 	h := os.Getenv("DOCKER_HOST")
 	if h == "" {
-		return "/var/run/docker.sock", nil
+		return defaultDockerSocket(), nil
 	}
-	if p, ok := strings.CutPrefix(h, "unix://"); ok && p != "" {
-		return p, nil
-	}
-	return "", errors.New("exec는 unix socket DOCKER_HOST만 지원합니다")
+	return parseDockerSocket(h)
 }
 
-// engine은 docker Engine API를 unix socket으로 부르는 최소 클라이언트다(docker CLI에는 pty가 필요해서 exec만 이것으로 한다).
+// engine은 플랫폼의 로컬 Docker socket으로 Engine API를 부르는 최소 클라이언트다(docker CLI에는 pty가 필요해서 exec만 이것으로 한다).
 type engine struct {
 	sock string
 }
@@ -79,8 +76,7 @@ func newEngine() (*engine, error) {
 }
 
 func (e *engine) dial(ctx context.Context) (net.Conn, error) {
-	var d net.Dialer
-	return d.DialContext(ctx, "unix", e.sock)
+	return dialDockerSocket(ctx, e.sock)
 }
 
 func (e *engine) client() *http.Client {

@@ -23,7 +23,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
@@ -883,23 +882,9 @@ func (h *Handler) ping(ctx context.Context) agentprotocol.PingResult {
 	if h.meshReady() {
 		r.MeshPort = h.MeshPort
 	}
-	dir := h.DataDir
-	if dir == "" {
-		dir = "/"
-	}
-	var fs syscall.Statfs_t
-	if syscall.Statfs(dir, &fs) == nil {
-		r.DiskFreeBytes = fs.Bavail * uint64(fs.Bsize)
-	}
-	if mem, err := os.ReadFile("/proc/meminfo"); err == nil {
-		for _, line := range strings.Split(string(mem), "\n") {
-			if f := strings.Fields(line); len(f) >= 2 && f[0] == "MemTotal:" {
-				if kib, err := strconv.ParseUint(f[1], 10, 64); err == nil {
-					r.MemoryBytes = kib * 1024
-				}
-			}
-		}
-	}
+	s := h.sampler.Sample(h.DataDir)
+	r.DiskFreeBytes = s.DiskFreeBytes
+	r.MemoryBytes = s.MemoryTotal
 	return r
 }
 

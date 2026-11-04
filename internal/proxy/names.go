@@ -78,7 +78,19 @@ func (c *Caddy) socketDir() string {
 	return WakeDir
 }
 
-func (c *Caddy) wakeDial() string { return "unix/" + c.socketDir() + "/wake.sock" }
+func (c *Caddy) wakeDial() string {
+	if c.cfg.WakeAddr != "" {
+		return c.cfg.WakeAddr
+	}
+	return "unix/" + c.socketDir() + "/wake.sock"
+}
+
+func (c *Caddy) wakeHeaders(set map[string][]string) map[string]any {
+	if c.cfg.WakeSecret != "" {
+		set["X-Aven-Wake-Secret"] = []string{c.cfg.WakeSecret}
+	}
+	return map[string]any{"request": map[string]any{"set": set}}
+}
 
 // resolveNetwork uses name when that network exists. When only the keel- name
 // exists, the proxy joins that bridge instead of a new aven- network.

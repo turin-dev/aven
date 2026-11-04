@@ -39,8 +39,12 @@ const (
 	WakeSocket       = WakeDir + "/wake.sock"
 	// AdminSocket은 Caddy 관리 API다. 공유 볼륨 안의 unix socket이라 같은 네트워크의 컨테이너(aven 앱, 외부 네트워크)는
 	// 닿지 못하고 호스트의 aven-server/aven-agent(root)만 쓴다. 예전에는 컨테이너 안 0.0.0.0:2019였는데 Host 헤더만 검사했다.
-	AdminSocket = WakeDir + "/caddy-admin.sock"
-	WakeDial    = "unix/" + WakeSocket
+	AdminSocket      = WakeDir + "/caddy-admin.sock"
+	WakeDial         = "unix/" + WakeSocket
+	NativeWakeListen = "0.0.0.0:5381"
+	NativeWakeAddr   = "host.docker.internal:5381"
+	NativeSelfListen = "0.0.0.0:7071"
+	NativeSelfAddr   = "host.docker.internal:7071"
 
 	DataVolume         = "aven-caddy-data"
 	LegacyDataVolume   = "keel-caddy-data"
@@ -125,12 +129,15 @@ type Config struct {
 	HTTPSPort int
 	// MetricsHosts가 있으면 :80에서 Host가 이 값(노드의 사설 주소)이고 경로가 /metrics인 요청에 Prometheus 지표를 준다
 	// (사설·tailnet 출발지만). Traefik이 같은 방식으로 지표를 냈으므로 기존 수집 대상(<사설 IP>:80)을 그대로 쓸 수 있다.
-	MetricsHosts []string
-	AdminPort    int    // 테스트용: 0이 아니면 관리 API를 unix socket 대신 127.0.0.1:AdminPort(TCP)로 부른다
-	BindIP       string // 비우면 모든 주소(IPv4+IPv6). 테스트 때는 127.0.0.1
-	TLS          TLSMode
-	ACMEEmail    string
-	DockerBin    string
+	MetricsHosts    []string
+	AdminPort       int    // 테스트용: 0이 아니면 관리 API를 unix socket 대신 127.0.0.1:AdminPort(TCP)로 부른다
+	DockerExecAdmin bool   // Windows host: keep the admin API private and reload through docker exec
+	WakeAddr        string // Windows host: Caddy reaches the wake handler through this host TCP address
+	WakeSecret      string // authenticate Caddy requests when WakeAddr is TCP
+	BindIP          string // 비우면 모든 주소(IPv4+IPv6). 테스트 때는 127.0.0.1
+	TLS             TLSMode
+	ACMEEmail       string
+	DockerBin       string
 
 	// OTLPEndpoint/TraceToken이 있으면 Caddy의 trace exporter를 aven-server 수신기로 보낸다(edge span).
 	OTLPEndpoint string
@@ -170,6 +177,7 @@ type Route struct {
 	// 예전 /.well-known/keel/domain-check 도 같은 토큰으로 답한다.
 	// auth, 리다이렉트, 엣지, 경로 규칙보다 먼저 처리한다. omitempty: 옛 agent는 모르는 필드를 거부한다(서버가 빼고 다시 보낸다).
 	CheckToken string `json:",omitempty"`
+	Wake       bool   `json:"wake,omitempty"` // this route targets the local wake handler
 	// Unverified면 아직 소유가 확인되지 않은 신규 도메인이다. 자동 TLS 호스트는 미리 인증서를 받지 않고 on-demand 정책에 두며,
 	// TLS ask(TLSAllowed)는 이 호스트(와일드카드면 그 하위 이름)를 허가하지 않는다. 확인되면 서버가 이 값 없이 다시 보낸다.
 	Unverified bool `json:",omitempty"`
@@ -314,17 +322,20 @@ func (c *Caddy) EnsureRunning(ctx context.Context, network string) error {
 	// admin은 공유 볼륨 안의 unix socket에서만 연다(네트워크로는 닿지 않는다).
 	bootstrap := `{"admin":{"listen":"` + c.adminListenPath() + `"}}`
 	args := []string{"run", "-d", "--name", n.Container, "--network", network, "--restart", "unless-stopped",
-		"--label", "aven.managed=true", "--label", "keel.managed=true", "--label", "aven.role=proxy", "--label", "keel.role=proxy",
-		"--add-host", "host.docker.internal:host-gateway",
+		"--label", "aven.managed=true", "--label", "keel.managed=true", "--label", "aven.role=proxy", "--label", "keel.role=proxy"}
+	if c.cfg.WakeAddr == "" {
+		args = append(args, "--add-host", "host.docker.internal:host-gateway")
+	}
+	args = append(args,
 		"-p", c.publish(c.cfg.HTTPPort, "80"),
 		"-p", c.publish(c.cfg.HTTPSPort, "443"),
 		"-p", c.publish(c.cfg.HTTPSPort, "443/udp"),
-		"-v", n.DataVolume + ":/data", "-v", n.ConfigVolume + ":/config", "-v", n.WakeVolume + ":" + n.WakeDir,
+		"-v", n.DataVolume+":/data", "-v", n.ConfigVolume+":/config", "-v", n.WakeVolume+":"+n.WakeDir,
 		"-e", "CADDY_BOOTSTRAP",
 		"-e", "OTEL_EXPORTER_OTLP_ENDPOINT", "-e", "OTEL_EXPORTER_OTLP_PROTOCOL", "-e", "OTEL_EXPORTER_OTLP_HEADERS",
 		"--user", "0:0", "--entrypoint", "sh", c.cfg.Image,
 		"-c", `printf '%s' "$CADDY_BOOTSTRAP" > /config/bootstrap.json && exec caddy run --config /config/bootstrap.json --resume`,
-	}
+	)
 	cmd := exec.CommandContext(ctx, c.cfg.DockerBin, args...)
 	// 비밀(토큰)이 프로세스 인자에 보이지 않게 환경 변수로 넘긴다. 같은 이름은 뒤의 값이 이긴다.
 	cmd.Env = append(append(os.Environ(), "CADDY_BOOTSTRAP="+bootstrap), c.traceEnv()...)
@@ -358,6 +369,15 @@ func (c *Caddy) waitAdmin(ctx context.Context) error {
 }
 
 func (c *Caddy) do(ctx context.Context, method, path string, body []byte) error {
+	if c.cfg.DockerExecAdmin {
+		if method == http.MethodPost && path == "/load" {
+			return c.reloadThroughDocker(ctx, body)
+		}
+		if method == http.MethodGet && path == "/config/" {
+			return c.pingThroughDocker(ctx)
+		}
+		return fmt.Errorf("Caddy admin operation %s %s is not supported through docker exec", method, path)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.adminURL(path), bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -382,7 +402,30 @@ func (c *Caddy) do(ctx context.Context, method, path string, body []byte) error 
 func (c *Caddy) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	if c.cfg.DockerExecAdmin {
+		return c.pingThroughDocker(ctx)
+	}
 	return c.do(ctx, http.MethodGet, "/config/", nil)
+}
+
+func (c *Caddy) pingThroughDocker(ctx context.Context) error {
+	sock := c.socketDir() + "/caddy-admin.sock"
+	cmd := exec.CommandContext(ctx, c.cfg.DockerBin, "exec", c.Resolve(ctx).Container, "sh", "-c", "test -S '"+sock+"'")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("Caddy admin socket is not ready: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (c *Caddy) reloadThroughDocker(ctx context.Context, body []byte) error {
+	address := strings.TrimSuffix(c.adminListenPath(), "|0600")
+	cmd := exec.CommandContext(ctx, c.cfg.DockerBin, "exec", "-i", c.Resolve(ctx).Container,
+		"caddy", "reload", "--config", "-", "--adapter", "json", "--address", address)
+	cmd.Stdin = bytes.NewReader(body)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("reload Caddy config: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 type pathRule struct {
@@ -390,6 +433,7 @@ type pathRule struct {
 	strip  bool
 	routes []string
 	ups    []string
+	wake   bool
 
 	trace      bool
 	traceAttrs map[string]string
@@ -407,6 +451,7 @@ type hostCfg struct {
 	useEdge    bool // 이 호스트의 요청을 엣지 엔진으로 보낸다
 	pathsOnly  bool // 규칙에 없는 경로는 404(Route.PathsOnly)
 	setHeaders map[string]string
+	wakeSecret string
 	viaEdge    bool   // origin 서버 라우트(엣지 엔진이 보낸 요청)
 	checkToken string // Route.CheckToken
 	unverified bool   // Route.Unverified
@@ -529,26 +574,39 @@ func (h *hostCfg) handlers() []map[string]any {
 		return append(out, h.edgeForward())
 	}
 	// 엣지를 거치는 호스트는 origin 라우트(viaEdge)에서 경로 규칙별로 span을 만든다.
-	mkRP := func(ups []string, traced bool, attrs map[string]string) []map[string]any {
+	mkRP := func(ups []string, traced bool, attrs map[string]string, wake bool) []map[string]any {
 		var handlers []map[string]any
 		if traced {
 			handlers = append(handlers, traceHandlers(attrs)...)
 		}
 		rp := reverseProxy(ups)
+		set := map[string][]string{}
+		var remove []string
 		if len(h.setHeaders) > 0 {
-			set := map[string][]string{}
 			for k, v := range h.setHeaders {
 				set[k] = []string{v}
 			}
-			rp["headers"] = map[string]any{"request": map[string]any{"set": set}}
 		} else if h.viaEdge {
-			rp["headers"] = originHeaders()
+			set["X-Forwarded-For"] = []string{"{http.request.header." + edge.HeaderClientIP + "}"}
+			set["X-Forwarded-Proto"] = []string{"{http.request.header." + edge.HeaderClientProto + "}"}
+			remove = []string{edge.HeaderClientIP, edge.HeaderClientProto}
 		} else if h.trustProto {
 			// Caddy는 신뢰하지 않는 클라이언트의 X-Forwarded-Proto를 덮어쓴다. 원래 값을 다른 헤더에 보관했다가 되돌린다.
-			rp["headers"] = map[string]any{"request": map[string]any{
-				"set":    map[string][]string{"X-Forwarded-Proto": {"{http.request.header." + origProtoHeader + "}"}},
-				"delete": []string{origProtoHeader},
-			}}
+			set["X-Forwarded-Proto"] = []string{"{http.request.header." + origProtoHeader + "}"}
+			remove = []string{origProtoHeader}
+		}
+		if wake && h.wakeSecret != "" {
+			set["X-Aven-Wake-Secret"] = []string{h.wakeSecret}
+		}
+		if len(set) > 0 || len(remove) > 0 {
+			request := map[string]any{}
+			if len(set) > 0 {
+				request["set"] = set
+			}
+			if len(remove) > 0 {
+				request["delete"] = remove
+			}
+			rp["headers"] = map[string]any{"request": request}
 		}
 		return append(handlers, rp)
 	}
@@ -557,7 +615,7 @@ func (h *hostCfg) handlers() []map[string]any {
 			"set": map[string][]string{origProtoHeader: {"{http.request.header.X-Forwarded-Proto}"}}}})
 	}
 	if len(h.rules) == 1 && h.rules[0].path == "" {
-		return append(out, mkRP(h.rules[0].ups, h.rules[0].trace, h.rules[0].traceAttrs)...)
+		return append(out, mkRP(h.rules[0].ups, h.rules[0].trace, h.rules[0].traceAttrs, h.rules[0].wake)...)
 	}
 	sort.Slice(h.rules, func(i, j int) bool { return ruleLess(h.rules[i], h.rules[j]) })
 	var sub []map[string]any
@@ -569,7 +627,7 @@ func (h *hostCfg) handlers() []map[string]any {
 				handle = append(handle, map[string]any{"handler": "rewrite", "strip_path_prefix": pre})
 			}
 		}
-		handle = append(handle, mkRP(r.ups, r.trace, r.traceAttrs)...)
+		handle = append(handle, mkRP(r.ups, r.trace, r.traceAttrs, r.wake)...)
 		rt := map[string]any{"handle": handle, "terminal": true}
 		if r.path == "" {
 			hasDefault = true
@@ -599,7 +657,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 		for _, host := range r.Hosts {
 			h := byHost[host]
 			if h == nil {
-				h = &hostCfg{host: host, wakeDir: c.socketDir()}
+				h = &hostCfg{host: host, wakeDir: c.socketDir(), wakeSecret: c.cfg.WakeSecret}
 				byHost[host] = h
 			}
 			if h.edge == nil && r.Edge != nil && r.Edge.Enabled() {
@@ -632,7 +690,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 					}
 				}
 				if !dup {
-					h.rules = append(h.rules, pathRule{path: p, strip: r.StripPrefix, ups: r.Upstreams, trace: r.Trace, traceAttrs: r.TraceAttributes})
+					h.rules = append(h.rules, pathRule{path: p, strip: r.StripPrefix, ups: r.Upstreams, wake: r.Wake, trace: r.Trace, traceAttrs: r.TraceAttributes})
 				}
 			}
 		}
@@ -796,7 +854,7 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 				"routes": []map[string]any{{"handle": []map[string]any{{
 					"handler":   "reverse_proxy",
 					"upstreams": []map[string]any{{"dial": c.wakeDial()}},
-					"headers":   map[string]any{"request": map[string]any{"set": map[string][]string{"Host": {TLSAskHost}}}},
+					"headers":   c.wakeHeaders(map[string][]string{"Host": {TLSAskHost}}),
 				}}}},
 			}
 		}

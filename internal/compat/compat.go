@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -167,6 +168,9 @@ func LookupEither(getenv func(string) (string, bool), key string) (string, bool)
 // DefaultDataDir is the data directory when AVEN_DATA and KEEL_DATA are unset.
 // An existing Keel directory is used until the operator moves it.
 func DefaultDataDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Aven", "data")
+	}
 	if hasState(LegacyDataDir) && !hasState(DataDir) {
 		WarnOnce("path:"+LegacyDataDir, "data directory %s is in use; set AVEN_DATA=%s to move it (the old path still works)", LegacyDataDir, DataDir)
 		return LegacyDataDir
@@ -225,7 +229,17 @@ func ResolveDir(prefer string, legacy ...string) string { return ResolvePath(pre
 // DefaultEnvFile is the server env file. Existing Keel paths win when the
 // new path has not been created yet.
 func DefaultEnvFile() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(programDataDir(), "Aven", "aven.env")
+	}
 	return ResolvePath(EnvFile, LegacyEnvFile, LegacyEnvFile2)
+}
+
+func programDataDir() string {
+	if dir := os.Getenv("ProgramData"); dir != "" {
+		return dir
+	}
+	return `C:\ProgramData`
 }
 
 // DefaultLibDir is the directory of agent and CLI downloads.

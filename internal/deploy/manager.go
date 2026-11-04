@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,6 +70,7 @@ type Config struct {
 	Railpack         string // railpack 바이너리 경로
 	RailpackFrontend string // BuildKit frontend 이미지
 	WakeAddr         string // keel-proxy가 잠든 서비스 요청을 보낼 wake handler 주소(host:port)
+	WakeSecret       string // 로컬 TCP wake handler의 요청 인증 비밀(Windows host)
 	TCPPortMin       int
 	TCPPortMax       int
 	// PrivateAddress는 로컬 노드의 사설 주소(KEEL_PRIVATE_ADDRESS, Tailscale/WireGuard)다. mesh gateway가 여기서만 listen한다.
@@ -1386,7 +1388,7 @@ func (m *Manager) runSpecNamed(t *Target, d *store.Deployment, name string, i in
 	if d.Spec.CPULimit != nil && *d.Spec.CPULimit > 0 {
 		s.CPUs = strconv.FormatFloat(*d.Spec.CPULimit, 'f', -1, 64)
 	}
-	if traced && strings.Contains(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "host.docker.internal") {
+	if runtime.GOOS != "windows" && traced && strings.Contains(env["OTEL_EXPORTER_OTLP_ENDPOINT"], "host.docker.internal") {
 		s.ExtraHosts = []string{"host.docker.internal:host-gateway"} // 호스트의 OTLP 수신기
 	}
 	applyComposeRun(&s, &d.Spec)

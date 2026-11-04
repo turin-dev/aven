@@ -1,7 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0 to publish aven_<tag>_linux_<arch>.tar.gz and checksums.txt,
-# the files install-server.sh downloads.
+# Push a tag like v0.1.0 to publish Linux bundles and the native Windows server assets.
 on:
   push:
     tags: ["v*"]
@@ -30,7 +29,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           make web
-          make agents clis VERSION="$VERSION"
+          make agents clis server-windows VERSION="$VERSION"
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o bin/aven-server-linux-$arch ./cmd/aven-server
           done
@@ -50,12 +49,15 @@ jobs:
             cp deploy/aven-server.service deploy/aven.env.example LICENSE THIRD_PARTY_NOTICES.md README.md dist/$name/
             tar -C dist -czf dist/$name.tar.gz $name
           done
-          cp install-server.sh dist/
-          (cd dist && sha256sum *.tar.gz install-server.sh > checksums.txt)
+          cp bin/aven-server-windows-amd64.exe bin/aven-windows-amd64.exe dist/
+          cp bin/aven-agent-linux-amd64 bin/aven-agent-linux-arm64 dist/
+          cp install-server.sh install-server.ps1 dist/
+          (cd dist && sha256sum *.tar.gz install-server.sh install-server.ps1 aven-server-windows-amd64.exe aven-windows-amd64.exe aven-agent-linux-amd64 aven-agent-linux-arm64 > checksums.txt)
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
         run: |
           gh release create "$VERSION" --title "$VERSION" --generate-notes \
-            dist/*.tar.gz dist/install-server.sh dist/checksums.txt
+            dist/*.tar.gz dist/install-server.sh dist/install-server.ps1 dist/aven-server-windows-amd64.exe dist/aven-windows-amd64.exe \
+            dist/aven-agent-linux-amd64 dist/aven-agent-linux-arm64 dist/checksums.txt

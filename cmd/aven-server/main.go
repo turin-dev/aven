@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
@@ -18,12 +19,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentpki"
@@ -64,7 +64,21 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "selfhost" {
 		os.Exit(selfhost.Main(os.Args[2:]))
 	}
-	listen := flag.String("listen", env("LISTEN", "[::1]:7070"), "API/UI listen address (AVEN_LISTEN)")
+	if err := loadServerEnv(); err != nil {
+		fmt.Fprintln(os.Stderr, "load server settings:", err)
+		os.Exit(1)
+	}
+	logOutput, closeLog, err := serverLogOutput()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "open server log:", err)
+		os.Exit(1)
+	}
+	defer closeLog()
+	defaultListen := "[::1]:7070"
+	if runtime.GOOS == "windows" {
+		defaultListen = "0.0.0.0:7070"
+	}
+	listen := flag.String("listen", env("LISTEN", defaultListen), "API/UI listen address")
 	dataDir := flag.String("data", env("DATA", compat.DefaultDataDir()), "data directory (AVEN_DATA)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
@@ -81,9 +95,19 @@ func main() {
 	if compat.Env("DEBUG") != "" {
 		logLevel = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
+	log := slog.New(slog.NewTextHandler(logOutput, &slog.HandlerOptions{Level: logLevel}))
+	slog.SetDefault(log)
 	if flag.NArg() > 0 {
 		log.Warn("ignoring unexpected arguments (flags go before them)", "args", flag.Args())
+	}
+	if handled, err := runWindowsService(func(ctx context.Context) error {
+		return runWithContext(ctx, func() {}, log, *listen, *dataDir)
+	}); handled {
+		if err != nil {
+			log.Error("fatal", "err", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if err := run(log, *listen, *dataDir); err != nil {
@@ -122,6 +146,12 @@ func checkEnv(listen string) error {
 }
 
 func run(log *slog.Logger, listen, dataDir string) (err error) {
+	sigCtx, stopSignals := serverSignalContext()
+	defer stopSignals()
+	return runWithContext(sigCtx, stopSignals, log, listen, dataDir)
+}
+
+func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log *slog.Logger, listen, dataDir string) (err error) {
 	if err := checkEnv(listen); err != nil {
 		return err
 	}
@@ -157,11 +187,15 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 	if err != nil {
 		return fmt.Errorf("log directory: %w", err)
 	}
+	wakeAddr, wakeSecret := "", ""
+	if runtime.GOOS == "windows" {
+		wakeAddr = proxy.NativeWakeAddr
+		wakeSecret, err = gatewaySecret(filepath.Join(dataDir, "wake.key"))
+		if err != nil {
+			return fmt.Errorf("wake handler secret: %w", err)
+		}
+	}
 
-	// sigCtx ends on SIGINT/SIGTERM. ctx is the lifetime of background work: during startup a signal
-	// cancels it right away; once serving, it is cancelled only after the HTTP servers have drained.
-	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stopSignals()
 	ctx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
 	stopEarly := context.AfterFunc(sigCtx, cancelRun)
@@ -184,7 +218,7 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		return fmt.Errorf("tracing token: %w", err)
 	}
 
-	docker := &node.Docker{}
+	docker := &node.Docker{Bin: compat.Env("DOCKER_BIN"), DisableIPv6: runtime.GOOS == "windows"}
 	if err := docker.Ping(ctx); err != nil {
 		return fmt.Errorf("docker is not reachable: %w (is the Docker daemon running, and may this user use its socket?)", err)
 	}
@@ -198,7 +232,11 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		TLS:       proxy.TLSMode(env("TLS", "auto")),
 		ACMEEmail: compat.Env("ACME_EMAIL"),
 		// 사설 주소(Tailscale)를 Host로 한 :80/metrics에 Caddy 지표를 낸다(Prometheus가 Traefik 때와 같은 대상으로 수집).
-		MetricsHosts: proxy.ParseList(compat.Env("PRIVATE_ADDRESS")),
+		MetricsHosts:    proxy.ParseList(compat.Env("PRIVATE_ADDRESS")),
+		DockerExecAdmin: runtime.GOOS == "windows",
+		WakeAddr:        wakeAddr,
+		WakeSecret:      wakeSecret,
+		DockerBin:       compat.Env("DOCKER_BIN"),
 
 		OTLPEndpoint: otlpEndpoint(), TraceToken: proxyTraceToken,
 	})
@@ -220,7 +258,11 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 			log.Info("proxy joined network", "proxy", proxyName, "network", n)
 		}
 	}
-	startEdge(ctx, caddy, docker, log)
+	if runtime.GOOS == "windows" {
+		log.Info("edge engine is unavailable on a native Windows host")
+	} else {
+		startEdge(ctx, caddy, docker, log)
+	}
 
 	bus := &events.Bus{Store: st, Log: log}
 	// 알림: 채널(webhook/Slack/Discord/이메일), 예전 프로젝트 webhook, 사용자 알림함. 사설 목적지는 AVEN_NOTIFY_ALLOW_PRIVATE=1일 때만.
@@ -264,10 +306,15 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		PrivateAddress:     strings.TrimSpace(compat.Env("PRIVATE_ADDRESS")),
 		Mesh:               env("MESH", "auto"),
 		MeshPort:           envInt("MESH_PORT", 7443),
+		WakeAddr:           wakeAddr,
+		WakeSecret:         wakeSecret,
 		OTLPEndpoint:       otlpEndpoint(),
 		IPv6Iface:          strings.TrimSpace(compat.Env("IPV6_IFACE")),
 		SelfServiceID:      strings.TrimSpace(compat.Env("SELF_SERVICE")),
 		SelfEnvFile:        env("SELF_ENV_FILE", compat.DefaultEnvFile()),
+	}
+	if runtime.GOOS == "windows" {
+		cfg.Mesh = "off"
 	}
 	// 도메인별 공개 IPv6: AVEN_IPV6_POOL(CIDR, /64~/120)이 있으면 로컬 노드 풀로 쓴다(PATCH /api/nodes/node_local 값보다 우선).
 	if v := strings.TrimSpace(compat.Env("IPV6_POOL")); v != "" {
@@ -277,20 +324,24 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 			cfg.IPv6Pool = v
 		}
 	}
-	// aven-server 자신의 공개 호스트: keel-proxy와 공유하는 볼륨 안 unix socket으로 받는다(컷오버 뒤 Caddy가 TLS를 끝낸다).
+	// aven-server 자신의 공개 호스트: Windows는 비밀 헤더를 검사하는 전용 TCP listener, Linux는 Caddy 공유 볼륨의 unix socket으로 받는다.
 	if selfHost != "" {
-		names := caddy.Resolve(ctx)
-		mp, err := docker.VolumeMountpoint(ctx, names.WakeVolume)
-		if err != nil {
-			return fmt.Errorf("self route: %w", err)
-		}
-		sockName := selfSocket
-		if names.Legacy {
-			sockName = legacySelfSocket
-		}
-		cfg.SelfUpstream = "unix/" + names.WakeDir + "/" + sockName
 		cfg.SelfHeaders = map[string]string{api.GatewayHeader: selfSecret}
-		selfListenPath = filepath.Join(mp, sockName)
+		if runtime.GOOS == "windows" {
+			cfg.SelfUpstream = proxy.NativeSelfAddr
+		} else {
+			names := caddy.Resolve(ctx)
+			mp, err := docker.VolumeMountpoint(ctx, names.WakeVolume)
+			if err != nil {
+				return fmt.Errorf("self route: %w", err)
+			}
+			sockName := selfSocket
+			if names.Legacy {
+				sockName = legacySelfSocket
+			}
+			cfg.SelfUpstream = "unix/" + names.WakeDir + "/" + sockName
+			selfListenPath = filepath.Join(mp, sockName)
+		}
 	}
 	// agent 인증용 내부 CA(키는 AVEN_DATA/agent-ca.key, 0600). 노드 간 mesh도 이 CA의 노드 인증서로 mTLS를 한다.
 	agentCA, err := agentpki.LoadOrCreateCA(dataDir)
@@ -334,7 +385,7 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 	bg.Go(func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
 	bg.Go(func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
-	if !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
+	if runtime.GOOS != "windows" && !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)
 	}
 	bg.Go(func() { mgr.WatchCrashes(ctx) })
@@ -345,10 +396,17 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		log.Warn("wake handler disabled (sleeping services cannot wake)", "err", err)
 	} else {
 		mgr.Cfg.WakeAddr = proxy.WakeDial
-		ws := &http.Server{Handler: mgr.WakeHandler(), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		if runtime.GOOS == "windows" {
+			mgr.Cfg.WakeAddr = proxy.NativeWakeAddr
+		}
+		wakeHandler := mgr.WakeHandler()
+		if wakeSecret != "" {
+			wakeHandler = requireWakeSecret(wakeSecret, wakeHandler)
+		}
+		ws := &http.Server{Handler: wakeHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, ws)
 		go ws.Serve(wl)
-		log.Info("wake handler listening", "socket", proxy.WakeSocket)
+		log.Info("wake handler listening", "addr", wl.Addr().String())
 	}
 	bg.Go(func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
 	bg.Go(func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
@@ -401,8 +459,9 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		Web: webui.FS(), Version: version, NodeName: hostname, Log: log,
 		GitHubSecret: compat.Env("GITHUB_WEBHOOK_SECRET"), GitHubAPIBase: env("GITHUB_API_URL", "https://api.github.com"),
 		GitHubClientID: compat.Env("GITHUB_CLIENT_ID"), GitHubClientSecret: compat.Env("GITHUB_CLIENT_SECRET"), PublicURL: compat.Env("PUBLIC_URL"),
-		AgentBinDir: compat.Env("AGENT_BIN_DIR"),
-		Notifier:    notifier, Pricing: pricing,
+		AgentBinDir:        compat.Env("AGENT_BIN_DIR"),
+		DisableSelfService: runtime.GOOS == "windows",
+		Notifier:           notifier, Pricing: pricing,
 		Traces: traceReceiver,
 	}
 	bg.Go(func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
@@ -434,12 +493,16 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		}
 	}
 	// 새로 설치한 서버면 aven-server 자신을 캔버스에서 다룰 Aven 프로젝트를 만들어 둔다(docs/selfhost.md).
-	if err := srv.EnsureSelfProjectOnFirstRun(ctx); err != nil {
-		log.Warn("self project", "err", err)
+	if runtime.GOOS != "windows" {
+		if err := srv.EnsureSelfProjectOnFirstRun(ctx); err != nil {
+			log.Warn("self project", "err", err)
+		}
 	}
 	handler := srv.Handler()
 	bg.Go(func() { srv.SandboxLoop(ctx) })
-	bg.Go(func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
+	if runtime.GOOS != "windows" {
+		bg.Go(func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
+	}
 	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 	// OTLP 수신기(OTLP/HTTP + h2c OTLP/gRPC). 컨테이너가 host-gateway로 닿아야 하므로 기본은 모든 주소다.
 	// 요청마다 trace 토큰을 확인한다. 바깥에 열고 싶지 않으면 AVEN_OTLP_LISTEN을 docker bridge 주소로 좁히거나 off로 끈다.
@@ -447,7 +510,11 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 	traceServer.Protocols = new(http.Protocols)
 	traceServer.Protocols.SetHTTP1(true)
 	traceServer.Protocols.SetUnencryptedHTTP2(true)
-	if addr := env("OTLP_LISTEN", ":4318"); addr != "off" {
+	otlpListenDefault := ":4318"
+	if runtime.GOOS == "windows" {
+		otlpListenDefault = "0.0.0.0:4318"
+	}
+	if addr := env("OTLP_LISTEN", otlpListenDefault); addr != "off" {
 		if traceListener, err := net.Listen("tcp", addr); err != nil {
 			log.Error("OTLP receiver disabled", "addr", addr, "err", err)
 		} else {
@@ -490,6 +557,16 @@ func run(log *slog.Logger, listen, dataDir string) (err error) {
 		servers = append(servers, ss)
 		go ss.Serve(sl)
 		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "socket", selfListenPath)
+	}
+	if runtime.GOOS == "windows" && selfHost != "" {
+		selfListener, err := net.Listen("tcp", proxy.NativeSelfListen)
+		if err != nil {
+			return fmt.Errorf("self route listener: %w", err)
+		}
+		selfServer := &http.Server{Handler: api.ViaGateway(selfSecret, handler), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		servers = append(servers, selfServer)
+		go selfServer.Serve(selfListener)
+		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "addr", proxy.NativeSelfListen)
 	}
 	ln, err := net.Listen("tcp", listen)
 	if err != nil {
@@ -640,7 +717,7 @@ func findRailpack() string {
 		return p
 	}
 	exe, _ := os.Executable()
-	for _, c := range []string{filepath.Join(filepath.Dir(exe), "railpack"), filepath.Join(filepath.Dir(exe), "..", ".tools", "railpack"), "/usr/local/bin/railpack"} {
+	for _, c := range []string{filepath.Join(filepath.Dir(exe), "railpack"), filepath.Join(filepath.Dir(exe), "railpack.exe"), filepath.Join(filepath.Dir(exe), "..", ".tools", "railpack"), "/usr/local/bin/railpack"} {
 		if st, err := os.Stat(c); err == nil && !st.IsDir() {
 			return c
 		}
@@ -707,6 +784,9 @@ func listenUnix(path string) (net.Listener, error) {
 }
 
 func listenWake(ctx context.Context, docker *node.Docker, caddy *proxy.Caddy) (net.Listener, error) {
+	if runtime.GOOS == "windows" {
+		return net.Listen("tcp", proxy.NativeWakeListen)
+	}
 	mp, err := docker.VolumeMountpoint(ctx, caddy.Resolve(ctx).WakeVolume)
 	if err != nil {
 		return nil, err
@@ -723,4 +803,15 @@ func listenWake(ctx context.Context, docker *node.Docker, caddy *proxy.Caddy) (n
 		return nil, err
 	}
 	return l, nil
+}
+
+func requireWakeSecret(secret string, next http.Handler) http.Handler {
+	want := []byte(secret)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Aven-Wake-Secret")), want) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -106,7 +106,8 @@ func managedTrue(labels map[string]string) bool {
 }
 
 type Docker struct {
-	Bin string // 기본 "docker"
+	Bin         string // 기본 "docker"
+	DisableIPv6 bool   // Docker Desktop 등에서 IPv6 미지원 네트워크를 만들 때
 }
 
 func (d *Docker) bin() string {
@@ -245,7 +246,11 @@ func (d *Docker) EnsureNamedNetwork(ctx context.Context, name string, labels map
 	if _, err := run(ctx, nil, nil, d.bin(), "network", "inspect", name); err == nil {
 		return nil
 	}
-	args := []string{"network", "create", "--driver", "bridge", "--ipv6", "--label", LabelManaged + "=true"}
+	args := []string{"network", "create", "--driver", "bridge"}
+	if !d.DisableIPv6 {
+		args = append(args, "--ipv6")
+	}
+	args = append(args, "--label", LabelManaged+"=true")
 	for k, v := range labels {
 		args = append(args, "--label", k+"="+v)
 	}

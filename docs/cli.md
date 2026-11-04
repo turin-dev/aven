@@ -7,7 +7,7 @@
 aven-server publishes the CLI itself: the dashboard's CLI page (`/cli/`, rail icon) lists the binaries it has with size and SHA-256 and shows the commands below for that server.
 
 - Linux / macOS: `curl -fsSL https://aven.example.com/install.sh | sh -s -- --server https://aven.example.com` downloads `aven-<os>-<arch>` over HTTPS, checks it against the `.sha256` file and installs it to `~/.local/bin` (`/usr/local/bin` as root; `--dir DIR` or `AVEN_INSTALL_DIR` to change).
-- Windows: `Invoke-WebRequest https://aven.example.com/downloads/aven-windows-amd64.exe -OutFile keel.exe`.
+- Windows PowerShell: `Invoke-WebRequest https://aven.example.com/downloads/aven-windows-amd64.exe -OutFile aven.exe`, then run `.\aven.exe login https://aven.example.com` from that directory. The dashboard also lists ARM64 builds when available.
 - Server side: `make clis` builds `bin/aven-{linux,darwin}-{amd64,arm64}` and `bin/aven-windows-{amd64,arm64}.exe`; copy them next to the agent binaries (`AVEN_AGENT_BIN_DIR`, default: next to aven-server). Missing ones are simply not listed.
 
 ## Auth and config

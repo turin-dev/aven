@@ -28,7 +28,7 @@ Railway, Coolify, and Dokploy are trademarks of their owners. Aven is not affili
 
 ## Quick start
 
-The install command below is the one in [`install-server.sh`](install-server.sh). Requirements and the rest of the first-run steps are in the [self-hosting guide](docs/self-hosting.md).
+The Linux install command below is the one in [`install-server.sh`](install-server.sh). For a native Windows service on Windows 10/11, see the [Windows host guide](docs/windows-native.md). Windows Server editions are not supported by Docker Desktop.
 
 You need:
 

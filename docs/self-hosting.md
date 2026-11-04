@@ -1,6 +1,6 @@
 # Self-hosting Aven
 
-[한국어](self-hosting.ko.md)
+[한국어](self-hosting.ko.md) · [Native Windows host](windows-native.md)
 
 This guide installs Aven on one Linux server, signs in for the first time, and walks through the first-run checklist. Adding more servers comes at the end.
 

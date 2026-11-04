@@ -14,7 +14,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentpki"
@@ -24,6 +23,7 @@ import (
 	"github.com/turin-dev/aven/internal/metrics"
 	"github.com/turin-dev/aven/internal/notify"
 	"github.com/turin-dev/aven/internal/store"
+	"github.com/turin-dev/aven/internal/sysstat"
 	"github.com/turin-dev/aven/internal/tracing"
 	"github.com/turin-dev/aven/internal/usage"
 )
@@ -55,6 +55,8 @@ type Server struct {
 	TrustedProxies []netip.Prefix
 	// AgentBinDir는 /downloads/aven-agent-linux-<arch>로 내보낼 바이너리 디렉터리다(비우면 aven-server 실행 파일 옆).
 	AgentBinDir string
+	// DisableSelfService is set when the server binary is managed by a native service instead of its own container.
+	DisableSelfService bool
 
 	// CA는 agent 인증서를 발급/검증하는 aven 내부 CA다(nil이면 agent enroll/connect는 503).
 	CA *agentpki.CA
@@ -518,9 +520,15 @@ func (s *Server) Handler() http.Handler {
 	h("GET /api/owner/setup", ownerOnly(), s.getSetup)
 	h("PUT /api/owner/setup", ownerOnly(), s.putSetup)
 	h("GET /api/owner/self-service", ownerOnly(), s.getSelfService)
-	h("POST /api/owner/self-service", ownerOnly(), s.createSelfService)
-	h("DELETE /api/owner/self-service", ownerOnly(), s.deleteSelfService)
-	h("POST /api/owner/self-service/check", ownerOnly(), s.checkSelfUpdateNow)
+	if s.DisableSelfService {
+		h("POST /api/owner/self-service", ownerOnly(), selfServiceUnavailable)
+		h("DELETE /api/owner/self-service", ownerOnly(), selfServiceUnavailable)
+		h("POST /api/owner/self-service/check", ownerOnly(), selfServiceUnavailable)
+	} else {
+		h("POST /api/owner/self-service", ownerOnly(), s.createSelfService)
+		h("DELETE /api/owner/self-service", ownerOnly(), s.deleteSelfService)
+		h("POST /api/owner/self-service/check", ownerOnly(), s.checkSelfUpdateNow)
+	}
 	h("GET /api/owner/server-config", ownerOnly(), s.getServerConfig)
 	h("PUT /api/owner/server-config", ownerOnly(), s.putServerConfig)
 	h("PUT /api/owner/admin-caps", ownerOnly(), s.putAdminCaps)
@@ -643,11 +651,7 @@ func (s *Server) system(w http.ResponseWriter, r *http.Request) {
 		}
 		return "ok"
 	}
-	var free int64
-	var fsst syscall.Statfs_t
-	if syscall.Statfs(s.Deploy.Cfg.DataDir, &fsst) == nil {
-		free = int64(fsst.Bavail) * int64(fsst.Bsize)
-	}
+	free := int64(sysstat.DiskFreeBytes(s.Deploy.Cfg.DataDir))
 	writeJSON(w, 200, map[string]any{
 		"version": s.Version, "node": s.NodeName,
 		"docker": st(s.Deploy.Docker.Ping(ctx)), "proxy": st(s.Deploy.Proxy.Ping(ctx)),

@@ -28,7 +28,7 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 
 ## 빠른 시작
 
-아래 설치 명령은 [`install-server.sh`](install-server.sh)에 있는 명령입니다. 요구 사항과 첫 실행의 나머지 단계는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
+아래 Linux 설치 명령은 [`install-server.sh`](install-server.sh)에 있습니다. Windows 10/11에서 네이티브 Windows 서비스로 실행하려면 [Windows 가이드](docs/windows-native.ko.md)를 참고하세요. Windows Server 에디션은 Docker Desktop 지원 대상이 아닙니다.
 
 필요한 것:
 

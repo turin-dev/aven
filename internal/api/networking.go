@@ -351,7 +351,7 @@ func (s *Server) probeNetworking(ctx context.Context, in *store.Instance, env *s
 	case lerr != nil:
 		p.listening = nil
 		p.detection.Reason = portDetectionReason(lerr)
-		if !errors.Is(lerr, deploy.ErrPortDetectionUnsupported) && !errors.Is(lerr, agentprotocol.ErrOffline) {
+		if !errors.Is(lerr, deploy.ErrPortDetectionUnsupported) && !errors.Is(lerr, node.ErrPortDetectionHostUnsupported) && !errors.Is(lerr, agentprotocol.ErrOffline) {
 			s.Log.Debug("port detection", "instance", in.ID, "node", nodeID, "err", lerr)
 		}
 	case p.listening == nil || p.listening.Containers == 0:
@@ -369,6 +369,8 @@ func portDetectionReason(err error) string {
 	switch {
 	case errors.Is(err, deploy.ErrPortDetectionUnsupported):
 		return deploy.ErrPortDetectionUnsupported.Error()
+	case errors.Is(err, node.ErrPortDetectionHostUnsupported):
+		return node.ErrPortDetectionHostUnsupported.Error()
 	case errors.Is(err, agentprotocol.ErrOffline):
 		return "노드가 연결되어 있지 않습니다"
 	case errors.Is(err, context.DeadlineExceeded):

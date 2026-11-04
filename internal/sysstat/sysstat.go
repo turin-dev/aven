@@ -1,12 +1,10 @@
-// Package sysstat은 노드(호스트) 전체의 CPU/메모리/디스크 사용량을 /proc에서 읽는다.
+// Package sysstat은 노드(호스트) 전체의 CPU/메모리/디스크 사용량을 읽는다.
 package sysstat
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 // Sample은 한 시점의 노드 사용량이다.
@@ -111,30 +109,24 @@ func CPUPercent(prevIdle, prevTotal, idle, total uint64) float64 {
 func (s *Sampler) Sample(dataDir string) Sample {
 	var r Sample
 	s.mu.Lock()
-	if b, err := os.ReadFile("/proc/stat"); err == nil {
-		if idle, total, ok := ParseCPU(string(b)); ok {
-			var prevIdle, prevTotal uint64
-			if s.init {
-				prevIdle, prevTotal = s.idle, s.total
-			}
+	if idle, total, ok := hostCPU(); ok {
+		var prevIdle, prevTotal uint64
+		if s.init {
+			prevIdle, prevTotal = s.idle, s.total
+		}
+		if total > prevTotal {
 			r.CPUPercent = CPUPercent(prevIdle, prevTotal, idle, total)
 			s.idle, s.total, s.init = idle, total, true
 		}
 	}
+	r.MemoryTotal, r.MemoryBytes = hostMemoryUsed()
 	s.mu.Unlock()
-	if b, err := os.ReadFile("/proc/meminfo"); err == nil {
-		total, avail := ParseMem(string(b))
-		r.MemoryTotal = total
-		if total >= avail {
-			r.MemoryBytes = total - avail
-		}
-	}
-	if dataDir == "" {
-		dataDir = "/"
-	}
-	var fs syscall.Statfs_t
-	if syscall.Statfs(dataDir, &fs) == nil {
-		r.DiskFreeBytes = fs.Bavail * uint64(fs.Bsize)
-	}
+	r.DiskFreeBytes = DiskFreeBytes(dataDir)
 	return r
+}
+
+// MemoryTotalBytes returns the host's physical memory size when the platform exposes it.
+func MemoryTotalBytes() uint64 {
+	total, _ := hostMemory()
+	return total
 }

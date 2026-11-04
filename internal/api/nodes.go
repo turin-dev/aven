@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"os"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
@@ -17,6 +14,7 @@ import (
 	"github.com/turin-dev/aven/internal/mesh"
 	"github.com/turin-dev/aven/internal/node"
 	"github.com/turin-dev/aven/internal/store"
+	"github.com/turin-dev/aven/internal/sysstat"
 )
 
 // syncMesh는 mesh 원하는 상태를 백그라운드에서 다시 맞춘다(요청을 막지 않는다).
@@ -52,22 +50,8 @@ func (s *Server) localNode(w http.ResponseWriter, r *http.Request) (*store.Node,
 	} else if host := strings.TrimSpace(s.Deploy.Cfg.NodeHostname); host != "" {
 		n.Address.Private = &host
 	}
-	var fs syscall.Statfs_t
-	if syscall.Statfs(s.Deploy.Cfg.DataDir, &fs) == nil {
-		n.DiskFreeBytes = fs.Bavail * uint64(fs.Bsize)
-	}
-	if mem, err := os.ReadFile("/proc/meminfo"); err == nil {
-		for _, line := range strings.Split(string(mem), "\n") {
-			if strings.HasPrefix(line, "MemTotal:") {
-				if fields := strings.Fields(strings.TrimPrefix(line, "MemTotal:")); len(fields) > 0 {
-					if kib, err := strconv.ParseUint(fields[0], 10, 64); err == nil {
-						n.MemoryBytes = kib * 1024
-					}
-				}
-				break
-			}
-		}
-	}
+	n.DiskFreeBytes = sysstat.DiskFreeBytes(s.Deploy.Cfg.DataDir)
+	n.MemoryBytes = sysstat.MemoryTotalBytes()
 	return n, true
 }
 

@@ -1,6 +1,6 @@
 # Aven 셀프 호스팅
 
-[English](self-hosting.md)
+[English](self-hosting.md) · [Windows 네이티브 서버](windows-native.ko.md)
 
 이 문서는 Linux 서버 한 대에 Aven을 설치하고, 처음 로그인해서 초기 설정 체크리스트를 마치는 과정을 안내합니다. 서버를 더 붙이는 방법은 마지막에 있습니다.
 

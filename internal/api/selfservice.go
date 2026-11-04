@@ -112,6 +112,10 @@ func (s *Server) getSelfService(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.selfServiceView(r.Context()))
 }
 
+func selfServiceUnavailable(w http.ResponseWriter, _ *http.Request) {
+	writeErr(w, http.StatusNotImplemented, "self-service upgrades are unavailable when aven-server runs as a native Windows service")
+}
+
 // createSelfService는 Aven 프로젝트와 aven-server 서비스를 만들고 self 서비스로 지정한다(POST /api/owner/self-service).
 // 배포는 하지 않는다. 캔버스에서 처음 배포하면 systemd로 도는 서버가 aven-server 컨테이너로 옮겨진다.
 func (s *Server) createSelfService(w http.ResponseWriter, r *http.Request) {

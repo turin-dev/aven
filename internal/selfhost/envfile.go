@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/turin-dev/aven/internal/compat"
 )
@@ -84,6 +83,8 @@ var ConfigKeys = []ConfigKey{
 	{Name: "AVEN_RAILPACK_FRONTEND", Group: "advanced"},
 	{Name: "AVEN_IAC_RUNNER", Group: "advanced"},
 	{Name: "AVEN_CADDY_BIN", Group: "advanced"},
+	{Name: "AVEN_DOCKER_BIN", Group: "fixed", Fixed: true},
+	{Name: "DOCKER_HOST", Group: "fixed", Fixed: true},
 	{Name: "AVEN_NOTIFY_ALLOW_PRIVATE", Group: "advanced"},
 	{Name: "AVEN_AGENT_LEGACY_BEARER", Group: "advanced"},
 	{Name: "AVEN_SELF_REPO", Group: "advanced"},
@@ -290,7 +291,19 @@ func (f *EnvFile) Write() error { return writeFileAtomic(f.Path, f.Bytes(), f.Mo
 
 // Writable은 이 프로세스가 env 파일을 고칠 수 있는지다(self 컨테이너에 읽기 전용으로 마운트됐으면 false).
 func Writable(path string) bool {
-	return syscall.Access(filepath.Dir(path), 2) == nil && syscall.Access(path, 2) == nil
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return false
+	}
+	if f.Close() != nil {
+		return false
+	}
+	probe, err := os.CreateTemp(filepath.Dir(path), ".aven-write-check-")
+	if err != nil {
+		return false
+	}
+	name := probe.Name()
+	return probe.Close() == nil && os.Remove(name) == nil
 }
 
 // ConfigEntry는 대시보드에 보여 줄 키 하나다.

@@ -1,6 +1,6 @@
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all web server agents cli clis test clean notices
+.PHONY: all web server server-windows agents cli clis test clean notices
 
 all: web server agents cli clis
 
@@ -12,6 +12,10 @@ server:
 	mkdir -p bin
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(VERSION)" -o bin/aven-server ./cmd/aven-server
 	ln -sf aven-server bin/keel-server
+
+server-windows:
+	mkdir -p bin
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/aven-server-windows-amd64.exe ./cmd/aven-server
 
 # aven-server serves these at /downloads/aven-agent-linux-{amd64,arm64} (from AVEN_AGENT_BIN_DIR, default: next to aven-server).
 agents:
