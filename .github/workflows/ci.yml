@@ -16,7 +16,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l cmd internal | tee /dev/stderr)"
       - run: go vet ./...
+      # staticcheck caught two shadowed-err bugs (a nil-response panic, an unchecked WebAuthn error); keep it clean.
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.1 ./...
       - run: go test ./...
       - run: make server agents cli
       - name: Cross-build Windows CLI
@@ -24,6 +29,18 @@ jobs:
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven
           GOOS=windows GOARCH=arm64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o /dev/null ./cmd/aven-server
+
+  # The race detector found a real data race (PITR restore status) that the plain run missed.
+  # It is about ten times slower, so it runs as its own job next to the others.
+  go-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # internal/api alone takes about ten minutes under -race, past go test's default timeout.
+      - run: go test -race -timeout 30m ./...
 
   web:
     runs-on: ubuntu-latest
