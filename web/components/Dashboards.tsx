@@ -99,7 +99,7 @@ export function DashboardSelector({
       onClick={() => onChange(id)}
       className={cx(
         "relative -ml-px flex h-[34px] shrink-0 cursor-pointer items-center whitespace-nowrap border px-3 text-sm first:ml-0 first:rounded-l-md last:rounded-r-md hover:z-10 hover:border-gray-300 hover:bg-secondaryBg focus:outline-none focus-visible:z-20 focus-visible:ring-2 focus-visible:ring-pink-500",
-        value === id ? "z-10 border-gray-300 bg-secondaryBg text-pink-500" : "border-gray-200 text-gray-600 hover:text-foreground",
+        value === id ? "z-10 border-gray-300 bg-secondaryBg text-pink-600" : "border-gray-200 text-gray-600 hover:text-foreground",
       )}
     >
       {label}
