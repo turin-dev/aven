@@ -56,7 +56,7 @@ const (
 	// DefaultSessionMaxAge caps how long a session lives after login however often it is used
 	// (sessionTTL alone slides forever, so a stolen cookie that keeps being used never expires).
 	DefaultSessionMaxAge = 90 * 24 * time.Hour
-	tokenTouch   = time.Minute
+	tokenTouch           = time.Minute
 )
 
 // ctEqual은 길이가 달라도 시간이 새지 않게 SHA-256 다이제스트끼리 상수 시간으로 비교한다.
