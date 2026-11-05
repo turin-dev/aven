@@ -53,6 +53,9 @@ func hasAPITokenPrefix(tok string) bool {
 const (
 	sessionTTL   = 30 * 24 * time.Hour
 	sessionTouch = time.Minute
+	// DefaultSessionMaxAge caps how long a session lives after login however often it is used
+	// (sessionTTL alone slides forever, so a stolen cookie that keeps being used never expires).
+	DefaultSessionMaxAge = 90 * 24 * time.Hour
 	tokenTouch   = time.Minute
 )
 
@@ -177,35 +180,60 @@ func (s *Server) bearerPrincipal(ctx context.Context, tok string) *principal {
 	return &principal{User: u, Via: viaToken, Token: t}
 }
 
-// sessionPrincipal은 세션 쿠키를 검사한다. refresh가 true면 쿠키 만료도 늦춰서 다시 보내야 한다.
-func (s *Server) sessionPrincipal(ctx context.Context, value string) (p *principal, refresh bool) {
+// sessionMaxAge is the absolute session lifetime; 0 or less means no cap.
+func (s *Server) sessionMaxAge() time.Duration {
+	if s.SessionMaxAge == 0 {
+		return DefaultSessionMaxAge
+	}
+	return max(s.SessionMaxAge, 0)
+}
+
+// sessionExpiry is the sliding expiry (now + sessionTTL), capped at created + the absolute lifetime.
+func (s *Server) sessionExpiry(created, now time.Time) time.Time {
+	exp := now.Add(sessionTTL)
+	if m := s.sessionMaxAge(); m > 0 {
+		if limit := created.Add(m); limit.Before(exp) {
+			exp = limit
+		}
+	}
+	return exp
+}
+
+// sessionPrincipal은 세션 쿠키를 검사한다. refreshUntil이 0이 아니면 쿠키 만료도 그 시각으로 늦춰서 다시 보내야 한다.
+func (s *Server) sessionPrincipal(ctx context.Context, value string) (p *principal, refreshUntil time.Time) {
 	if s.Store == nil || value == "" || len(value) > 200 {
-		return nil, false
+		return nil, time.Time{}
 	}
 	se, err := s.Store.GetSessionByHash(ctx, hashSecret(value))
 	if err != nil {
-		return nil, false
+		return nil, time.Time{}
+	}
+	now := time.Now()
+	if m := s.sessionMaxAge(); m > 0 && now.Sub(se.CreatedAt) > m {
+		// Sessions created before the cap existed can carry a later expires_at; end them here.
+		s.Store.DeleteSessionByHash(context.WithoutCancel(ctx), hashSecret(value))
+		return nil, time.Time{}
 	}
 	u, err := s.Store.GetUser(ctx, se.UserID)
 	if err != nil || u.Disabled {
-		return nil, false
+		return nil, time.Time{}
 	}
 	if u.Builtin {
 		// 기본 계정 세션은 만들 때의 KEEL_ADMIN_PASSWORD로만 유효하다(환경변수로 비밀번호를 바꾸면 모두 끊긴다).
 		if s.AdminPassword == "" || !hmac.Equal([]byte(se.AuthTag), []byte(s.adminTag())) {
-			return nil, false
+			return nil, time.Time{}
 		}
 		u.Role = store.RoleOwner
 	}
-	if now := time.Now(); now.Sub(se.LastSeen) > sessionTouch {
-		s.Store.TouchSession(context.WithoutCancel(ctx), se.ID, now, now.Add(sessionTTL))
-		refresh = true
+	if now.Sub(se.LastSeen) > sessionTouch {
+		refreshUntil = s.sessionExpiry(se.CreatedAt, now)
+		s.Store.TouchSession(context.WithoutCancel(ctx), se.ID, now, refreshUntil)
 	}
 	p = &principal{User: u, Via: viaSession, SessionID: se.ID, SAML: se.SAMLAuthenticated}
 	if vp := s.viewAsPrincipal(ctx, p); vp != nil {
-		return vp, refresh
+		return vp, refreshUntil
 	}
-	return p, refresh
+	return p, refreshUntil
 }
 
 func (s *Server) requireAuth(h http.Handler) http.Handler {
@@ -224,7 +252,7 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 			s.lim().agentIP.fail(key)
 		}
 		if c, ok := sessionCookieFrom(r); ok {
-			if p, refresh := s.sessionPrincipal(r.Context(), c.Value); p != nil {
+			if p, refreshUntil := s.sessionPrincipal(r.Context(), c.Value); p != nil {
 				if p.ViewAsBy != nil {
 					if !viewAsAllowed(r) {
 						writeJSON(w, 403, map[string]any{"error": "사용자로 보기 중에는 읽기만 할 수 있습니다. 보기를 끝낸 뒤 다시 시도하세요", "view_as": true})
@@ -238,9 +266,8 @@ func (s *Server) requireAuth(h http.Handler) http.Handler {
 					writeErr(w, 403, "cross-origin request rejected")
 					return
 				}
-				if refresh {
-					exp := time.Now().Add(sessionTTL)
-					http.SetCookie(w, s.sessionCookie(r, c.Value, exp, 0))
+				if !refreshUntil.IsZero() {
+					http.SetCookie(w, s.sessionCookie(r, c.Value, refreshUntil, 0))
 				}
 				h.ServeHTTP(w, withPrincipal(r, p))
 				return
@@ -289,7 +316,8 @@ func (s *Server) startSessionWithMethod(ctx context.Context, w http.ResponseWrit
 		return errMaintenanceLogin
 	}
 	tok := randomToken(32)
-	exp := time.Now().Add(sessionTTL)
+	now := time.Now()
+	exp := s.sessionExpiry(now, now)
 	se := &store.Session{UserID: u.ID, ExpiresAt: exp, IP: limitKey(s.clientIP(r)), UserAgent: truncate(r.UserAgent(), 200), SAMLAuthenticated: samlAuthenticated}
 	if u.Builtin {
 		se.AuthTag = s.adminTag()

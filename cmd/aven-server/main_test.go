@@ -30,10 +30,13 @@ func TestCheckEnv(t *testing.T) {
 		{"new name", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough"}, "[::1]:7070", ""},
 		{"new name short", map[string]string{"AVEN_ADMIN_PASSWORD": "short"}, "[::1]:7070", "AVEN_ADMIN_PASSWORD"},
 		{"tcp allowlist", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_TCP_PORT_ALLOW_CIDRS": "10.0.0.0/8, 203.0.113.7"}, "[::1]:7070", ""},
+		{"session max age days", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_SESSION_MAX_AGE": "30d"}, "[::1]:7070", ""},
+		{"session max age off", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_SESSION_MAX_AGE": "off"}, "[::1]:7070", ""},
+		{"bad session max age", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_SESSION_MAX_AGE": "5m"}, "[::1]:7070", "SESSION_MAX_AGE"},
 		{"bad tcp allowlist", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_TCP_PORT_ALLOW_CIDRS": "10.0.0.0/8,nope"}, "[::1]:7070", "TCP_PORT_ALLOW_CIDRS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{"AVEN_ADMIN_PASSWORD", "AVEN_TLS_CERT", "AVEN_TLS_KEY", "AVEN_TRUSTED_PROXIES", "KEEL_ADMIN_PASSWORD", "KEEL_TLS_CERT", "KEEL_TLS_KEY", "KEEL_TRUSTED_PROXIES", "AVEN_TCP_PORT_ALLOW_CIDRS", "KEEL_TCP_PORT_ALLOW_CIDRS"} {
+			for _, k := range []string{"AVEN_ADMIN_PASSWORD", "AVEN_TLS_CERT", "AVEN_TLS_KEY", "AVEN_TRUSTED_PROXIES", "KEEL_ADMIN_PASSWORD", "KEEL_TLS_CERT", "KEEL_TLS_KEY", "KEEL_TRUSTED_PROXIES", "AVEN_TCP_PORT_ALLOW_CIDRS", "KEEL_TCP_PORT_ALLOW_CIDRS", "AVEN_SESSION_MAX_AGE", "KEEL_SESSION_MAX_AGE"} {
 				t.Setenv(k, tc.env[k])
 			}
 			err := checkEnv(tc.listen)

@@ -144,10 +144,37 @@ func checkEnv(listen string) error {
 	if _, err := parsePrefixes(compat.Env("TRUSTED_PROXIES")); err != nil {
 		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
 	}
+	if _, err := sessionMaxAge(); err != nil {
+		return fmt.Errorf("%s: %w", compat.Describe("SESSION_MAX_AGE"), err)
+	}
 	if _, err := tcpAllowDefault(); err != nil {
 		return fmt.Errorf("%s: %w", compat.Describe("TCP_PORT_ALLOW_CIDRS"), err)
 	}
 	return nil
+}
+
+// sessionMaxAge is AVEN_SESSION_MAX_AGE: the absolute lifetime of a login session, as a Go duration
+// ("2160h") or a number of days ("90d"); "off" removes the cap. Unset uses api.DefaultSessionMaxAge.
+func sessionMaxAge() (time.Duration, error) {
+	v := strings.TrimSpace(compat.Env("SESSION_MAX_AGE"))
+	switch {
+	case v == "":
+		return 0, nil
+	case strings.EqualFold(v, "off"):
+		return -1, nil
+	}
+	if days, ok := strings.CutSuffix(v, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("%q is not a number of days (e.g. 90d)", v)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < time.Hour {
+		return 0, fmt.Errorf("%q: use a duration of at least 1h (e.g. 2160h), a number of days (90d) or off", v)
+	}
+	return d, nil
 }
 
 // tcpAllowDefault is AVEN_TCP_PORT_ALLOW_CIDRS: the client allowlist of TCP proxies without their own
@@ -471,7 +498,8 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		Store: st, Agents: hub, Deploy: mgr, Events: bus, Metrics: collector, AdminPassword: password, APIToken: compat.Env("API_TOKEN"),
 		AllowFileRepo: compat.Env("ALLOW_FILE_REPO") != "",
 		SessionKey:    key, SecureCookie: compat.Env("INSECURE_COOKIE") == "",
-		Web: webui.FS(), Version: version, NodeName: hostname, Log: log,
+		SessionMaxAge: mustSessionMaxAge(),
+		Web:           webui.FS(), Version: version, NodeName: hostname, Log: log,
 		GitHubSecret: compat.Env("GITHUB_WEBHOOK_SECRET"), GitHubAPIBase: env("GITHUB_API_URL", "https://api.github.com"),
 		GitHubClientID: compat.Env("GITHUB_CLIENT_ID"), GitHubClientSecret: compat.Env("GITHUB_CLIENT_SECRET"), PublicURL: compat.Env("PUBLIC_URL"),
 		AgentBinDir:        compat.Env("AGENT_BIN_DIR"),
@@ -850,4 +878,10 @@ func stripHeader(header string, next http.Handler) http.Handler {
 func tcpAllowDefaultOrNil() []string {
 	l, _ := tcpAllowDefault()
 	return l
+}
+
+// mustSessionMaxAge is sessionMaxAge after checkEnv has validated it.
+func mustSessionMaxAge() time.Duration {
+	d, _ := sessionMaxAge()
+	return d
 }
