@@ -403,7 +403,8 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		wakeHandler := mgr.WakeHandler()
 		if wakeSecret != "" {
-			wakeHandler = requireHeaderSecret(wakeSecretHeader, wakeSecret, wakeHandler)
+			// The wake handler proxies the request on to the app, so drop the secret once it is checked.
+			wakeHandler = requireHeaderSecret(wakeSecretHeader, wakeSecret, stripHeader(wakeSecretHeader, wakeHandler))
 		}
 		ws := &http.Server{Handler: wakeHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, ws)
@@ -821,6 +822,14 @@ func requireHeaderSecret(header, secret string, next http.Handler) http.Handler 
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// stripHeader removes header from the request before next sees it.
+func stripHeader(header string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del(header)
 		next.ServeHTTP(w, r)
 	})
 }

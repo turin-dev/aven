@@ -153,3 +153,16 @@ func TestRequireHeaderSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestWakeSecretIsNotForwarded(t *testing.T) {
+	var forwarded string
+	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { forwarded = r.Header.Get(wakeSecretHeader) })
+	h := requireHeaderSecret(wakeSecretHeader, "s3cret", stripHeader(wakeSecretHeader, app))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set(wakeSecretHeader, "s3cret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || forwarded != "" {
+		t.Fatalf("status %d, app saw secret %q", w.Code, forwarded)
+	}
+}
