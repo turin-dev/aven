@@ -13,6 +13,7 @@ import {
   isPort,
   normalizeHostInput,
   parseResolved,
+  parseTcpAllow,
   pathRuleProblems,
   shortDuration,
 } from "./validate.ts";
@@ -139,4 +140,10 @@ test("parseResolved reads getent and nslookup output", () => {
   const ns = "Server:\t\t127.0.0.11\nAddress:\t127.0.0.11#53\n\nNon-authoritative answer:\nName:\texample.com\nAddress: 93.184.216.34\nName:\texample.com\nAddress: 2606:2800:220:1:248:1893:25c8:1946\n";
   assert.deepEqual(parseResolved(ns), ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]);
   assert.deepEqual(parseResolved("DNS check unavailable"), []);
+});
+
+test("parseTcpAllow splits on commas, spaces and new lines and flags non-IPv4 entries", () => {
+  assert.deepEqual(parseTcpAllow(" 203.0.113.7,\n10.0.0.0/8  10.0.0.0/8 "), { list: ["203.0.113.7", "10.0.0.0/8"], bad: [] });
+  assert.deepEqual(parseTcpAllow("2001:db8::/32 10.0.0.0/33 office"), { list: ["2001:db8::/32", "10.0.0.0/33", "office"], bad: ["2001:db8::/32", "10.0.0.0/33", "office"] });
+  assert.deepEqual(parseTcpAllow(""), { list: [], bad: [] });
 });
