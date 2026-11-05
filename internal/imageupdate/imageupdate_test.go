@@ -257,3 +257,29 @@ func TestWindows(t *testing.T) {
 		t.Error("Enabled")
 	}
 }
+
+// A transport error on the authenticated retry must come back as an error, not a nil response.
+func TestRegistryBearerRetryTransportError(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			fmt.Fprint(w, `{"token":"registry-token"}`)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer registry-token" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+srvURL(r)+`/token",service="test",scope="repository:acme/app:pull"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close() // drop the connection without a response
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(nil)
+	c.HTTP, c.base = srv.Client(), srv.URL
+	r, _ := Parse("acme/app:latest")
+	if _, err := c.ManifestDigest(context.Background(), r, r.Tag); err == nil {
+		t.Fatal("ManifestDigest succeeded after the registry dropped the connection")
+	}
+}

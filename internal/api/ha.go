@@ -789,7 +789,7 @@ func (s *Server) haCreate(ctx context.Context, c *instCtx, plan *haPlan, counts 
 		if err != nil {
 			s.Log.Warn("ha: tcp proxy for edge", "err", err)
 		} else {
-			edge.TCPProxy = &store.TCPProxy{ContainerPort: edge.Spec.EffectivePort(edge.Variables), PublicPort: port}
+			edge.TCPProxy = &store.TCPProxy{ContainerPort: edge.Spec.EffectivePort(edge.Variables), PublicPort: port, AllowCIDRs: rootIn.TCPProxy.AllowCIDRs}
 			rootIn.TCPProxy = nil
 			saved.TCPProxyMoved = true
 		}
@@ -1293,7 +1293,7 @@ func (s *Server) revertHA(w http.ResponseWriter, r *http.Request) {
 		}
 		if hc.insts[edgeID].TCPProxy != nil && rootIn.TCPProxy == nil {
 			if port, err := s.Deploy.AllocateTCPPortFor(ctx, s.Deploy.HomeNode(ctx, rootIn)); err == nil {
-				rootIn.TCPProxy = &store.TCPProxy{ContainerPort: rootIn.Spec.EffectivePort(rootIn.Variables), PublicPort: port}
+				rootIn.TCPProxy = &store.TCPProxy{ContainerPort: rootIn.Spec.EffectivePort(rootIn.Variables), PublicPort: port, AllowCIDRs: hc.insts[edgeID].TCPProxy.AllowCIDRs}
 			} else {
 				s.Log.Warn("ha: tcp proxy for root", "err", err)
 			}

@@ -109,6 +109,16 @@ const en: Record<string, string> = {
   "이 헤더는 규칙으로 바꿀 수 없습니다": "This header can't be changed by a rule",
   "헤더 값에는 줄바꿈을 쓸 수 없고 2048자까지입니다": "A header value can't contain line breaks and is at most 2048 characters",
   "조건 {n}: {problem}": "Condition {n}: {problem}",
+  "IPv4 주소나 CIDR이 아닙니다: {entries}": "Not an IPv4 address or CIDR: {entries}",
+  "허용 대역은 {max}개까지 넣을 수 있습니다": "You can add up to {max} ranges",
+  "접속을 허용할 IP": "Allowed client IPs",
+  "IPv4 주소나 CIDR을 한 줄에 하나씩 적습니다. 비우면 서버 기본값({list})을 따르고, 0.0.0.0/0은 모든 IP를 허용합니다.":
+    "One IPv4 address or CIDR per line. Leave empty to use the server default ({list}); 0.0.0.0/0 allows every IP.",
+  "IPv4 주소나 CIDR을 한 줄에 하나씩 적습니다. 비우면 모든 IP가 접속할 수 있습니다.":
+    "One IPv4 address or CIDR per line. Leave empty to let every IP connect.",
+  "공개 포트는 그대로 두고 연결할 컨테이너 포트와 허용 IP를 바꿉니다": "Change the container port and allowed IPs; the public port stays the same",
+  "수정에서 접속을 허용할 IP를 정할 수 있습니다.": "Use Edit to allow only specific IPs.",
+  "허용된 IP만 접속할 수 있습니다": "Only allowed IPs can connect",
 };
 
 export default en;

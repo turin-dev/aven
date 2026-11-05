@@ -431,13 +431,6 @@ type serviceDiff struct {
 	Changes     []string `json:"changes"`
 }
 
-func shortVal(v *string) string {
-	if v == nil {
-		return "-"
-	}
-	return *v
-}
-
 func (s *Server) diffPlan(ctx context.Context, env *store.Environment, l *composeLoaded) []serviceDiff {
 	out := []serviceDiff{}
 	for _, sp := range l.plan.Services {

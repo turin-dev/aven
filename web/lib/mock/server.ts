@@ -2845,6 +2845,9 @@ function tcpView(inst: ServiceInstance): InstanceNetworking["tcp_proxy"] {
     container_port: inst.tcp_proxy?.container_port ?? null,
     available: !!host,
     ...(tunnel ? { reason: "이 노드는 공개 IP가 없어 TCP 프록시를 열 수 없습니다" } : {}),
+    allow_cidrs: inst.tcp_proxy?.allow_cidrs ?? [],
+    effective_allow_cidrs: (inst.tcp_proxy?.allow_cidrs ?? []).filter((c) => c !== "0.0.0.0/0"),
+    default_allow_cidrs: [],
   };
 }
 
@@ -2937,9 +2940,18 @@ route("GET", "/services/{sid}/instances/{eid}/private-dns/available", ([sid, eid
 route("PATCH", "/services/{sid}/instances/{eid}/tcp-proxy", ([sid, eid], r) => {
   const inst = getInstance(sid, eid);
   if (!inst.tcp_proxy) throw new HttpError(404, "no tcp proxy");
-  const p = Number((r.body as { container_port?: number })?.container_port);
+  const body = (r.body ?? {}) as { container_port?: number; allow_cidrs?: string[] };
+  if (body.container_port === undefined && body.allow_cidrs === undefined) throw new HttpError(400, "nothing to change: send container_port and/or allow_cidrs");
+  const p = body.container_port === undefined ? inst.tcp_proxy.container_port : Number(body.container_port);
   if (!Number.isInteger(p) || p < 1 || p > 65535) throw new HttpError(400, "container_port must be 1..65535");
-  inst.tcp_proxy = { ...inst.tcp_proxy, container_port: p };
+  let allow = inst.tcp_proxy.allow_cidrs ?? [];
+  if (body.allow_cidrs !== undefined) {
+    const bad = body.allow_cidrs.filter((c) => !/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(c.trim()));
+    if (bad.length) throw new HttpError(400, `allow_cidrs: "${bad[0]}" is not an IP address or CIDR range`);
+    const norm = [...new Set(body.allow_cidrs.map((c) => (c.includes("/") ? c.trim() : `${c.trim()}/32`)))];
+    allow = norm.some((c) => c.endsWith("/0")) ? ["0.0.0.0/0"] : norm;
+  }
+  inst.tcp_proxy = { ...inst.tcp_proxy, container_port: p, allow_cidrs: allow };
   return inst;
 });
 route("DELETE", "/services/{sid}/instances/{eid}/domains/{host}", ([sid, eid, host]) => {

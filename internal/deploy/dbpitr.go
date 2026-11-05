@@ -1118,6 +1118,8 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 	}
 	rs := &PITRRestoreStatus{Status: "running", Step: "준비", TargetTime: at.UTC(), TargetServiceID: target.ServiceID, TargetInstance: target.ID,
 		InPlace: o.InPlace, StartedAt: time.Now().UTC()}
+	// Copy the status before the goroutine starts: from then on it updates rs under pitrJobs.
+	c := *rs
 	pitrJobs.Lock()
 	pitrJobs.restores[src.ID] = rs
 	pitrJobs.Unlock()
@@ -1149,7 +1151,6 @@ func (m *Manager) RestorePITR(ctx context.Context, src, target *store.Instance, 
 			}
 		}
 	}()
-	c := *rs
 	return &c, nil
 }
 

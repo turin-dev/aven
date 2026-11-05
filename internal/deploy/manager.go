@@ -73,6 +73,9 @@ type Config struct {
 	WakeSecret       string // 로컬 TCP wake handler의 요청 인증 비밀(Windows host)
 	TCPPortMin       int
 	TCPPortMax       int
+	// TCPAllowDefault is the client allowlist of TCP proxies that have none of their own
+	// (AVEN_TCP_PORT_ALLOW_CIDRS, normalized). Empty admits everyone.
+	TCPAllowDefault []string
 	// PrivateAddress는 로컬 노드의 사설 주소(KEEL_PRIVATE_ADDRESS, Tailscale/WireGuard)다. mesh gateway가 여기서만 listen한다.
 	PrivateAddress string
 	Mesh           string // KEEL_MESH: on | off | auto(기본: 사설 IP가 있으면 켠다)

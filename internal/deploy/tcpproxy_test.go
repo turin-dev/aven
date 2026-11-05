@@ -3,12 +3,14 @@ package deploy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
+	"github.com/turin-dev/aven/internal/node"
 	"github.com/turin-dev/aven/internal/store"
 )
 
@@ -155,4 +157,55 @@ func TestTCPProxyEndpoint(t *testing.T) {
 	check("local env wins", on(store.LocalNodeID), "env.example.com", true)
 	t.Setenv("KEEL_INGRESS_MODE", store.IngressCloudflareTunnel)
 	check("local tunnel (env)", on(store.LocalNodeID), "", false)
+}
+
+// tcpHub records tcpproxy.ensure requests; old refuses allow_cidrs like an agent built before it.
+type tcpHub struct {
+	old  bool
+	reqs []agentprotocol.TCPProxyRequest
+}
+
+func (h *tcpHub) Online(string) bool                                         { return true }
+func (h *tcpHub) Reply(context.Context, string, agentprotocol.Message) error { return nil }
+func (h *tcpHub) CallStream(_ context.Context, _, op string, req, _ any, _ func(json.RawMessage)) error {
+	r := req.(agentprotocol.TCPProxyRequest)
+	if h.old && len(r.AllowCIDRs) > 0 {
+		return &agentErr{`invalid payload: json: unknown field "allow_cidrs"`}
+	}
+	h.reqs = append(h.reqs, r)
+	return nil
+}
+
+func TestTCPAllowRemote(t *testing.T) {
+	m, _, _ := tcpFixture(t)
+	req := agentprotocol.TCPProxyRequest{InstanceID: "ins_abcd", AllowCIDRs: []string{"10.0.0.0/8"}}
+
+	m.Agents = &tcpHub{old: true}
+	err := m.tcpEnsureRemote(context.Background(), "nod_x", req)
+	if !errors.Is(err, node.ErrTCPAllowUnsupported) {
+		t.Fatalf("old agent with a list: %v, want ErrTCPAllowUnsupported", err)
+	}
+	if got := m.Agents.(*tcpHub).reqs; len(got) != 0 {
+		t.Fatalf("an open proxy was requested as a fallback: %+v", got)
+	}
+	// An old agent still serves proxies without a list.
+	if err := m.tcpEnsureRemote(context.Background(), "nod_x", agentprotocol.TCPProxyRequest{InstanceID: "ins_abcd"}); err != nil {
+		t.Fatalf("old agent without a list: %v", err)
+	}
+
+	hub := &tcpHub{}
+	m.Agents = hub
+	if err := m.tcpEnsureRemote(context.Background(), "nod_x", req); err != nil || len(hub.reqs) != 1 || hub.reqs[0].AllowCIDRs[0] != "10.0.0.0/8" {
+		t.Fatalf("new agent: %v %+v", err, hub.reqs)
+	}
+}
+
+func TestTCPAllowForUsesDefault(t *testing.T) {
+	m := &Manager{Cfg: Config{TCPAllowDefault: []string{"192.0.2.0/24"}}}
+	if got := m.TCPAllowFor(&store.TCPProxy{}); len(got) != 1 || got[0] != "192.0.2.0/24" {
+		t.Errorf("default: %v", got)
+	}
+	if got := m.TCPAllowFor(&store.TCPProxy{AllowCIDRs: []string{node.TCPAllowAll}}); len(got) != 1 || got[0] != node.TCPAllowAll {
+		t.Errorf("explicit allow-all: %v", got)
+	}
 }

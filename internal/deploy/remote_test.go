@@ -137,7 +137,6 @@ func TestRemoteImportAbortsWhenFinishFails(t *testing.T) {
 // memDriver는 볼륨 복사 테스트용 Driver다.
 type memDriver struct {
 	Driver
-	name       string
 	vols       map[string][]byte
 	ensured    []string
 	removed    []string

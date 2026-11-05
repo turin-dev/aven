@@ -26,7 +26,7 @@ Restart-Service AvenServer
 Get-Content "$env:ProgramData\Aven\logs\aven-server.log" -Wait
 ```
 
-The installer allows inbound TCP 80 and 443 plus UDP 443 for QUIC, and limits the API, proxy-to-server route, trace receiver, and app-wake ports (7070, 7071, 4318, 5381) to local subnets. If you enable TCP proxying, also allow the configured public port range (20,000–29,999 by default) in Windows Firewall and your network firewall. Configure public DNS for the dashboard and wildcard service domain as described in the [self-hosting guide](self-hosting.md).
+The installer allows inbound TCP 80 and 443 plus UDP 443 for QUIC, and limits the proxy-to-server route, trace receiver, and app-wake ports (7071, 4318, 5381) to local subnets; each of them refuses requests without its secret header or token. The plain-HTTP dashboard port (7070) listens on loopback (`127.0.0.1`) only. If an older install's `aven.env` still has `AVEN_LISTEN=0.0.0.0:7070`, change it to `127.0.0.1:7070` and restart the service. If you enable TCP proxying, also allow the configured public port range (20,000–29,999 by default) in Windows Firewall and your network firewall. Configure public DNS for the dashboard and wildcard service domain as described in the [self-hosting guide](self-hosting.md).
 
 ## Windows-specific limits
 

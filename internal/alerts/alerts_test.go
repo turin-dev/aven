@@ -144,7 +144,9 @@ func TestSourcesValues(t *testing.T) {
 	if err := st.CreateVolume(ctx, vol); err != nil {
 		t.Fatal(err)
 	}
-	vol, _ = st.GetVolume(ctx, vol.ID)
+	if got, err := st.GetVolume(ctx, vol.ID); err != nil || got.SizeLimitMB == nil || *got.SizeLimitMB != limit {
+		t.Fatalf("volume: %+v %v", got, err)
+	}
 	ts := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339Nano) }
 	logs := []proxy.AccessLog{{T: ts(-10 * time.Minute), Status: 500, DurationMS: 9999}}
 	for i := 1; i <= 20; i++ {
