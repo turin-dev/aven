@@ -66,6 +66,11 @@ type tcpProxyView struct {
 	ContainerPort *int   `json:"container_port"`
 	Available     bool   `json:"available"`
 	Reason        string `json:"reason,omitempty"`
+	// AllowCIDRs is this proxy's own client allowlist ([] = use the default, ["0.0.0.0/0"] = everyone).
+	// EffectiveAllowCIDRs is what the proxy enforces ([] = everyone); DefaultAllowCIDRs is AVEN_TCP_PORT_ALLOW_CIDRS.
+	AllowCIDRs          []string `json:"allow_cidrs"`
+	EffectiveAllowCIDRs []string `json:"effective_allow_cidrs"`
+	DefaultAllowCIDRs   []string `json:"default_allow_cidrs"`
 }
 
 type privateView struct {
@@ -451,10 +456,16 @@ func (s *Server) tcpProxyInfo(ctx context.Context, in *store.Instance) tcpProxyV
 	if !v.Available {
 		v.Reason = tcpNoPublicIPReason
 	}
+	v.AllowCIDRs, v.EffectiveAllowCIDRs = []string{}, []string{}
+	v.DefaultAllowCIDRs = append([]string{}, s.Deploy.Cfg.TCPAllowDefault...)
 	if t := in.TCPProxy; t != nil {
 		v.Enabled = true
 		pub, cp := t.PublicPort, t.ContainerPort
 		v.PublicPort, v.ContainerPort = &pub, &cp
+		v.AllowCIDRs = append(v.AllowCIDRs, t.AllowCIDRs...)
+		if eff := s.Deploy.TCPAllowFor(t); !(len(eff) == 1 && eff[0] == node.TCPAllowAll) {
+			v.EffectiveAllowCIDRs = append(v.EffectiveAllowCIDRs, eff...)
+		}
 	}
 	return v
 }

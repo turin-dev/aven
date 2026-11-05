@@ -144,7 +144,18 @@ func checkEnv(listen string) error {
 	if _, err := parsePrefixes(compat.Env("TRUSTED_PROXIES")); err != nil {
 		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
 	}
+	if _, err := tcpAllowDefault(); err != nil {
+		return fmt.Errorf("%s: %w", compat.Describe("TCP_PORT_ALLOW_CIDRS"), err)
+	}
 	return nil
+}
+
+// tcpAllowDefault is AVEN_TCP_PORT_ALLOW_CIDRS: the client allowlist of TCP proxies without their own
+// (IPv4 addresses or CIDRs separated by commas or spaces).
+func tcpAllowDefault() ([]string, error) {
+	return node.NormalizeTCPAllowCIDRs(strings.FieldsFunc(compat.Env("TCP_PORT_ALLOW_CIDRS"), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}))
 }
 
 func run(log *slog.Logger, listen, dataDir string) (err error) {
@@ -305,6 +316,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		RailpackFrontend:   env("RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"),
 		TCPPortMin:         envInt("TCP_PORT_MIN", 20000),
 		TCPPortMax:         envInt("TCP_PORT_MAX", 29999),
+		TCPAllowDefault:    tcpAllowDefaultOrNil(),
 		PrivateAddress:     strings.TrimSpace(compat.Env("PRIVATE_ADDRESS")),
 		Mesh:               env("MESH", "auto"),
 		MeshPort:           envInt("MESH_PORT", 7443),
@@ -832,4 +844,10 @@ func stripHeader(header string, next http.Handler) http.Handler {
 		r.Header.Del(header)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// tcpAllowDefaultOrNil is tcpAllowDefault after checkEnv has validated it.
+func tcpAllowDefaultOrNil() []string {
+	l, _ := tcpAllowDefault()
+	return l
 }

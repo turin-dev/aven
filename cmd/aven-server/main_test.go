@@ -29,9 +29,11 @@ func TestCheckEnv(t *testing.T) {
 		{"bad proxies", map[string]string{"KEEL_ADMIN_PASSWORD": "long-enough", "KEEL_TRUSTED_PROXIES": "10.0.0.0/8,nope"}, ":7070", "KEEL_TRUSTED_PROXIES"},
 		{"new name", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough"}, "[::1]:7070", ""},
 		{"new name short", map[string]string{"AVEN_ADMIN_PASSWORD": "short"}, "[::1]:7070", "AVEN_ADMIN_PASSWORD"},
+		{"tcp allowlist", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_TCP_PORT_ALLOW_CIDRS": "10.0.0.0/8, 203.0.113.7"}, "[::1]:7070", ""},
+		{"bad tcp allowlist", map[string]string{"AVEN_ADMIN_PASSWORD": "long-enough", "AVEN_TCP_PORT_ALLOW_CIDRS": "10.0.0.0/8,nope"}, "[::1]:7070", "TCP_PORT_ALLOW_CIDRS"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{"AVEN_ADMIN_PASSWORD", "AVEN_TLS_CERT", "AVEN_TLS_KEY", "AVEN_TRUSTED_PROXIES", "KEEL_ADMIN_PASSWORD", "KEEL_TLS_CERT", "KEEL_TLS_KEY", "KEEL_TRUSTED_PROXIES"} {
+			for _, k := range []string{"AVEN_ADMIN_PASSWORD", "AVEN_TLS_CERT", "AVEN_TLS_KEY", "AVEN_TRUSTED_PROXIES", "KEEL_ADMIN_PASSWORD", "KEEL_TLS_CERT", "KEEL_TLS_KEY", "KEEL_TRUSTED_PROXIES", "AVEN_TCP_PORT_ALLOW_CIDRS", "KEEL_TCP_PORT_ALLOW_CIDRS"} {
 				t.Setenv(k, tc.env[k])
 			}
 			err := checkEnv(tc.listen)

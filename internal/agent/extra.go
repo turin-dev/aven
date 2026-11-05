@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +68,13 @@ func ValidateTCPProxy(r agentprotocol.TCPProxyRequest) error {
 	if r.ContainerPort < 1 || r.ContainerPort > 65535 {
 		return errors.New("container port must be 1..65535")
 	}
+	allow, err := node.NormalizeTCPAllowCIDRs(r.AllowCIDRs)
+	if err != nil {
+		return fmt.Errorf("allow_cidrs: %w", err)
+	}
+	if !slices.Equal(allow, r.AllowCIDRs) && len(r.AllowCIDRs) > 0 {
+		return errors.New("allow_cidrs must be normalized IPv4 CIDRs")
+	}
 	return nil
 }
 
@@ -93,7 +101,8 @@ func (h *Handler) tcpEnsure(ctx context.Context, r agentprotocol.TCPProxyRequest
 		return err
 	}
 	next, prev := tcpName(r.InstanceID)
-	sig := fmt.Sprintf("%d:%d:%s", r.PublicPort, r.ContainerPort, r.Target)
+	fwd := node.TCPForward{Port: r.ContainerPort, Target: r.Target, Allow: r.AllowCIDRs}
+	sig := fwd.Signature(r.PublicPort)
 	states, err := h.Docker.InspectMany(ctx, []string{next, prev})
 	if err != nil {
 		return err
@@ -123,8 +132,8 @@ func (h *Handler) tcpEnsure(ctx context.Context, r agentprotocol.TCPProxyRequest
 		Labels: map[string]string{node.LabelManaged: "true", node.LabelRole: node.RoleTCPProxy, node.LabelInstance: r.InstanceID,
 			node.LabelEnv: r.EnvID, node.LabelProject: r.ProjectID, "aven.tcp": sig, "keel.tcp": sig},
 		Publish: []string{h.tcpPublish(r.PublicPort, r.ContainerPort)},
-		Cmd: []string{fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", r.ContainerPort),
-			fmt.Sprintf("TCP:%s:%d", r.Target, r.ContainerPort)},
+		Env:     fwd.Env(),
+		Cmd:     fwd.Cmd(),
 	})
 }
 
