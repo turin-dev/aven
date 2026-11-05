@@ -179,7 +179,7 @@ AI coding agents were used substantially in development. Changes went through hu
 
 **Networking**
 - Generated and custom domains with automatic TLS through a managed Caddy proxy, path rules, redirects, basic auth and wildcard domains.
-- IPv6 first: optional per-domain public IPv6 addresses, outbound IPv6 control and TCP proxies for databases and other raw TCP services.
+- IPv6 first: optional per-domain public IPv6 addresses, outbound IPv6 control and TCP proxies for databases and other raw TCP services, with an optional client IP allowlist per proxy.
 - Private DNS names between services, also across servers over an encrypted mesh (Tailscale or WireGuard addresses).
 - Edge caching, WAF rules and Cloudflare Tunnel ingress.
 
