@@ -12,9 +12,7 @@ func applyComposeRun(s *node.RunSpec, sp *store.Spec) {
 	if c == nil {
 		return
 	}
-	for _, a := range c.Aliases {
-		s.Aliases = append(s.Aliases, a)
-	}
+	s.Aliases = append(s.Aliases, c.Aliases...)
 	for k, v := range c.Labels {
 		if _, taken := s.Labels[k]; !taken {
 			s.Labels[k] = v
