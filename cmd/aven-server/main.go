@@ -383,16 +383,16 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 	} else if mgr.LocalMesh != nil {
 		log.Info("mesh gateway enabled", "listen", mgr.LocalMesh.Listen)
 	}
-	bg.Go(func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
-	bg.Go(func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
-	bg.Go(func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
+	goLoop(&bg, ctx, log, "reconcile", func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
+	goLoop(&bg, ctx, log, "egress", func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
+	goLoop(&bg, ctx, log, "domain-ipv6", func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
 	if runtime.GOOS != "windows" && !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)
 	}
-	bg.Go(func() { mgr.WatchCrashes(ctx) })
-	bg.Go(func() { mgr.CronLoop(ctx) })
-	bg.Go(func() { mgr.ImageUpdateLoop(ctx) })
+	goLoop(&bg, ctx, log, "watch-crashes", func() { mgr.WatchCrashes(ctx) })
+	goLoop(&bg, ctx, log, "cron", func() { mgr.CronLoop(ctx) })
+	goLoop(&bg, ctx, log, "image-updates", func() { mgr.ImageUpdateLoop(ctx) })
 	// wake handler: keel-proxy와 같이 쓰는 볼륨의 unix socket에서만 listen한다(외부에 열지 않음).
 	if wl, err := listenWake(ctx, docker, caddy); err != nil {
 		log.Warn("wake handler disabled (sleeping services cannot wake)", "err", err)
@@ -411,8 +411,8 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		go ws.Serve(wl)
 		log.Info("wake handler listening", "addr", wl.Addr().String())
 	}
-	bg.Go(func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
-	bg.Go(func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
+	goLoop(&bg, ctx, log, "sleep", func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
+	goLoop(&bg, ctx, log, "access-logs", func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
 	collector := &metrics.Collector{Store: st, Docker: docker, Log: log, DataDir: dataDir, Events: bus, RemoteNodes: func(ctx context.Context) []metrics.NodeSource {
 		var out []metrics.NodeSource
 		for _, id := range mgr.OnlineRemoteNodeIDs(ctx) {
@@ -430,14 +430,14 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		return out
 	}}
-	bg.Go(func() { collector.Run(ctx) })
+	goLoop(&bg, ctx, log, "metrics", func() { collector.Run(ctx) })
 	// 지표 알림 규칙(30초마다)과 시간별 사용량 집계(매시, 놓친 시간은 보관 중인 지표로 채운다).
 	sources := &alerts.Sources{Store: st, HTTP: mgr.HTTPLogs.Window, Restarts: mgr.InstanceRestarts, VolumeSize: collector.VolumeSize}
-	bg.Go(func() { (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx) })
+	goLoop(&bg, ctx, log, "alerts", func() { (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx) })
 	// 수평 자동 확장(30초마다, 최근 2분 지표 평균으로 HPA 방식 계산).
-	bg.Go(func() { mgr.AutoscaleLoop(ctx) })
-	bg.Go(func() { (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx) })
-	bg.Go(func() {
+	goLoop(&bg, ctx, log, "autoscale", func() { mgr.AutoscaleLoop(ctx) })
+	goLoop(&bg, ctx, log, "usage", func() { (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx) })
+	goLoop(&bg, ctx, log, "prune", func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
@@ -467,10 +467,10 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		Notifier:           notifier, Pricing: pricing,
 		Traces: traceReceiver,
 	}
-	bg.Go(func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
+	goLoop(&bg, ctx, log, "trace-retention", func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
 	trusted, _ := parsePrefixes(compat.Env("TRUSTED_PROXIES")) // checked by checkEnv
 	srv.TrustedProxies = trusted
-	bg.Go(func() { srv.RunHA(ctx) }) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
+	goLoop(&bg, ctx, log, "ha", func() { srv.RunHA(ctx) }) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
 	// 공개 도메인 상태 확인(DNS 분류, Cloudflare/터널 감지, 소유 확인, 인증서): 60초마다, 검증된 도메인은 최대 10분까지 간격을 늘린다.
 	domainChecker := &netcheck.Checker{Store: st, Targets: srv.NetCheckTargets, CheckCerts: true, Log: log}
 	// 확인 전 신규 도메인이 검증되면 라우트를 다시 보내 ACME 보류(on-demand)를 풀고 관리 정책으로 옮긴다(원격 노드 포함).
@@ -483,7 +483,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}()
 	}
 	srv.SetNetCheck(domainChecker)
-	bg.Go(func() { domainChecker.Run(ctx) })
+	goLoop(&bg, ctx, log, "domain-check", func() { domainChecker.Run(ctx) })
 	// 옛 Bearer 비밀키 agent는 기본 허용(첫 인증서 연결 때 자동 업그레이드).
 	srv.CA = agentCA
 	srv.DisableLegacyAgents = compat.Env("AGENT_LEGACY_BEARER") == "off"
@@ -502,9 +502,9 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 	}
 	handler := srv.Handler()
-	bg.Go(func() { srv.SandboxLoop(ctx) })
+	goLoop(&bg, ctx, log, "sandboxes", func() { srv.SandboxLoop(ctx) })
 	if runtime.GOOS != "windows" {
-		bg.Go(func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
+		goLoop(&bg, ctx, log, "self-update", func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
 	}
 	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 	// OTLP 수신기(OTLP/HTTP + h2c OTLP/gRPC). 컨테이너가 host-gateway로 닿아야 하므로 기본은 모든 주소다.
