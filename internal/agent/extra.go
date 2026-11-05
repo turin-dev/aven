@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -597,13 +596,7 @@ func (h *Handler) WakeHandler() http.Handler {
 			http.Error(w, "no running replica", http.StatusBadGateway)
 			return
 		}
-		rp := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: net.JoinHostPort(ips[0], strconv.Itoa(res.Port))})
-		orig := rp.Director
-		rp.Director = func(req *http.Request) {
-			orig(req)
-			req.Host = r.Host
-		}
-		rp.ServeHTTP(w, r)
+		proxy.WakeReverseProxy(&url.URL{Scheme: "http", Host: net.JoinHostPort(ips[0], strconv.Itoa(res.Port))}).ServeHTTP(w, r)
 	})
 }
 
