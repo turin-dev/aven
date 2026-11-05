@@ -384,7 +384,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		log.Info("mesh gateway enabled", "listen", mgr.LocalMesh.Listen)
 	}
 	goLoop(&bg, ctx, log, "reconcile", func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
-	goLoop(&bg, ctx, log, "egress", func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
+	goLoop(&bg, ctx, log, "egress", func() { mgr.EgressLoop(ctx, 30*time.Second) })       // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
 	goLoop(&bg, ctx, log, "domain-ipv6", func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
 	if runtime.GOOS != "windows" && !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
