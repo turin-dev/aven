@@ -574,9 +574,14 @@ func TestOAuthClientAuthAndPKCE(t *testing.T) {
 		return url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {oauthTestRedirect}, "code_verifier": {oauthTestVerifier}}
 	}
 	code := codeFor(pkce())
+	// The secret is random, so it can already end in "AA"; pick a suffix that is sure to differ.
+	wrongSecret := f.secret[:len(f.secret)-2] + "AA"
+	if wrongSecret == f.secret {
+		wrongSecret = f.secret[:len(f.secret)-2] + "BA"
+	}
 	// 잘못된 client 인증은 401 invalid_client이고 코드는 소모되지 않는다.
 	for name, w := range map[string]*httptest.ResponseRecorder{
-		"wrong secret":   tokenReq(f.h, form(code), f.clientID, f.secret[:len(f.secret)-2]+"AA"),
+		"wrong secret":   tokenReq(f.h, form(code), f.clientID, wrongSecret),
 		"no secret":      tokenReq(f.h, merge(form(code), url.Values{"client_id": {f.clientID}}), "", ""),
 		"basic and post": tokenReq(f.h, merge(form(code), url.Values{"client_secret": {f.secret}}), f.clientID, f.secret),
 		"other client":   tokenReq(f.h, form(code), f.publicID, ""),
