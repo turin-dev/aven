@@ -74,9 +74,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeLog()
+	// The dashboard listener speaks plain HTTP, so it stays on loopback by default on every platform.
+	// On Windows, Docker Desktop forwards host.docker.internal to the host's loopback, so containers still reach it.
 	defaultListen := "[::1]:7070"
 	if runtime.GOOS == "windows" {
-		defaultListen = "0.0.0.0:7070"
+		defaultListen = "127.0.0.1:7070"
 	}
 	listen := flag.String("listen", env("LISTEN", defaultListen), "API/UI listen address")
 	dataDir := flag.String("data", env("DATA", compat.DefaultDataDir()), "data directory (AVEN_DATA)")
@@ -401,7 +403,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		wakeHandler := mgr.WakeHandler()
 		if wakeSecret != "" {
-			wakeHandler = requireWakeSecret(wakeSecret, wakeHandler)
+			wakeHandler = requireHeaderSecret(wakeSecretHeader, wakeSecret, wakeHandler)
 		}
 		ws := &http.Server{Handler: wakeHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, ws)
@@ -563,7 +565,10 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		if err != nil {
 			return fmt.Errorf("self route listener: %w", err)
 		}
-		selfServer := &http.Server{Handler: api.ViaGateway(selfSecret, handler), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		// Unlike the Linux unix socket, this TCP port can be reached from the network, so a request
+		// without the proxy's secret header is refused instead of being served as an untrusted client.
+		selfHandler := requireHeaderSecret(api.GatewayHeader, selfSecret, api.ViaGateway(selfSecret, handler))
+		selfServer := &http.Server{Handler: selfHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, selfServer)
 		go selfServer.Serve(selfListener)
 		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "addr", proxy.NativeSelfListen)
@@ -805,10 +810,14 @@ func listenWake(ctx context.Context, docker *node.Docker, caddy *proxy.Caddy) (n
 	return l, nil
 }
 
-func requireWakeSecret(secret string, next http.Handler) http.Handler {
+// wakeSecretHeader carries the wake handler secret from Caddy when the wake handler listens on TCP (Windows).
+const wakeSecretHeader = "X-Aven-Wake-Secret"
+
+// requireHeaderSecret refuses requests whose header does not carry secret. An empty secret refuses everything.
+func requireHeaderSecret(header, secret string, next http.Handler) http.Handler {
 	want := []byte(secret)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Aven-Wake-Secret")), want) != 1 {
+		if secret == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get(header)), want) != 1 {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}

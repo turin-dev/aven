@@ -26,7 +26,7 @@ Restart-Service AvenServer
 Get-Content "$env:ProgramData\Aven\logs\aven-server.log" -Wait
 ```
 
-방화벽은 TCP 80·443과 QUIC용 UDP 443을 허용하고 API, proxy 전용 서버 경로, trace 수신기, 앱 깨우기 포트(7070, 7071, 4318, 5381)는 로컬 서브넷으로 제한합니다. TCP proxy를 켜면 설정한 공개 포트 범위(기본 20000–29999)를 Windows와 네트워크 방화벽에서도 허용해야 합니다. 대시보드와 와일드카드 서비스 도메인의 DNS는 [셀프 호스팅 가이드](self-hosting.ko.md)를 참고하세요.
+방화벽은 TCP 80·443과 QUIC용 UDP 443을 허용하고 proxy 전용 서버 경로, trace 수신기, 앱 깨우기 포트(7071, 4318, 5381)는 로컬 서브넷으로 제한합니다. 이 세 포트는 각각 비밀 헤더나 토큰이 없는 요청을 거부합니다. 평문 HTTP인 대시보드(7070)는 루프백(`127.0.0.1`)에서만 받습니다. 예전 설치의 `aven.env`에 `AVEN_LISTEN=0.0.0.0:7070`이 남아 있으면 `127.0.0.1:7070`으로 바꾸고 서비스를 다시 시작하세요. TCP proxy를 켜면 설정한 공개 포트 범위(기본 20000–29999)를 Windows와 네트워크 방화벽에서도 허용해야 합니다. 대시보드와 와일드카드 서비스 도메인의 DNS는 [셀프 호스팅 가이드](self-hosting.ko.md)를 참고하세요.
 
 ## Windows 호스트 제한
 

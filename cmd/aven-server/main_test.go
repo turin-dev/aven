@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -123,5 +124,32 @@ func TestWaitTimeout(t *testing.T) {
 	close(block)
 	if !waitTimeout(&wg, time.Second) {
 		t.Error("finished group")
+	}
+}
+
+func TestRequireHeaderSecret(t *testing.T) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	cases := []struct {
+		name, secret, sent string
+		want               int
+	}{
+		{"matching secret", "s3cret", "s3cret", http.StatusNoContent},
+		{"missing header", "s3cret", "", http.StatusForbidden},
+		{"wrong secret", "s3cret", "s3cre", http.StatusForbidden},
+		{"empty secret refuses all", "", "", http.StatusForbidden},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := requireHeaderSecret("X-Test-Secret", c.secret, ok)
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			if c.sent != "" {
+				r.Header.Set("X-Test-Secret", c.sent)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != c.want {
+				t.Fatalf("status = %d, want %d", w.Code, c.want)
+			}
+		})
 	}
 }
