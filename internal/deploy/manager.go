@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentpki"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/config"
 	"github.com/turin-dev/aven/internal/cronx"
 	"github.com/turin-dev/aven/internal/events"
@@ -1234,6 +1235,10 @@ func (m *Manager) build(ctx context.Context, t *Target, d *store.Deployment, b *
 // buildLocalImage는 로컬 노드에서 root(config-as-code가 이미 반영된 소스)를 builder로 빌드해 image를 만든다.
 // srcDir는 소스 전체(clone 위치)이고 root는 그 안의 root_dir이다. 링크로 srcDir 밖의 파일을 읽지 않는다(srcpath.go).
 // d는 읽기만 한다(placement의 다른 노드 빌드와 동시에 불릴 수 있다). 실제로 쓴 builder를 돌려준다.
+func errRailpackMissing() error {
+	return fmt.Errorf("railpack을 찾을 수 없습니다 (%s)", compat.Describe("RAILPACK_BIN"))
+}
+
 func (m *Manager) buildLocalImage(ctx context.Context, t *Target, d *store.Deployment, b *logbook.Book, srcDir, root, workDir, builder, image string) (string, error) {
 	// 빌드에도 변수를 넘긴다(Dockerfile ARG / railpack secret).
 	res, err := m.Resolve(ctx, t.Instance, &Override{InstanceID: t.Instance.ID, Vars: d.VarsRaw, Spec: &d.Spec, Deployment: d})
@@ -1272,7 +1277,7 @@ func (m *Manager) buildLocalImage(ctx context.Context, t *Target, d *store.Deplo
 		flush()
 	case "railpack":
 		if m.Cfg.Railpack == "" {
-			return "", errors.New("railpack을 찾을 수 없습니다 (KEEL_RAILPACK_BIN)")
+			return "", errRailpackMissing()
 		}
 		b.Printf("railpack prepare + buildx (frontend %s)", m.Cfg.RailpackFrontend)
 		if err := stripEscapingLinks(srcDir, root, b); err != nil {
