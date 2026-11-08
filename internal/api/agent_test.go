@@ -19,6 +19,44 @@ import (
 	"github.com/turin-dev/aven/internal/store"
 )
 
+func TestJoinTokenNamesCurrentPublicURLSetting(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	s := &Server{Store: st, APIToken: "admin-test-token", PublicURL: "http://aven.example.com", AdminPassword: "password123", SessionKey: make([]byte, 32), Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	req := httptest.NewRequest(http.MethodPost, "/api/nodes/join-tokens", strings.NewReader(`{"name":"edge"}`))
+	req.Header.Set("Authorization", "Bearer admin-test-token")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != 503 {
+		t.Fatalf("join HTTP %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	aven := strings.Index(body, "AVEN_PUBLIC_URL")
+	keel := strings.Index(body, "KEEL_PUBLIC_URL")
+	if aven < 0 || keel < 0 || aven > keel {
+		t.Fatalf("body should name AVEN_PUBLIC_URL before the old name: %s", body)
+	}
+}
+
+func TestGitHubWebhookNamesCurrentSecretSetting(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodPost, "/api/webhooks/github", nil)
+	w := httptest.NewRecorder()
+	s.githubWebhook(w, req)
+	body := w.Body.String()
+	if w.Code != 403 {
+		t.Fatalf("webhook HTTP %d: %s", w.Code, body)
+	}
+	aven := strings.Index(body, "AVEN_GITHUB_WEBHOOK_SECRET")
+	keel := strings.Index(body, "KEEL_GITHUB_WEBHOOK_SECRET")
+	if aven < 0 || keel < 0 || aven > keel {
+		t.Fatalf("body should name AVEN_GITHUB_WEBHOOK_SECRET before the old name: %s", body)
+	}
+}
+
 func TestAgentJoinAndAuthenticatedOutboundConnection(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "agent.db"))
 	if err != nil {

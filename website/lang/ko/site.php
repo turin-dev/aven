@@ -2,7 +2,7 @@
 
 return [
     'title' => 'Aven: 내 서버에 올리는 나만의 PaaS',
-    'description' => 'Aven은 앱, 데이터베이스, 백그라운드 작업을 위한 오픈소스 셀프호스트 플랫폼입니다. 저장소를 연결하면 TLS 도메인이 붙고, Postgres는 클릭 한 번이면 됩니다.',
+    'description' => 'Aven은 앱과 데이터베이스를 위한 오픈소스 셀프호스트 플랫폼입니다. 직접 운영하는 Linux 서버에서 저장소를 연결하고, 도메인에 TLS를 붙이고, 캔버스에서 Postgres를 추가합니다.',
 
     'nav' => [
         'features' => '기능',
@@ -15,7 +15,7 @@ return [
 
     'hero' => [
         'title' => '내 서버에 올리는 나만의 PaaS.',
-        'lead' => '저장소를 연결하면 TLS 도메인이 붙고, Postgres는 클릭 한 번이면 됩니다. Aven은 오픈소스이고 Docker가 있는 Linux 서버면 어디서든 돕니다.',
+        'lead' => '저장소를 연결하고, 도메인에 TLS를 붙이고, 캔버스에서 Postgres를 추가합니다. Aven은 오픈소스입니다. systemd와 Docker가 있는, 직접 운영하는 Linux 서버에서 돕니다.',
         'primary' => 'Aven 설치하기',
         'secondary' => 'GitHub에서 Star',
         'copy' => '복사',
@@ -38,12 +38,12 @@ return [
             'key' => 'deploy',
             'title' => '푸시하면 바로 배포',
             'text' => 'GitHub 저장소를 연결하세요. 푸시할 때마다 Dockerfile이나 Railpack으로 빌드하고, 헬스체크를 통과하면 중단 없이 트래픽을 넘깁니다. PR마다 미리보기 환경도 따로 생깁니다.',
-            'points' => ['Dockerfile 또는 Railpack, 설정 없이', '무중단 전환, 클릭 한 번으로 롤백', 'PR마다 미리보기 환경'],
+            'points' => ['Dockerfile 또는 Railpack, 설정 없이', '무중단 전환, 배포 기록에서 롤백', 'PR마다 미리보기 환경'],
         ],
         [
             'key' => 'data',
             'title' => '알아서 관리되는 데이터베이스',
-            'text' => '앱 옆에 PostgreSQL, MySQL, Redis, MongoDB를 띄우세요. 접속 주소는 변수로 자동 연결되고, 백업은 S3에 쌓입니다.',
+            'text' => '앱 옆에 PostgreSQL, MySQL, Redis, MongoDB를 띄우세요. 접속 주소는 변수로 넣을 수 있습니다. S3 호환 저장소로의 백업은 켜기 전에는 쌓이지 않습니다.',
             'points' => ['Postgres, MySQL 시점 복구', 'PgBouncer, 메이저 버전 업그레이드, HA 클러스터', 'S3 호환 버킷'],
         ],
         [
@@ -62,7 +62,7 @@ return [
 
     'also' => [
         'title' => '그 밖에 들어 있는 것',
-        'items' => ['cron 작업', '유휴 앱 슬립', '봉인 변수', '로그와 메트릭', 'OpenTelemetry 트레이스', 'Slack, Discord 알림', '패스키, 2FA', 'SAML SSO', '감사 로그', 'REST, GraphQL API', 'MCP 서버', '코드형 인프라', 'railway.json 지원', 'Dokploy에서 가져오기'],
+        'items' => ['cron 작업(실험적)', '유휴 앱 슬립(실험적)', '봉인 변수', '로그와 메트릭', 'OpenTelemetry 트레이스', 'Slack, Discord 알림', '패스키, 2FA', 'SAML SSO', '감사 로그', 'REST, GraphQL API', 'MCP 서버', '코드형 인프라', 'railway.json 지원', 'Dokploy에서 가져오기'],
     ],
 
     'compare' => [
@@ -74,6 +74,7 @@ return [
 
     'shots' => [
         'title' => '대시보드',
+        'note' => '웹 대시보드는 실험적입니다. 화면은 이 저장소에 있고, web/에는 컴포넌트 테스트나 종단간 테스트가 없습니다.',
         'items' => [
             ['img' => 'canvas', 'name' => '캔버스', 'alt' => '서비스와 데이터베이스가 놓인 Aven 캔버스'],
             ['img' => 'deployments', 'name' => '배포', 'alt' => '활성 배포와 기록이 보이는 서비스 패널'],
@@ -83,8 +84,8 @@ return [
     ],
 
     'install' => [
-        'title' => '몇 분이면 끝나는 설치',
-        'lead' => 'Docker가 있고 80, 443 포트가 비어 있는 Linux 서버(amd64, arm64)가 필요합니다.',
+        'title' => '서버에 설치',
+        'lead' => 'systemd와 Docker가 있고 80·443 포트가 비어 있는 Linux 서버(amd64, arm64)가 필요합니다. 자동 TLS에는 도메인과 DNS 레코드도 필요합니다. 서버와 도메인 비용은 따로 냅니다.',
         'steps' => [
             ['name' => '설치 스크립트 실행', 'text' => '대시보드 주소, 서비스용 기본 도메인, Let\'s Encrypt 이메일, 관리자 비밀번호를 물어봅니다.'],
             ['name' => 'DNS 연결', 'text' => '만들어야 할 레코드를 스크립트가 알려줍니다. 서비스 도메인을 자동으로 받으려면 와일드카드도 추가하세요.'],
@@ -107,7 +108,7 @@ return [
 
     'cta' => [
         'title' => '서버만 가져오세요.',
-        'text' => 'Aven은 무료 오픈소스입니다.',
+        'text' => '이 저장소의 소프트웨어에는 사용량 요금이 없습니다. 서버와 도메인 비용은 직접 냅니다.',
     ],
 
     'footer' => [
