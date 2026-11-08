@@ -14,7 +14,7 @@ A fresh install puts this service on the canvas for the server owner (project `a
   3. on success removes `aven-server-prev`; the new server finishes the deployment as live when it starts,
   4. on failure removes the new container, writes `selfhost-result.json` to the data directory and starts the previous server again, which marks the deployment as failed (`rolled back: …`) and keeps the previous deployment current.
 - Before the swap Aven waits up to 15 minutes for other running deployments to finish. Deployments still running after that fail when the server restarts, as with any restart.
-- The dashboard and API are unavailable for the few seconds of the swap. Your services keep running: `keel-proxy` and the app containers are not touched.
+- The dashboard and API are unavailable for the few seconds of the swap. Your services keep running: `aven-proxy` (or `keel-proxy` when that container is the one still running) and the app containers are not touched.
 - The dashboard treats it as a special service: the panel shows only Deployments and Settings (source and build), deployments show only details and build logs, and the canvas menu offers open, settings, deploy, rollback and copy. The card shows the running version.
 - **Update checks.** Every 30 minutes (and a minute after start) Aven compares the newest commit of the service's branch with the running deployment through the GitHub API, using the project's GitHub connection. When it is behind, the canvas card gets a pink dot, the service panel lists the new commits with **Update** (deploys the branch head) and **Check now** (`POST /api/owner/self-service/check`), and the activity feed gets one `aven.update_available` event per new version. Updates are never applied automatically.
 - **Server settings.** The service's Settings tab starts with *Server settings*: the `AVEN_*` values of the env file, grouped (general, network, GitHub, mail, advanced), secrets shown only as set/unset (`GET/PUT /api/owner/server-config`, server owners only). Saving writes the file and nothing else; values that differ from the running server are marked *pending* and apply when aven-server is deployed again (**Save and deploy** redeploys the current image, so no build is needed). If that deployment rolls back, the env file is restored to the copy the last healthy server started with (`AVEN_DATA/selfhost-env.good`), so a bad value cannot stick. Data paths and the values the container overrides (`AVEN_DATA`, `AVEN_GATEWAY_SECRET_FILE`, `AVEN_AGENT_BIN_DIR`, `AVEN_RAILPACK_BIN`, `AVEN_SELF_*` file/service) are read-only. The container mounts the env file's directory read-write for this.
@@ -68,7 +68,8 @@ aven-server selfhost run-args --image aven-server
 ## Operations
 
 ```sh
-docker ps --filter label=keel.self           # aven-server and, during a swap, aven-selfupgrade / aven-server-prev
+docker ps --filter label=aven.self           # aven-server and, during a swap, aven-selfupgrade / aven-server-prev
+# an install that still uses the old label: docker ps --filter label=keel.self
 docker logs -f aven-server                   # server logs
 docker logs aven-selfupgrade                 # last swap (removed after the new server collects it)
 ```

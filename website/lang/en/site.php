@@ -2,7 +2,7 @@
 
 return [
     'title' => 'Aven: your own PaaS on your own servers',
-    'description' => 'Aven is an open-source, self-hosted platform for apps, databases and background jobs. Connect a repository, get a domain with TLS, add Postgres in one click.',
+    'description' => 'Aven is an open-source, self-hosted platform for apps and databases. You run it on your own Linux server. Connect a repository, attach a domain with TLS, and add Postgres from the canvas.',
 
     'nav' => [
         'features' => 'Features',
@@ -15,7 +15,7 @@ return [
 
     'hero' => [
         'title' => 'Your own PaaS, on your own servers.',
-        'lead' => 'Connect a repository, get a domain with TLS, add Postgres in one click. Aven is open source and runs on any Linux server with Docker.',
+        'lead' => 'Connect a repository, attach a domain with TLS, and add Postgres from the canvas. Aven is open source. It runs on a Linux server you operate, with systemd and Docker.',
         'primary' => 'Install Aven',
         'secondary' => 'Star on GitHub',
         'copy' => 'Copy',
@@ -38,12 +38,12 @@ return [
             'key' => 'deploy',
             'title' => 'Push, and it is live',
             'text' => 'Point Aven at a GitHub repository. Every push builds with your Dockerfile or with Railpack, waits for the health check and switches traffic without downtime. Pull requests get their own preview environment.',
-            'points' => ['Dockerfile or Railpack, no config needed', 'Zero-downtime switch and one-click rollback', 'Preview environment per pull request'],
+            'points' => ['Dockerfile or Railpack, no config needed', 'Zero-downtime switch and rollback from the deployment history', 'Preview environment per pull request'],
         ],
         [
             'key' => 'data',
             'title' => 'Databases that look after themselves',
-            'text' => 'Start PostgreSQL, MySQL, Redis or MongoDB next to your app. Aven wires the connection string into your variables and keeps backups on S3.',
+            'text' => 'Start PostgreSQL, MySQL, Redis or MongoDB next to your app. Aven can put the connection string in your variables. Backups to S3-compatible storage are off until you turn them on.',
             'points' => ['Point-in-time recovery for Postgres and MySQL', 'PgBouncer, major version upgrades, HA clusters', 'S3-compatible buckets'],
         ],
         [
@@ -62,7 +62,7 @@ return [
 
     'also' => [
         'title' => 'Also in the box',
-        'items' => ['Cron jobs', 'Sleeping apps', 'Sealed variables', 'Logs and metrics', 'OpenTelemetry traces', 'Alerts to Slack and Discord', 'Passkeys and 2FA', 'SAML SSO', 'Audit log', 'REST and GraphQL API', 'MCP server', 'Infrastructure as code', 'railway.json support', 'Import from Dokploy'],
+        'items' => ['Cron jobs (experimental)', 'Sleeping apps (experimental)', 'Sealed variables', 'Logs and metrics', 'OpenTelemetry traces', 'Alerts to Slack and Discord', 'Passkeys and 2FA', 'SAML SSO', 'Audit log', 'REST and GraphQL API', 'MCP server', 'Infrastructure as code', 'railway.json support', 'Import from Dokploy'],
     ],
 
     'compare' => [
@@ -74,6 +74,7 @@ return [
 
     'shots' => [
         'title' => 'The dashboard',
+        'note' => 'The web dashboard is experimental. The screens are in this repository, and web/ has no component or end-to-end tests.',
         'items' => [
             ['img' => 'canvas', 'name' => 'Canvas', 'alt' => 'A project on the Aven canvas with services and databases'],
             ['img' => 'deployments', 'name' => 'Deployments', 'alt' => 'Service panel with the active deployment and history'],
@@ -83,8 +84,8 @@ return [
     ],
 
     'install' => [
-        'title' => 'Up and running in a few minutes',
-        'lead' => 'You need a Linux server (amd64 or arm64) with Docker and ports 80 and 443 free.',
+        'title' => 'Install on your server',
+        'lead' => 'A Linux server (amd64 or arm64) with systemd, Docker, and ports 80 and 443 free. Automatic TLS also needs a domain and DNS records. You pay for the server and the domain.',
         'steps' => [
             ['name' => 'Run the installer', 'text' => 'It asks for your dashboard URL, a base domain for services, an email for Let\'s Encrypt and an admin password.'],
             ['name' => 'Point your DNS', 'text' => 'The installer prints the records to create. Add a wildcard if you want generated service domains.'],
@@ -107,7 +108,7 @@ return [
 
     'cta' => [
         'title' => 'Bring your own server.',
-        'text' => 'Aven is free and open source.',
+        'text' => 'The software in this repository has no usage fee. You pay for the server and the domain.',
     ],
 
     'footer' => [

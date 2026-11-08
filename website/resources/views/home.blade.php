@@ -207,6 +207,7 @@
     {{-- Screenshots --}}
     <section class="shots wrap" data-reveal>
         <h2>{{ __('site.shots.title') }}</h2>
+        <p class="sub">{{ __('site.shots.note') }}</p>
         <div class="tabs" role="tablist" aria-label="{{ __('site.shots.title') }}">
             @foreach (__('site.shots.items') as $i => $shot)
                 <button type="button" role="tab" id="tab-{{ $shot['img'] }}" aria-controls="panel-{{ $shot['img'] }}" aria-selected="{{ $i === 0 ? 'true' : 'false' }}" tabindex="{{ $i === 0 ? 0 : -1 }}">{{ $shot['name'] }}</button>

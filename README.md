@@ -28,21 +28,90 @@ Railway, Coolify, and Dokploy are trademarks of their owners. Aven is not affili
 
 ## Quick start
 
-The Linux install command below is the one in [`install-server.sh`](install-server.sh). For a native Windows service on Windows 10/11, see the [Windows host guide](docs/windows-native.md). Windows Server editions are not supported by Docker Desktop.
+The Linux installer is [`install-server.sh`](install-server.sh). One command starts the install. It still needs a machine you operate, Docker, and, for automatic TLS, a domain whose DNS you control. You pay for the server and for the domain. This repository does not charge a usage fee.
 
-You need:
+A native Windows service on Windows 10/11 is a different path: [Windows host guide](docs/windows-native.md). Windows Server editions are not supported by Docker Desktop. The steps below are the Linux path.
 
-- a Linux server (amd64 or arm64) with systemd and Docker, ports 80 and 443 free;
-- a DNS name for the dashboard (for example `aven.example.com`) and, for generated service domains, a wildcard (`*.apps.example.com`);
-- optionally more servers for multi-node setups, reachable from each other over a private network such as Tailscale or WireGuard.
+### What you need
+
+The installer checks the first list. It does not measure memory, disk, or a Docker version.
+
+- **Machine.** Linux, amd64 (`x86_64`) or arm64 (`aarch64`), with systemd (`systemctl`, and `/run/systemd/system`). `curl`, `tar`, and `sha256sum` or `openssl`.
+- **Docker.** The `docker` command, and a daemon that answers `docker info` for root. The unit file does not set `User=`, so `aven-server` runs as root. If Docker is missing, the script can install it from get.docker.com when you confirm or pass `--install-docker`. The proxy image it starts is `caddy:2-alpine`.
+- **Memory and disk.** Not checked. `aven-server` is one process. The proxy is one container. Each app and database is another container and, for databases, a volume. The control-plane files (`aven.db`, `master.key`) live under `/var/lib/aven`. Leave disk for the images and volumes you are going to run.
+- **Ports on this host.** 80/tcp, 443/tcp, and 443/udp free. The proxy publishes all three (443/udp is HTTP/3). The dashboard API listens on `127.0.0.1:7070` and is not published. With more than one server, the mesh listens only on that node's private address, port 7443, when the address is a private IP.
+- **A name and DNS, for automatic TLS.** An `https://` name for the dashboard, for example `aven.example.com`. For generated service hostnames, a base domain such as `apps.example.com`. Point them at this server before the first request that needs a certificate:
+
+  | Name | Type | Value |
+  | --- | --- | --- |
+  | `aven.example.com` | A and/or AAAA | this server's public address |
+  | `*.apps.example.com` | A and/or AAAA | the same address |
+
+  Each concrete hostname gets its own certificate on the first TLS handshake (HTTP-01 or TLS-ALPN). Aven does not request one certificate for the wildcard name itself. Ports 80 and 443 have to be reachable from the public internet. The base domain you type becomes `AVEN_BASE_DOMAIN`.
+
+  With no domain, the installer can serve the dashboard only at `http://localhost:7070` on that machine.
+
+More than one server is optional. Extra machines need Docker and must reach the main server over HTTPS. A private network such as Tailscale or WireGuard is how services on different machines reach each other.
+
+### Read the script, then run it
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh -o install-server.sh
+less install-server.sh          # or: sh install-server.sh --help
+sh install-server.sh
 ```
 
-On a terminal the script asks for the dashboard URL, the base domain for services, a Let's Encrypt email and the admin password, shows a summary and installs after you confirm. It verifies the release checksum, installs `aven-server`, the CLI and Railpack, writes `/etc/aven/aven.env` (generating the admin password unless you chose one), starts the service and prints the sign-in details and the DNS records to create. Point `aven.example.com` (and, for generated service domains, `*.apps.example.com` with `AVEN_BASE_DOMAIN`) at the server, sign in, and follow the first-run checklist under *Admin → Owner · Setup*.
+Run that as a normal user. The script starts itself again with `sudo`. Piped into `sudo sh`, sudo-rs (the default sudo since Ubuntu 25.10) keeps the script in the background of the terminal, where it cannot ask questions, and it stops unless `--yes` is set.
 
-Then open a project, press **Add** on the canvas and deploy your first service. The [self-hosting guide](docs/self-hosting.md) covers DNS, configuration, manual installation, backups, upgrades and adding servers.
+On a terminal the first question is the role: main server (dashboard and API) or region server (joins an existing main server). A main server then asks for the dashboard URL, the base domain, an optional Let's Encrypt email, and the `admin@local` password. It shows a summary and changes nothing until you confirm. It checks the release checksum, installs the files below, writes `/etc/aven/aven.env`, starts the service, and prints the sign-in details and the DNS names.
+
+Unattended, after you have read the script:
+
+```sh
+sudo sh install-server.sh --yes \
+  --public-url https://aven.example.com \
+  --base-domain apps.example.com \
+  --acme-email you@example.com
+```
+
+### What a main-server install changes
+
+- `/usr/local/bin/aven-server` and `/usr/local/bin/aven`
+- Railpack at `/usr/local/bin/railpack`, unless you pass `--no-railpack` or `railpack` is already on `PATH` (the script's default Railpack release is v0.42.0)
+- agent and CLI downloads in `/usr/local/lib/aven/`
+- `/etc/systemd/system/aven-server.service`
+- `/etc/aven/aven.env` (mode 0600) and `/etc/aven/aven.env.example`
+- on first start, `/var/lib/aven` (`aven.db`, `master.key`, `session.key`, `logs/`), a Docker network named `aven`, and the `aven-proxy` container with volumes `aven-caddy-data`, `aven-caddy-config`, and `aven-proxy-wake`
+
+A region server does not install `aven-server`. It installs `/usr/local/bin/aven-agent`, writes `/etc/keel-agent/agent.env`, stores the node credential in `/var/lib/keel-agent/credentials.json`, and enables `keel-agent.service`. Those are the paths and the unit name the agent installer still creates, including on a machine that never ran Keel, so an existing agent is replaced in place. Settings inside that env file use the `AVEN_*` names. `KEEL_*` is still read.
+
+An install that already has `/etc/keel/aven.env` or `/var/lib/keel` keeps those paths. See [Upgrading from Keel](#upgrading-from-keel).
+
+### Check that it started
+
+```sh
+systemctl is-active aven-server
+curl -fsS -o /dev/null http://127.0.0.1:7070/api/cli/downloads
+docker ps --filter name=aven-proxy --format '{{.Names}} {{.Status}}'
+```
+
+The installer waits until that URL answers, then prints the dashboard URL and the password if it generated one. Sign in as `admin@local`. The English UI label is **Admin → Owner · Setup** (`/admin/?section=setup`). The Korean UI label is **어드민 → Owner · 초기 설정**.
+
+Open a project, press **Add** on the canvas, and deploy a service. The [self-hosting guide](docs/self-hosting.md) is the long version: every installer option, a manual install, backups and restore (including PITR), upgrades, uninstall, and the failure modes below.
+
+### If it does not come up
+
+- **Port 80 or 443 is taken.** The installer warns and continues. `aven-server` then exits. `journalctl -u aven-server` contains `start the proxy:` and `ports AVEN_HTTP_PORT/AVEN_HTTPS_PORT, default 80/443, must be free`. `ss -Htlpn 'sport = :80'` shows the listener.
+- **DNS has not propagated, or TLS is not issued.** The install does not wait for a certificate. If the dashboard name does not resolve, the installer warns. Certificates are requested on the first HTTPS request. `docker logs aven-proxy` shows ACME errors. On an install that still runs `keel-proxy`, read that container instead.
+- **Docker.** `docker info` has to succeed as root. "not running" and "cannot use its socket" are different errors. The second one is a permissions failure.
+- **Firewall or IPv6.** Docker-published ports are not filtered by ufw's INPUT chain. A cloud firewall in front of the host still is. An AAAA record for an address this host does not answer on makes clients that prefer IPv6 fail while IPv4 works.
+- **The agent does not join.** `journalctl -u keel-agent`. The join token is single-use. The default lifetime is 1 hour (the API accepts 60 seconds to 24 hours). `AVEN_PUBLIC_URL` on the main server has to be an `https://` URL.
+
+Commands and what to change are in [Troubleshooting](docs/self-hosting.md#troubleshooting).
+
+### Install by hand, or remove it
+
+Hand install is [steps 3–6 of the self-hosting guide](docs/self-hosting.md#3-build). There is no uninstall script. [Uninstall and roll back](docs/self-hosting.md#uninstall-and-roll-back) lists the units, containers, and files to stop and delete, and how an upgrade copy under `/var/lib/aven/backups/` plus `/usr/local/bin/aven-server.prev` is put back.
 
 ## Screenshots
 
@@ -171,7 +240,7 @@ AI coding agents were used substantially in development. Changes went through hu
 - Services from GitHub repositories (Dockerfile or [Railpack](https://github.com/railwayapp/railpack), no Dockerfile needed), Docker images, Docker Compose files, templates, single-file functions or a local directory (`aven up`).
 - Push-to-deploy with watch paths, wait-for-CI, commit statuses and pull request preview environments.
 - Environments with variable references (`${{ db.DATABASE_URL }}`), shared and sealed variables, a raw editor and config as code (`railway.json`, `aven.json`).
-- Pre-deploy commands, health checks, zero-downtime overlap, rollbacks, cron jobs, app sleeping and image auto-updates.
+- Pre-deploy commands, health checks, zero-downtime overlap, rollbacks, and image auto-updates. Cron schedules and app sleeping are implemented and marked experimental in the table above.
 
 **Data**
 - One-click PostgreSQL, MySQL, Redis, MongoDB and S3-compatible buckets, with volumes, a data browser and logical backups to S3.
@@ -260,7 +329,7 @@ Railway is a trademark of its owner and is used here only to describe compatibil
 
 ## Documentation
 
-- [Self-hosting guide](docs/self-hosting.md): install, DNS, configuration, backups, upgrades, nodes
+- [Self-hosting guide](docs/self-hosting.md): install, DNS, what the installer changes, backups and restore, upgrades, uninstall, troubleshooting
 - [Aven on Aven](docs/selfhost.md): let Aven manage and upgrade its own server
 - [CLI reference](docs/cli.md)
 - [HTTP API](docs/api-v1.md) and [GraphQL API](docs/graphql.md)
@@ -276,7 +345,7 @@ Railway is a trademark of its owner and is used here only to describe compatibil
 
 **Do I need GitHub?** No. You can deploy Docker images, Compose files, templates and local directories (`aven up`). GitHub is needed for push-to-deploy and preview environments.
 
-**How do I upgrade?** Run the install script again, or let Aven upgrade itself from its own canvas ([Aven on Aven](docs/selfhost.md)). Database migrations run on start.
+**How do I upgrade?** Run the install script again, or let Aven upgrade itself from its own canvas ([Aven on Aven](docs/selfhost.md)). The script keeps `/etc/aven/aven.env`, copies `aven.db` (and `keel.db` if that file is still the database) to `/var/lib/aven/backups/` after stopping the server, and keeps the old binary as `/usr/local/bin/aven-server.prev`. Migrations run on start. Copy `master.key` somewhere else yourself: the script does not. Putting the previous binary back without the database copy can fail if a migration already ran. The steps are in the [self-hosting guide](docs/self-hosting.md#8-backups-and-upgrades).
 
 **Can I move from Railway or Dokploy?** Aven reads `railway.json` / `railway.toml` and answers Railway-shaped GraphQL queries, and `aven import dokploy` recreates a Dokploy installation's services, variables, domains and volumes. Data is not copied: move database contents with your usual dump and restore tools.
 
