@@ -29,16 +29,6 @@ type Rule struct {
 
 func (r Rule) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 
-func (r Rule) label() string {
-	if r.Description != "" {
-		return r.Description
-	}
-	if r.ID != "" {
-		return r.ID
-	}
-	return fmt.Sprintf("priority %d", r.Priority)
-}
-
 // Expr은 조건 하나(attr/op/value[/key]) 또는 and/or/not 묶음이다.
 type Expr struct {
 	And []*Expr `json:"and,omitempty"`

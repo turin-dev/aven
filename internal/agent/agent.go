@@ -15,10 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -307,6 +309,18 @@ func (h *Handler) workspace(id string) (string, error) {
 }
 
 // Handle은 요청 하나를 처리한다. stream은 중간 데이터를 서버로 보낸다.
+// handleRecovering is Handle, but a panic in one operation becomes that operation's error instead of
+// stopping the agent and with it every other request, the wake handler and the proxy on this node.
+func (h *Handler) handleRecovering(ctx context.Context, op string, payload []byte, stream func(any)) (res any, err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			slog.Error("agent operation panicked", "op", op, "panic", v, "stack", string(debug.Stack()))
+			res, err = nil, fmt.Errorf("agent operation %s failed with an internal error (see the agent log)", op)
+		}
+	}()
+	return h.Handle(ctx, op, payload, stream)
+}
+
 func (h *Handler) Handle(ctx context.Context, op string, payload []byte, stream func(any)) (any, error) {
 	if len(payload) == 0 {
 		payload = []byte("{}")
@@ -1095,7 +1109,7 @@ func (h *Handler) Serve(ctx context.Context, read func(context.Context) ([]byte,
 					c()
 				}
 			}
-			result, err := h.Handle(rctx, req.Operation, req.Payload, stream)
+			result, err := h.handleRecovering(rctx, req.Operation, req.Payload, stream)
 			answer := agentprotocol.Message{ID: req.ID, Operation: req.Operation}
 			if err != nil {
 				answer.Error = err.Error()

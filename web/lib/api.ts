@@ -399,7 +399,7 @@ export type ServiceInstance = {
   node_id: ID;
   domains: Domain[];
   private_domain: string;
-  tcp_proxy: { container_port: number; public_port: number } | null;
+  tcp_proxy: { container_port: number; public_port: number; allow_cidrs?: string[] } | null;
   /** P5: custom private DNS name (`<name>.<env>.aven.internal`, staged until the next deploy). Empty = service name. */
   private_dns_name?: string | null;
   /** P8: outbound IPv6 (applies immediately, never a pending change). null/absent = node default (on). */
@@ -555,6 +555,12 @@ export type TcpProxyView = {
   container_port: number | null;
   available: boolean;
   reason?: string;
+  /** This proxy's own client allowlist: [] = use the server default, ["0.0.0.0/0"] = everyone. Absent on older servers. */
+  allow_cidrs?: string[];
+  /** What the proxy enforces ([] = every client may connect). */
+  effective_allow_cidrs?: string[];
+  /** AVEN_TCP_PORT_ALLOW_CIDRS: the list of proxies without their own. */
+  default_allow_cidrs?: string[];
 };
 /** Whether listening ports could be read (`proc`) or not (`unavailable`: old agent, node offline, nothing running…). */
 export type PortDetection = { source: "proc" | "unavailable"; reason?: string; node?: string; containers: number };
@@ -1994,9 +2000,9 @@ export const api = {
   addTcpProxy: (sid: ID, eid: ID, container_port: number) =>
     request<ServiceInstance>("POST", `${inst(sid, eid)}/tcp-proxy`, { container_port }),
   deleteTcpProxy: (sid: ID, eid: ID) => request<void>("DELETE", `${inst(sid, eid)}/tcp-proxy`),
-  /** P6: change the container port behind the TCP proxy (public port stays). */
-  patchTcpProxy: (sid: ID, eid: ID, container_port: number) =>
-    request<ServiceInstance>("PATCH", `${inst(sid, eid)}/tcp-proxy`, { container_port }),
+  /** P6: change the container port behind the TCP proxy (public port stays) and/or its client allowlist. */
+  patchTcpProxy: (sid: ID, eid: ID, body: { container_port?: number; allow_cidrs?: string[] }) =>
+    request<ServiceInstance>("PATCH", `${inst(sid, eid)}/tcp-proxy`, body),
   /** P1: re-check DNS/TXT/HTTP verification now. */
   verifyDomain: (sid: ID, eid: ID, host: string) => request<Domain>("POST", `${inst(sid, eid)}/domains/${enc(host)}/verify`, {}),
   /** P4: everything Settings > Networking shows, in one call. */

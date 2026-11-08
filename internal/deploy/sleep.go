@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"strings"
 	"time"
@@ -320,13 +319,7 @@ func (m *Manager) WakeHandler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
-		rp := httputil.NewSingleHostReverseProxy(target)
-		orig := rp.Director
-		rp.Director = func(req *http.Request) {
-			orig(req)
-			req.Host = r.Host
-		}
-		rp.ServeHTTP(w, r)
+		proxy.WakeReverseProxy(target).ServeHTTP(w, r)
 	})
 }
 

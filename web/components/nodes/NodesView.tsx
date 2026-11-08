@@ -793,7 +793,7 @@ function NodeRow({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
             <span className="truncate font-medium">{n.name}</span>
-            {n.is_local && <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-xs font-medium text-pink-600">{t("이 서버")}</span>}
+            {n.is_local && <span className="rounded-md bg-pink-100 px-1.5 py-0.5 text-xs font-medium text-pink-700">{t("이 서버")}</span>}
             <span className={cx("flex items-center gap-1.5 text-xs", st.text)}>
               <span aria-hidden className={cx("size-1.5 rounded-full", st.dot)} />
               {st.label}
@@ -803,7 +803,7 @@ function NodeRow({
           </div>
           <div className="mt-0.5 truncate font-mono text-xs text-gray-500" title={[n.address.ipv6, n.address.ipv4, n.address.private].filter(Boolean).join(" · ")}>
             {addr(n)}
-            {n.address.private && <span className="text-gray-400"> · {t("사설 {address}", { address: n.address.private })}</span>}
+            {n.address.private && <span className="text-gray-500"> · {t("사설 {address}", { address: n.address.private })}</span>}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">

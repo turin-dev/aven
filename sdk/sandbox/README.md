@@ -1,6 +1,6 @@
 # Aven sandbox SDK (TypeScript)
 
-Dependency-free `aven-sandbox` client for [Aven sandboxes](../docs/api-v1.md#sandboxes). Works in Node.js 22+ (uses the global `fetch`) and other runtimes with `fetch`, `atob`/`btoa` and `TextEncoder`.
+Dependency-free `aven-sandbox` client for [Aven sandboxes](../../docs/api-v1.md#sandboxes). Works in Node.js 22+ (uses the global `fetch`) and other runtimes with `fetch`, `atob`/`btoa` and `TextEncoder`.
 
 Configuration comes from options or the environment: `AVEN_URL`, `AVEN_TOKEN` (an API token with member access to the project), `AVEN_ENVIRONMENT_ID`. The `KEEL_*` names still work.
 

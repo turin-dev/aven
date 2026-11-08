@@ -508,9 +508,7 @@ func (d *Docker) RailpackBuild(ctx context.Context, railpack, frontend, srcDir, 
 					}
 				}
 			}
-			for _, k := range sortedKeys(vars) {
-				names = append(names, k)
-			}
+			names = append(names, sortedKeys(vars)...)
 			p["secrets"] = dedupe(names)
 			nb, _ := json.MarshalIndent(p, "", "  ")
 			os.WriteFile(plan, nb, 0o640)

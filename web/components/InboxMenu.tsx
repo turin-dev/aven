@@ -174,7 +174,7 @@ export function InboxMenu({ className }: { className?: string }) {
                           <span className={cx("truncate text-xs", n.read_at ? "text-gray-500" : "font-medium text-foreground")}>
                             {projectName(n.project_id)} · <span className="font-mono">{n.kind}</span>
                           </span>
-                          <time dateTime={n.created_at} title={new Date(n.created_at).toLocaleString(dateLocale())} className="shrink-0 text-xs text-gray-400">
+                          <time dateTime={n.created_at} title={new Date(n.created_at).toLocaleString(dateLocale())} className="shrink-0 text-xs text-gray-500">
                             {relTime(n.created_at)}
                           </time>
                         </span>
