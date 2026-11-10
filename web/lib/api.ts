@@ -310,7 +310,7 @@ export type DnsRecord = {
 export type DomainStatus = "active" | "pending_dns" | "proxied" | "error";
 /** P1: ownership verification. `txt` is always present so the UI can show the `_aven-verify` record. */
 export type DomainVerification = {
-  method: "legacy" | "txt" | "http" | "dns" | "";
+  method: "legacy" | "txt" | "http" | "dns" | "cloudflare" | "";
   verified_at?: string | null;
   txt: { name: string; value: string };
 };
@@ -1997,8 +1997,9 @@ export const api = {
   /** P6: change the container port behind the TCP proxy (public port stays). */
   patchTcpProxy: (sid: ID, eid: ID, container_port: number) =>
     request<ServiceInstance>("PATCH", `${inst(sid, eid)}/tcp-proxy`, { container_port }),
-  /** P1: re-check DNS/TXT/HTTP verification now. */
-  verifyDomain: (sid: ID, eid: ID, host: string) => request<Domain>("POST", `${inst(sid, eid)}/domains/${enc(host)}/verify`, {}),
+  /** Re-check DNS/TXT/HTTP or verify a custom domain using a one-time Cloudflare API token. */
+  verifyDomain: (sid: ID, eid: ID, host: string, cloudflareToken?: string) =>
+    request<Domain>("POST", `${inst(sid, eid)}/domains/${enc(host)}/verify`, cloudflareToken ? { cloudflare_token: cloudflareToken } : {}),
   /** P4: everything Settings > Networking shows, in one call. */
   networking: (sid: ID, eid: ID) => request<InstanceNetworking>("GET", `${inst(sid, eid)}/networking`),
   /** P5: is `<name>.<env>.aven.internal` free in this environment? */

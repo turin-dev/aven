@@ -18,10 +18,11 @@ import (
 
 // 확인 방법(verify_method).
 const (
-	VerifyLegacy = "legacy" // 이 테이블이 생기기 전부터 있던 호스트(검증된 것으로 본다)
-	VerifyDNS    = "dns"    // DNS가 이 노드(주소 또는 ingress 호스트)를 가리킨다
-	VerifyHTTP   = "http"   // /.well-known/keel/domain-check 응답에 토큰이 있다
-	VerifyTXT    = "txt"    // _keel-verify.<host> TXT 레코드에 토큰이 있다
+	VerifyLegacy     = "legacy"     // 이 테이블이 생기기 전부터 있던 호스트(검증된 것으로 본다)
+	VerifyDNS        = "dns"        // DNS가 이 노드(주소 또는 ingress 호스트)를 가리킨다
+	VerifyHTTP       = "http"       // /.well-known/keel/domain-check 응답에 토큰이 있다
+	VerifyTXT        = "txt"        // _keel-verify.<host> TXT 레코드에 토큰이 있다
+	VerifyCloudflare = "cloudflare" // Cloudflare API token can read the zone covering the host
 )
 
 // DNS 상태(dns_status). pending은 아직 한 번도 확인하지 않은 상태다.

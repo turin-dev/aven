@@ -25,7 +25,15 @@ const en: Record<string, string> = {
 
   // Domain status and DNS records
   "DNS 확인됨": "DNS verified",
+  "DNS 제공자에 아래 레코드를 추가하세요. CNAME을 권장합니다. 필요하면 TXT 레코드나 Cloudflare 토큰으로 소유를 확인할 수 있습니다.":
+    "Add the records below at your DNS provider. CNAME is recommended. If needed, verify ownership with a TXT record or Cloudflare token.",
   "TXT 레코드는 선택입니다. 위 주소 레코드가 맞으면 소유 확인 없이도 연결됩니다.": "The TXT record is optional. When the address records above match, the domain connects without it.",
+  "Cloudflare 토큰으로 소유 확인": "Verify ownership with a Cloudflare token",
+  "Cloudflare API 토큰": "Cloudflare API token",
+  "이 도메인의 Cloudflare 존에 Zone:Read 권한이 필요합니다. 토큰은 확인에만 쓰고 저장하지 않으며 DNS를 변경하지 않습니다.":
+    "The token needs Zone:Read access to this domain's Cloudflare zone. It is only used for verification, is not stored, and does not change DNS.",
+  "토큰 만들기": "Create a token",
+  "토큰으로 확인": "Verify with token",
   "마지막 확인 오류: {reason}": "Last check failed: {reason}",
   "{time}에 마지막 확인": "last checked {time}",
   "DNS가 퍼지는 데 몇 분에서 몇 시간이 걸릴 수 있습니다. 이 화면은 10초마다 다시 확인합니다.": "DNS changes can take minutes to hours to spread. This page checks again every 10 seconds.",

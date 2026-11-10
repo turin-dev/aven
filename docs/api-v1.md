@@ -144,7 +144,7 @@ type Domain = { host: string; kind: "generated" | "custom"; target_port: number 
   // read-only status fields (see "Networking" > "Domain status engine")
   proxy: "direct" | "cloudflare" | "tunnel" | "none" | "";        // "" = not checked yet
   effective_port: number;             // port the proxy actually routes to (target_port, else the service port)
-  verification?: { method: "legacy" | "dns" | "http" | "txt" | ""; verified_at: string | null;
+  verification?: { method: "legacy" | "dns" | "http" | "txt" | "cloudflare" | ""; verified_at: string | null;
                    txt: { name: string; value: string } };      // "_aven-verify.<host>", "aven-verify=<token>"
   cert?: { status: "valid" | "invalid"; not_after: string | null };
   checked_at?: string; last_error?: string; warnings?: string[]; };
@@ -255,7 +255,7 @@ Instance roles grant no membership in any workspace, including `ws_default`. Wor
 ### Domains
 - `POST   /services/{sid}/instances/{eid}/domains` `{host?: string, target_port?: number}` → `201 Domain`. Without host, a generated domain is created as `<service>-<env>.<AVEN_BASE_DOMAIN>`, or `<service>.<base>` for production. Returns 400 if `AVEN_BASE_DOMAIN` is not set.
 - `PATCH  /services/{sid}/instances/{eid}/domains/{host}` → `Domain`. Fields are in "Domains: path rules, TLS mode, redirect, basic auth" (v1.4); `host` renames a generated domain.
-- `POST   /services/{sid}/instances/{eid}/domains/{host}/verify` → `Domain` (re-check DNS, ownership and certificate now)
+- `POST   /services/{sid}/instances/{eid}/domains/{host}/verify` → `Domain` (re-check DNS, ownership and certificate now; optional body `{cloudflare_token: string}` verifies access to a custom domain's Cloudflare zone)
 - `DELETE /services/{sid}/instances/{eid}/domains/{host}` → `204`
 - `GET    /services/{sid}/instances/{eid}/tcp-proxy` → `{enabled, host, public_port, container_port, available, reason?}` (viewer)
 - `POST   /services/{sid}/instances/{eid}/tcp-proxy` `{container_port}` → `ServiceInstance`
@@ -1758,7 +1758,7 @@ Settings > Networking provides domain status and ownership checks, per-node ingr
   - `proxy: "cloudflare"`: the records are in Cloudflare's edge ranges (orange cloud) → `status: "proxied"`. Before this redesign these were reported as `pending_dns` although they worked.
   - `proxy: "tunnel"`: the serving node is a Cloudflare tunnel node, or the CNAME points at `*.cfargotunnel.com` → `status: "proxied"`.
   - `proxy: "none"`: no usable records → `status: "pending_dns"`. Lookup failures → `status: "error"` with `last_error`.
-- `verification.method` is how ownership was first proven and is then kept: `legacy` (the host existed before the redesign; all 18 production domains), `dns` (direct), `http` (behind a proxy, the check route below answered with the token) or `txt` (`_aven-verify.<host>` TXT contains `aven-verify=<token>`). The token is `HMAC(master key, "domain:"+host)`, so `verification.txt` is stable and can be added before the DNS switch. `""` means not verified yet.
+- `verification.method` is how ownership was first proven and is then kept: `legacy` (the host existed before the redesign; all 18 production domains), `dns` (direct), `http` (behind a proxy, the check route below answered with the token), `txt` (`_aven-verify.<host>` TXT contains `aven-verify=<token>`), or `cloudflare` (a supplied Cloudflare API token can read a zone covering the host). For `cloudflare`, the token needs `Zone:Read`, is used only during the verification request, is not stored, and does not change DNS. The TXT token is `HMAC(master key, "domain:"+host)`, so `verification.txt` is stable and can be added before the DNS switch. `""` means not verified yet.
 - `dns[]` holds the records to set, each with `status` (`ok` | `proxied` | `mismatch` | `pending`) and `current` (the values seen). For a node with `ingress_hostname` the recommended record is a `CNAME` to it, with `A`/`AAAA` listed as `alternative: true` (apex hosts get a note about CNAME flattening). For a tunnel node the record is the tunnel CNAME with a note. A node without IPv4 adds a warning that IPv4 clients need the Cloudflare proxy.
 - `cert` is the certificate seen on `https://<host>` (not checked for `tls: "off"` domains). `POST …/domains/{host}/verify` runs a check now (30 s budget) and returns the updated `Domain`.
 
