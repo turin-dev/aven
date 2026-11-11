@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 480" width="900" height="480" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#57606a"/>
+    </marker>
+  </defs>
+  <rect width="900" height="480" rx="12" fill="#ffffff"/>
+
+  <!-- groups -->
+  <rect x="20" y="90" width="420" height="330" rx="10" fill="#f6f8fa" stroke="#d0d7de"/>
+  <text x="40" y="116" font-size="13" font-weight="600" fill="#59636e">First server</text>
+  <rect x="460" y="90" width="420" height="330" rx="10" fill="#f6f8fa" stroke="#d0d7de" stroke-dasharray="6 4"/>
+  <text x="480" y="116" font-size="13" font-weight="600" fill="#59636e">More servers (optional)</text>
+
+  <!-- internet -->
+  <rect x="390" y="25" width="120" height="40" rx="20" fill="#ffffff" stroke="#8c959f"/>
+  <text x="450" y="50" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">Internet</text>
+  <path d="M390,45 H112.5 V138" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M510,45 H787.5 V138" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- first server -->
+  <rect x="40" y="140" width="145" height="80" rx="8" fill="#ffffff" stroke="#8c959f"/>
+  <text x="112.5" y="174" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">aven-proxy</text>
+  <text x="112.5" y="196" font-size="12" text-anchor="middle" fill="#59636e">Caddy · TLS · routing</text>
+
+  <rect x="255" y="140" width="170" height="80" rx="8" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+  <text x="340" y="166" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">aven-server</text>
+  <text x="340" y="187" font-size="12" text-anchor="middle" fill="#59636e">API · dashboard · scheduler</text>
+  <text x="340" y="205" font-size="12" text-anchor="middle" fill="#59636e">builds · SQLite</text>
+
+  <path d="M255,180 H187" fill="none" stroke="#57606a" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
+  <text x="220" y="172" font-size="11" text-anchor="middle" fill="#59636e">configures</text>
+
+  <rect x="40" y="300" width="385" height="90" rx="8" fill="#ffffff" stroke="#8c959f"/>
+  <text x="232.5" y="340" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">your services</text>
+  <text x="232.5" y="362" font-size="12" text-anchor="middle" fill="#59636e">apps · databases · volumes</text>
+
+  <path d="M112.5,220 V298" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M340,220 V298" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="348" y="264" font-size="11" fill="#59636e">Docker API</text>
+
+  <!-- more servers -->
+  <rect x="475" y="140" width="170" height="80" rx="8" fill="#ffffff" stroke="#8c959f"/>
+  <text x="560" y="166" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">aven-agent</text>
+  <text x="560" y="187" font-size="12" text-anchor="middle" fill="#59636e">runs Docker on this node</text>
+  <text x="560" y="205" font-size="12" text-anchor="middle" fill="#59636e">joins with a certificate</text>
+
+  <rect x="715" y="140" width="145" height="80" rx="8" fill="#ffffff" stroke="#8c959f"/>
+  <text x="787.5" y="174" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">aven-proxy</text>
+  <text x="787.5" y="196" font-size="12" text-anchor="middle" fill="#59636e">Caddy · TLS · routing</text>
+
+  <rect x="475" y="300" width="385" height="90" rx="8" fill="#ffffff" stroke="#8c959f"/>
+  <text x="667.5" y="340" font-size="14" font-weight="600" text-anchor="middle" fill="#1f2328">services</text>
+  <text x="667.5" y="362" font-size="12" text-anchor="middle" fill="#59636e">apps · databases · volumes</text>
+
+  <path d="M560,220 V298" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="568" y="264" font-size="11" fill="#59636e">Docker API</text>
+  <path d="M787.5,220 V298" fill="none" stroke="#57606a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- links between servers -->
+  <path d="M427,180 H473" fill="none" stroke="#0969da" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="450" y="170" font-size="11" font-weight="600" text-anchor="middle" fill="#0969da">mTLS</text>
+  <path d="M427,345 H473" fill="none" stroke="#57606a" stroke-width="1.5" stroke-dasharray="4 3" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <text x="450" y="335" font-size="11" text-anchor="middle" fill="#59636e">mesh</text>
+
+  <text x="450" y="455" font-size="12" text-anchor="middle" fill="#59636e">Extra servers are optional. Nodes reach each other over a private network such as Tailscale or WireGuard.</text>
+</svg>

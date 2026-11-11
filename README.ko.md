@@ -85,7 +85,7 @@ sudo sh install-server.sh --yes \
 
 리전 서버는 `aven-server`를 설치하지 않습니다. `/usr/local/bin/aven-agent`를 설치하고 `/etc/keel-agent/agent.env`를 쓰며, 노드 자격 증명은 `/var/lib/keel-agent/credentials.json`에 두고 `keel-agent.service`를 켭니다. Keel을 쓴 적이 없는 머신도 지금 설치 스크립트가 만드는 경로와 unit 이름입니다. 이미 있는 agent를 그 자리에서 바꾸기 위해서입니다. 그 env 파일 안의 설정 이름은 `AVEN_*`입니다. `KEEL_*`도 계속 읽습니다.
 
-이미 `/etc/keel/aven.env`나 `/var/lib/keel`이 있는 설치는 그 경로를 유지합니다. [Keel에서 업그레이드](#keel에서-업그레이드)를 보세요.
+이미 `/etc/keel/aven.env`나 `/var/lib/keel`이 있는 설치는 그 경로를 유지합니다. [셀프 호스팅 가이드](docs/self-hosting.ko.md)를 보세요.
 
 ### 켜졌는지 확인
 
@@ -230,7 +230,7 @@ Aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 
 Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소는 첫 Aven 릴리스(`755a737`, 2026-10-25)에서 시작하며 Keel의 기록은 들어 있지 않습니다.
 
-새 설치는 Aven 이름(`AVEN_*` 설정, `/var/lib/aven`, `aven-proxy`, `aven.*` 라벨)을 씁니다. Keel로 시작한 설치는 바꿀 것 없이 그대로 동작합니다. 예전 `KEEL_*` 이름, 경로, 컨테이너를 계속 읽고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. [Keel에서 업그레이드](#keel에서-업그레이드)를 보세요.
+새 설치는 Aven 이름(`AVEN_*` 설정, `/var/lib/aven`, `aven-proxy`, `aven.*` 라벨)을 씁니다. Keel로 시작한 설치는 바꿀 것 없이 그대로 동작합니다. 예전 `KEEL_*` 이름, 경로, 컨테이너를 계속 읽고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. [셀프 호스팅 가이드](docs/self-hosting.ko.md)를 보세요.
 
 개발에 AI 코딩 에이전트를 상당히 썼습니다. 변경은 사람이 리뷰하고 테스트했습니다.
 
@@ -271,22 +271,10 @@ Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소�
 
 ## 구조
 
-```mermaid
-flowchart TB
-  users((인터넷<br/>IPv6 / IPv4)) --> proxy1
-  subgraph main["첫 서버"]
-    proxy1["aven-proxy (Caddy)<br/>TLS · 라우팅 · 엣지"] --> apps1["서비스<br/>데이터베이스 · 볼륨"]
-    server["aven-server<br/>API · 대시보드 · 스케줄러<br/>빌드 · SQLite"] -- Docker API --> apps1
-    server -.->|설정| proxy1
-  end
-  subgraph node2["추가 서버"]
-    agent["aven-agent"] -->|Docker API| apps2["서비스"]
-    proxy2["aven-proxy"] --> apps2
-  end
-  users --> proxy2
-  agent <-->|"Tailscale / WireGuard 위 mTLS"| server
-  apps1 <-.->|"사설망(mesh)"| apps2
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.ko.svg">
+  <img alt="Aven 구조: 인터넷은 각 서버의 aven-proxy로 들어오고, 첫 서버의 aven-server가 프록시를 설정하고 Docker API로 서비스를 돌립니다. 추가 서버의 aven-agent는 mTLS로 서버에 연결하고, 서비스끼리는 사설 mesh로 통신합니다" src="docs/assets/architecture-light.ko.svg" width="900">
+</picture>
 
 - `aven-server`는 대시보드가 들어 있는 Go 바이너리 하나입니다. 상태는 SQLite(`/var/lib/aven`)에 두고, Docker와 Railpack으로 이미지를 빌드하고, Docker API로 컨테이너를 돌립니다.
 - `aven-proxy`는 Aven이 설정하는 Caddy 컨테이너입니다(Keel로 시작한 설치에서는 `keel-proxy`). TLS를 끝내고 도메인을 자기 노드의 replica로 보내며 엣지 기능을 처리합니다.
@@ -310,10 +298,6 @@ AVEN_HTTP_PORT=18080 AVEN_HTTPS_PORT=18443 AVEN_PROXY_BIND=127.0.0.1 \
 ```
 
 `http://127.0.0.1:7070`에서 `admin@local`로 로그인합니다. 서버는 Docker로 프록시 컨테이너를 띄우므로, 네트워크에서 돌리기 전에 포트와 bind 주소를 바꾸세요. 운영에는 [`deploy/aven.env.example`](deploy/aven.env.example)과 [`deploy/aven-server.service`](deploy/aven-server.service)를 쓰거나, 컨테이너 이미지는 `docker build -t aven-server .`로 만듭니다.
-
-## Keel에서 업그레이드
-
-Aven은 Keel을 잇는 프로젝트이고, 기존 Keel 설치는 그 자리에서 올릴 수 있습니다. Aven은 설정마다 `AVEN_*` 이름을 먼저 읽고, 없으면 `KEEL_*` 이름을 읽은 뒤 한 번 경고합니다. `/var/lib/keel`, `/etc/keel/aven.env`, 실행 중인 `keel-proxy`, `keel-<env>` 네트워크, `keel.*` 라벨이 이미 있으면 그대로 씁니다. 기존 세션과 `keel_` API 토큰도 계속 동작하고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. 업그레이드 뒤에 배포한 컨테이너는 `.aven.internal`로도 응답합니다. systemd의 `keel-server`에서 옮길 때는 `deploy/aven-server.service`와 `aven-server` 바이너리를 설치한 뒤 `keel-server`를 멈추고 `aven-server`를 켜세요. 두 서버를 같은 데이터 디렉터리로 동시에 돌리면 안 됩니다. 서버를 먼저 올리고, 그다음 다른 노드의 agent를 올리세요. 아직 받아들이는 예전 이름 전체는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
 
 ## Railway와의 관계
 

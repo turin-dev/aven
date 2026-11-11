@@ -85,7 +85,7 @@ sudo sh install-server.sh --yes \
 
 A region server does not install `aven-server`. It installs `/usr/local/bin/aven-agent`, writes `/etc/keel-agent/agent.env`, stores the node credential in `/var/lib/keel-agent/credentials.json`, and enables `keel-agent.service`. Those are the paths and the unit name the agent installer still creates, including on a machine that never ran Keel, so an existing agent is replaced in place. Settings inside that env file use the `AVEN_*` names. `KEEL_*` is still read.
 
-An install that already has `/etc/keel/aven.env` or `/var/lib/keel` keeps those paths. See [Upgrading from Keel](#upgrading-from-keel).
+An install that already has `/etc/keel/aven.env` or `/var/lib/keel` keeps those paths. See the [self-hosting guide](docs/self-hosting.md).
 
 ### Check that it started
 
@@ -230,7 +230,7 @@ Aven cells come from this repository. Competitor cells come from the official pa
 
 Aven continues an earlier project named Keel. This public repository starts at the first Aven release (`755a737`, 2026-10-25) and does not include Keel's history.
 
-New installs use Aven names (`AVEN_*` settings, `/var/lib/aven`, `aven-proxy`, `aven.*` labels). An install that started as Keel keeps working without changes: the old `KEEL_*` names, paths and containers are still read, and private addresses stay on `<service>.<env>.keel.internal`. See [Upgrading from Keel](#upgrading-from-keel).
+New installs use Aven names (`AVEN_*` settings, `/var/lib/aven`, `aven-proxy`, `aven.*` labels). An install that started as Keel keeps working without changes: the old `KEEL_*` names, paths and containers are still read, and private addresses stay on `<service>.<env>.keel.internal`. See the [self-hosting guide](docs/self-hosting.md).
 
 AI coding agents were used substantially in development. Changes went through human review and testing.
 
@@ -271,22 +271,10 @@ AI coding agents were used substantially in development. Changes went through hu
 
 ## How it works
 
-```mermaid
-flowchart TB
-  users((Internet<br/>IPv6 / IPv4)) --> proxy1
-  subgraph main["First server"]
-    proxy1["aven-proxy (Caddy)<br/>TLS · routing · edge"] --> apps1["your services<br/>databases · volumes"]
-    server["aven-server<br/>API · dashboard · scheduler<br/>builds · SQLite"] -- Docker API --> apps1
-    server -.->|configures| proxy1
-  end
-  subgraph node2["More servers"]
-    agent["aven-agent"] -->|Docker API| apps2["services"]
-    proxy2["aven-proxy"] --> apps2
-  end
-  users --> proxy2
-  agent <-->|"mTLS over Tailscale / WireGuard"| server
-  apps1 <-.->|"private network (mesh)"| apps2
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.svg">
+  <img alt="Aven architecture: the Internet reaches aven-proxy on each server; aven-server on the first server configures the proxy and runs services through the Docker API; aven-agent on extra servers connects back over mTLS, and services talk over a private mesh" src="docs/assets/architecture-light.svg" width="900">
+</picture>
 
 - `aven-server` is a single Go binary with the dashboard embedded. It keeps its state in SQLite (`/var/lib/aven`), builds images with Docker and Railpack, and runs containers through the Docker API.
 - `aven-proxy` is a Caddy container that Aven configures (`keel-proxy` on installs that started as Keel). It terminates TLS, routes domains to replicas on its own node and serves the edge features.
@@ -310,10 +298,6 @@ AVEN_HTTP_PORT=18080 AVEN_HTTPS_PORT=18443 AVEN_PROXY_BIND=127.0.0.1 \
 ```
 
 Sign in at `http://127.0.0.1:7070` as `admin@local`. The server starts its proxy container through Docker; change the ports and bind address before running it on a network. For production, use [`deploy/aven.env.example`](deploy/aven.env.example) and [`deploy/aven-server.service`](deploy/aven-server.service), or `docker build -t aven-server .` for the container image.
-
-## Upgrading from Keel
-
-Aven is the continuation of Keel, and an existing Keel installation upgrades in place. Aven reads each `AVEN_*` setting first and falls back to the `KEEL_*` name, with a one-time deprecation warning. It keeps using `/var/lib/keel`, `/etc/keel/aven.env`, a running `keel-proxy`, `keel-<env>` networks and `keel.*` labels when those already exist. Existing sessions and `keel_` API tokens keep working, and private addresses stay on `<service>.<env>.keel.internal`. Containers deployed after the upgrade also answer to `.aven.internal`. To move a systemd install from `keel-server`, install `deploy/aven-server.service` and the `aven-server` binary, stop `keel-server` and enable `aven-server`. Never run both against the same data directory. Upgrade the server first, then the agents on other nodes. The [self-hosting guide](docs/self-hosting.md) lists every old name that is still accepted.
 
 ## Relationship to Railway
 
