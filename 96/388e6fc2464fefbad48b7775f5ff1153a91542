@@ -1,0 +1,36 @@
+README.ko.md
+  s_ccf8da4132bb9d::t_cbaf159cc4b337 274-277
+  s_ccf8da4132bb9d::t_bca76a9660ef6c 88,233
+docs/assets/architecture-light.svg
+  s_ccf8da4132bb9d::t_fa394382362aa1 1-67
+docs/assets/architecture-dark.svg
+  s_ccf8da4132bb9d::t_6be203b21993d5 1-67
+README.md
+  s_ccf8da4132bb9d::t_cbaf159cc4b337 274-277
+  s_ccf8da4132bb9d::t_bca76a9660ef6c 88,233
+docs/assets/architecture-dark.ko.svg
+  s_ccf8da4132bb9d::t_6be203b21993d5 1-67
+docs/assets/architecture-light.ko.svg
+  s_ccf8da4132bb9d::t_6be203b21993d5 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "96388e6fc2464fefbad48b7775f5ff1153a91542",
+  "prompts": {},
+  "humans": {
+    "h_4050ea4652cb02": {
+      "author": "Turin-dev <me@turin.my>"
+    }
+  },
+  "sessions": {
+    "s_ccf8da4132bb9d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "83a37fa9-7da4-4754-9954-26b06977aba8",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Turin-dev <me@turin.my>"
+    }
+  }
+}
