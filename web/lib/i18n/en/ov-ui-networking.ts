@@ -32,7 +32,7 @@ const en: Record<string, string> = {
   "Cloudflare API 토큰": "Cloudflare API token",
   "이 도메인의 Cloudflare 존에 Zone:Read 권한이 필요합니다. 토큰은 확인에만 쓰고 저장하지 않으며 DNS를 변경하지 않습니다.":
     "The token needs Zone:Read access to this domain's Cloudflare zone. It is only used for verification, is not stored, and does not change DNS.",
-  "토큰 만들기": "Create a token",
+  "토큰 만들기": "Create token",
   "토큰으로 확인": "Verify with token",
   "마지막 확인 오류: {reason}": "Last check failed: {reason}",
   "{time}에 마지막 확인": "last checked {time}",
