@@ -38,45 +38,67 @@ const TCPAllowAll = "0.0.0.0/0"
 func NormalizeTCPAllowCIDRs(in []string) ([]string, error) {
 	seen := map[string]bool{}
 	var out []string
+	allowAll := false
 	for _, raw := range in {
 		s := strings.TrimSpace(raw)
 		if s == "" {
 			continue
 		}
-		var p netip.Prefix
-		var err error
-		if strings.Contains(s, "/") {
-			p, err = netip.ParsePrefix(s)
-		} else {
-			var a netip.Addr
-			a, err = netip.ParseAddr(s)
-			if err == nil {
-				p = netip.PrefixFrom(a, a.BitLen())
-			}
-		}
+		p, err := parseTCPAllowPrefix(s)
 		if err != nil {
-			return nil, fmt.Errorf("%q is not an IP address or CIDR range", s)
+			return nil, err
 		}
-		if a := p.Addr(); a.Is4In6() {
-			p = netip.PrefixFrom(a.Unmap(), max(p.Bits()-96, 0))
-		}
-		if !p.Addr().Is4() {
-			return nil, fmt.Errorf("%q: only IPv4 ranges are supported (the TCP proxy cannot see IPv6 client addresses)", s)
-		}
-		p = p.Masked()
+		// Every entry is parsed before 0.0.0.0/0 short-circuits, so a typo next to an
+		// allow-all entry is still rejected instead of silently opening the proxy.
 		if p.Bits() == 0 {
-			return []string{TCPAllowAll}, nil
+			allowAll = true
+			continue
 		}
 		if k := p.String(); !seen[k] {
 			seen[k] = true
 			out = append(out, k)
 		}
 	}
+	if allowAll {
+		return []string{TCPAllowAll}, nil
+	}
 	if len(out) > MaxTCPAllowCIDRs {
 		return nil, fmt.Errorf("at most %d ranges are allowed", MaxTCPAllowCIDRs)
 	}
 	sortPrefixes(out)
 	return out, nil
+}
+
+// parseTCPAllowPrefix parses one allowlist entry as a masked IPv4 prefix.
+// An IPv4-mapped address is accepted only when its prefix length covers the
+// mapped IPv4 bits (96 or more). A shorter length, such as ::ffff:10.0.0.0/8,
+// is not the IPv4 range 10.0.0.0/8; treating it as 0.0.0.0/0 would allow every client.
+func parseTCPAllowPrefix(s string) (netip.Prefix, error) {
+	var p netip.Prefix
+	var err error
+	if strings.Contains(s, "/") {
+		p, err = netip.ParsePrefix(s)
+	} else {
+		var a netip.Addr
+		a, err = netip.ParseAddr(s)
+		if err == nil {
+			p = netip.PrefixFrom(a, a.BitLen())
+		}
+	}
+	if err != nil {
+		return netip.Prefix{}, fmt.Errorf("%q is not an IP address or CIDR range", s)
+	}
+	if a := p.Addr(); a.Is4In6() {
+		bits := p.Bits() - 96
+		if bits < 0 {
+			return netip.Prefix{}, fmt.Errorf("%q: only IPv4 ranges are supported (the TCP proxy cannot see IPv6 client addresses)", s)
+		}
+		p = netip.PrefixFrom(a.Unmap(), bits)
+	}
+	if !p.Addr().Is4() {
+		return netip.Prefix{}, fmt.Errorf("%q: only IPv4 ranges are supported (the TCP proxy cannot see IPv6 client addresses)", s)
+	}
+	return p.Masked(), nil
 }
 
 func sortPrefixes(ps []string) {
