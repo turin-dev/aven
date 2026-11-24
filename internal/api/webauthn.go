@@ -384,9 +384,10 @@ func (s *Server) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 			s.authFailed(w, r, acct, "로그인 시도가 너무 많습니다", "이메일 또는 비밀번호가 올바르지 않습니다")
 			return
 		}
-		wu, err := s.loadWebAuthnUser(r.Context(), u, rpID)
-		if err != nil {
-			s.storeErr(w, err)
+		// loadErr, not err: a := here would shadow err, and a BeginLogin failure below would go unchecked.
+		wu, loadErr := s.loadWebAuthnUser(r.Context(), u, rpID)
+		if loadErr != nil {
+			s.storeErr(w, loadErr)
 			return
 		}
 		if len(wu.credentials) == 0 {
@@ -394,7 +395,7 @@ func (s *Server) beginPasskeyLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		options, session, err = wa.BeginLogin(wu, webauthn.WithUserVerification(protocol.VerificationRequired))
-		userID, purpose, acct = u.ID, "login_factor", "passkey:"+u.ID
+		userID, purpose = u.ID, "login_factor"
 	} else {
 		acct = discoverableAcct(s, r)
 		if s.lockedOut(w, r, acct, "로그인 시도가 너무 많습니다") {

@@ -216,7 +216,7 @@ try {
             "AVEN_RAILPACK_BIN=$(Join-Path $programRoot 'railpack.exe')",
             "AVEN_AGENT_BIN_DIR=$programRoot",
             'DOCKER_HOST=npipe:////./pipe/docker_engine',
-            'AVEN_LISTEN=0.0.0.0:7070',
+            'AVEN_LISTEN=127.0.0.1:7070',
             'AVEN_SELF_PROJECT=off',
             "AVEN_ADMIN_PASSWORD=$AdminPassword"
         )
@@ -247,11 +247,13 @@ try {
         @{ Name = 'Aven HTTP'; Protocol = 'TCP'; Port = '80'; Remote = 'Any' },
         @{ Name = 'Aven HTTPS'; Protocol = 'TCP'; Port = '443'; Remote = 'Any' },
         @{ Name = 'Aven HTTPS QUIC'; Protocol = 'UDP'; Port = '443'; Remote = 'Any' },
-        @{ Name = 'Aven API from local containers'; Protocol = 'TCP'; Port = '7070'; Remote = 'LocalSubnet' },
         @{ Name = 'Aven public route from local proxy'; Protocol = 'TCP'; Port = '7071'; Remote = 'LocalSubnet' },
         @{ Name = 'Aven traces from local containers'; Protocol = 'TCP'; Port = '4318'; Remote = 'LocalSubnet' },
         @{ Name = 'Aven wake from local proxy'; Protocol = 'TCP'; Port = '5381'; Remote = 'LocalSubnet' }
     )
+    # Older installers opened the plain-HTTP dashboard port (7070) to the local subnet. The dashboard now
+    # listens on loopback only, so drop that rule when upgrading.
+    Get-NetFirewallRule -DisplayName 'Aven API from local containers' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     foreach ($rule in $firewallRules) {
         Get-NetFirewallRule -DisplayName $rule.Name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         New-NetFirewallRule -DisplayName $rule.Name -Direction Inbound -Action Allow -Protocol $rule.Protocol -LocalPort $rule.Port -RemoteAddress $rule.Remote -Profile Any | Out-Null

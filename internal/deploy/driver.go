@@ -411,10 +411,6 @@ func (r *remoteDriver) tcpEnsure(ctx context.Context, req agentprotocol.TCPProxy
 	return r.call(ctx, agentprotocol.OpTCPEnsure, req, nil)
 }
 
-func (r *remoteDriver) tcpRemove(ctx context.Context, instanceID string) error {
-	return r.call(ctx, agentprotocol.OpTCPRemove, agentprotocol.TCPRemoveRequest{InstanceID: instanceID}, nil)
-}
-
 func (r *remoteDriver) nodeStats(ctx context.Context) (agentprotocol.NodeStats, error) {
 	var s agentprotocol.NodeStats
 	err := r.call(ctx, agentprotocol.OpNodeStats, struct{}{}, &s)

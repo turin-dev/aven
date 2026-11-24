@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -233,5 +234,58 @@ func TestGraphQLTCPProxyMapping(t *testing.T) {
 		len(calls) != 1 || calls[0].method != http.MethodPatch || !strings.HasSuffix(calls[0].path, "/domains/web.example.com") ||
 		!strings.Contains(calls[0].body, `"host":"shop.example.com"`) || !strings.Contains(calls[0].body, `"target_port":3000`) {
 		t.Fatalf("serviceDomainUpdate rename: %s %+v", e, calls)
+	}
+}
+
+func TestTCPProxyAllowlist(t *testing.T) {
+	f := newGHFixture(t)
+	fixtureProxy(t, f)
+	t.Setenv("KEEL_INGRESS_MODE", "")
+	f.mgr.Cfg.TCPPortMin, f.mgr.Cfg.TCPPortMax, f.mgr.Cfg.ProxyBind = 29900, 29999, "127.0.0.1"
+	f.mgr.Cfg.TCPAllowDefault = []string{"192.0.2.0/24"}
+	pv := map[string]string{"sid": f.db.ID, "eid": f.prod.ID}
+
+	if code, out := f.call(f.srv.addTCPProxy, "POST", "/x", `{"container_port":5432,"allow_cidrs":["2001:db8::/32"]}`, pv); code != 400 {
+		t.Fatalf("ipv6 entry: %d %v", code, out)
+	}
+	// Without a list of its own the proxy enforces the server default.
+	if code, out := f.call(f.srv.addTCPProxy, "POST", "/x", `{"container_port":5432}`, pv); code != 200 {
+		t.Fatalf("enable: %d %v", code, out)
+	}
+	_, out := f.call(f.srv.getTCPProxy, "GET", "/x", "", pv)
+	if fmt.Sprint(out["allow_cidrs"]) != "[]" || fmt.Sprint(out["effective_allow_cidrs"]) != "[192.0.2.0/24]" || fmt.Sprint(out["default_allow_cidrs"]) != "[192.0.2.0/24]" {
+		t.Fatalf("default view: %v", out)
+	}
+	// PATCH with only allow_cidrs keeps the port; entries are normalized.
+	if code, out := f.call(f.srv.patchTCPProxy, "PATCH", "/x", `{"allow_cidrs":["10.1.2.3/8"," 203.0.113.7 "]}`, pv); code != 200 {
+		t.Fatalf("patch list: %d %v", code, out)
+	}
+	in, _ := f.st.GetInstanceFor(f.ctx, f.db.ID, f.prod.ID)
+	if in.TCPProxy.ContainerPort != 5432 || fmt.Sprint(in.TCPProxy.AllowCIDRs) != "[10.0.0.0/8 203.0.113.7/32]" {
+		t.Fatalf("stored: %+v", in.TCPProxy)
+	}
+	_, out = f.call(f.srv.getTCPProxy, "GET", "/x", "", pv)
+	if fmt.Sprint(out["effective_allow_cidrs"]) != "[10.0.0.0/8 203.0.113.7/32]" {
+		t.Fatalf("own list view: %v", out)
+	}
+	// 0.0.0.0/0 opts out of the default: nothing is enforced.
+	if code, _ := f.call(f.srv.patchTCPProxy, "PATCH", "/x", `{"allow_cidrs":["0.0.0.0/0"]}`, pv); code != 200 {
+		t.Fatal("allow all")
+	}
+	_, out = f.call(f.srv.getTCPProxy, "GET", "/x", "", pv)
+	if fmt.Sprint(out["allow_cidrs"]) != "[0.0.0.0/0]" || fmt.Sprint(out["effective_allow_cidrs"]) != "[]" {
+		t.Fatalf("allow-all view: %v", out)
+	}
+	// [] goes back to the default; a port-only POST does not touch the list.
+	f.call(f.srv.patchTCPProxy, "PATCH", "/x", `{"allow_cidrs":["10.0.0.0/8"]}`, pv)
+	f.call(f.srv.addTCPProxy, "POST", "/x", `{"container_port":6000}`, pv)
+	in, _ = f.st.GetInstanceFor(f.ctx, f.db.ID, f.prod.ID)
+	if in.TCPProxy.ContainerPort != 6000 || fmt.Sprint(in.TCPProxy.AllowCIDRs) != "[10.0.0.0/8]" {
+		t.Fatalf("port-only POST changed the list: %+v", in.TCPProxy)
+	}
+	f.call(f.srv.patchTCPProxy, "PATCH", "/x", `{"allow_cidrs":[]}`, pv)
+	in, _ = f.st.GetInstanceFor(f.ctx, f.db.ID, f.prod.ID)
+	if len(in.TCPProxy.AllowCIDRs) != 0 {
+		t.Fatalf("reset: %+v", in.TCPProxy)
 	}
 }

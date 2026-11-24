@@ -480,7 +480,7 @@ func (s *Server) populateEnvironment(ctx context.Context, p *store.Project, env 
 			}
 			if orig.TCPProxy != nil && !policies.RestrictTCPProxy {
 				if port, err := s.Deploy.AllocateTCPPort(ctx); err == nil {
-					in.TCPProxy = &store.TCPProxy{ContainerPort: orig.TCPProxy.ContainerPort, PublicPort: port}
+					in.TCPProxy = &store.TCPProxy{ContainerPort: orig.TCPProxy.ContainerPort, PublicPort: port, AllowCIDRs: orig.TCPProxy.AllowCIDRs}
 				} else {
 					in.TCPProxy = nil
 				}

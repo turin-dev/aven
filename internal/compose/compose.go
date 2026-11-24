@@ -1152,7 +1152,7 @@ func parseHealthTest(test []string) (kind string, port int, path string) {
 }
 
 var (
-	hostRuleRe = regexp.MustCompile("Host\\(([^)]*)\\)")
+	hostRuleRe = regexp.MustCompile(`Host\(([^)]*)\)`)
 	btRe       = regexp.MustCompile("`([^`]+)`")
 )
 

@@ -91,6 +91,9 @@ func TestPatchNodeIPv6Pool(t *testing.T) {
 		}
 	}
 	code, out = call(store.LocalNodeID, `{"ipv6_pool":"2001:db8:6b:1943:e:1::/96"}`)
+	if code != 409 {
+		t.Fatalf("overlap: %d %v", code, out)
+	}
 	if !strings.Contains(fmt.Sprint(out["error"]), "us") {
 		t.Fatalf("overlap message: %v", out)
 	}

@@ -243,7 +243,7 @@ function Deliveries({ pid, cid }: { pid: ID | null; cid: ID }) {
             {d.status === "ok" ? `${d.status_code ?? "ok"} · ${d.duration_ms}ms` : d.error}
             {d.attempts > 1 && t(" · {count}회 시도", { count: d.attempts })}
           </span>
-          <span className="shrink-0 text-gray-400" title={fmtTime(d.created_at)}>
+          <span className="shrink-0 text-gray-500" title={fmtTime(d.created_at)}>
             {fmtRelative(d.created_at)}
           </span>
         </li>

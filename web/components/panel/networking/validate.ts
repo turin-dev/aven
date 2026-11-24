@@ -148,6 +148,18 @@ export function isIPOrCIDR(raw: string) {
 
 export const isIPv4OrCIDR = (raw: string) => isIPOrCIDR(raw) && isIPv4(raw.split("/")[0]);
 
+/** Most ranges a TCP proxy allowlist may hold (internal/node MaxTCPAllowCIDRs). */
+export const TCP_ALLOW_MAX = 32;
+
+/**
+ * A TCP proxy allowlist typed as text: entries split on commas, spaces and new lines. `bad` lists entries the server
+ * would refuse (the forwarder only sees IPv4 client addresses, so IPv6 is refused too).
+ */
+export function parseTcpAllow(text: string): { list: string[]; bad: string[] } {
+  const list = [...new Set(text.split(/[\s,]+/).filter(Boolean))];
+  return { list, bad: list.filter((x) => !isIPv4OrCIDR(x)) };
+}
+
 /** Entries of an allow/deny list that the server would reject. */
 export const invalidIPs = (list: string[]) => list.filter((x) => !isIPOrCIDR(x));
 

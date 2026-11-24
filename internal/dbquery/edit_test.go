@@ -175,6 +175,7 @@ func TestTaggedCommands(t *testing.T) {
 	if !strings.Contains(e, ".limit(11).maxTimeMS(25000).toArray()") {
 		t.Errorf("mongo %s", e)
 	}
+	//lint:ignore SA4000 two calls must return different tags
 	if len(NewTag()) != 24 || !tagRe.MatchString(NewTag()) || NewTag() == NewTag() {
 		t.Error("NewTag")
 	}

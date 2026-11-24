@@ -73,13 +73,18 @@ func (m *Manager) syncTCPOn(ctx context.Context, t *Target, in *store.Instance, 
 		return nil
 	}
 	target := PrivateDomain(t.Service.Name, t.Env.Name)
-	sig := fmt.Sprintf("%d:%d:%s", in.TCPProxy.PublicPort, in.TCPProxy.ContainerPort, target)
+	fwd := node.TCPForward{Port: in.TCPProxy.ContainerPort, Target: target, Allow: m.TCPAllowFor(in.TCPProxy)}
+	sig := fwd.Signature(in.TCPProxy.PublicPort)
 	if !isLocal(nodeID) {
 		if err := m.ensureEnvNetwork(ctx, t.Env, nodeID); err != nil {
 			return err
 		}
-		return (&remoteDriver{hub: m.Agents, node: nodeID}).tcpEnsure(ctx, agentprotocol.TCPProxyRequest{InstanceID: in.ID, ProjectID: t.Project.ID, EnvID: t.Env.ID,
-			Network: EnvNetwork(t.Env.ID), Target: target, PublicPort: in.TCPProxy.PublicPort, ContainerPort: in.TCPProxy.ContainerPort})
+		req := agentprotocol.TCPProxyRequest{InstanceID: in.ID, ProjectID: t.Project.ID, EnvID: t.Env.ID,
+			Network: EnvNetwork(t.Env.ID), Target: target, PublicPort: in.TCPProxy.PublicPort, ContainerPort: in.TCPProxy.ContainerPort}
+		if fwd.Restricted() {
+			req.AllowCIDRs = fwd.Allow
+		}
+		return m.tcpEnsureRemote(ctx, nodeID, req)
 	}
 	got := ""
 	if st != nil {
@@ -110,8 +115,8 @@ func (m *Manager) syncTCPOn(ctx context.Context, t *Target, in *store.Instance, 
 		Labels: map[string]string{node.LabelManaged: "true", node.LabelRole: node.RoleTCPProxy, node.LabelInstance: in.ID,
 			node.LabelEnv: t.Env.ID, node.LabelProject: t.Project.ID, "aven.tcp": sig, "keel.tcp": sig},
 		Publish: []string{pub},
-		Cmd: []string{fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", in.TCPProxy.ContainerPort),
-			fmt.Sprintf("TCP:%s:%d", target, in.TCPProxy.ContainerPort)},
+		Env:     fwd.Env(),
+		Cmd:     fwd.Cmd(),
 	})
 }
 
@@ -264,6 +269,24 @@ func (m *Manager) tcpEndpointOn(ctx context.Context, nodeID string) (string, boo
 		return v6, true
 	}
 	return v4, true
+}
+
+// tcpEnsureRemote asks a remote agent to run the forwarder. An agent that predates allowlists refuses
+// the allow_cidrs field; that is reported as ErrTCPAllowUnsupported, never retried as an open proxy.
+func (m *Manager) tcpEnsureRemote(ctx context.Context, nodeID string, req agentprotocol.TCPProxyRequest) error {
+	err := (&remoteDriver{hub: m.Agents, node: nodeID}).tcpEnsure(ctx, req)
+	if err != nil && strings.Contains(err.Error(), `unknown field "allow_cidrs"`) {
+		return fmt.Errorf("node %s: %w", nodeID, node.ErrTCPAllowUnsupported)
+	}
+	return err
+}
+
+// TCPAllowFor is the client allowlist a TCP proxy enforces: its own list, else the server default.
+func (m *Manager) TCPAllowFor(p *store.TCPProxy) []string {
+	if p == nil {
+		return nil
+	}
+	return node.EffectiveTCPAllow(p.AllowCIDRs, m.Cfg.TCPAllowDefault)
 }
 
 // SyncTCP는 API에서 TCP proxy 설정이 바뀌었을 때 부른다.

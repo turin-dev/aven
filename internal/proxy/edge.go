@@ -70,17 +70,6 @@ func (h *hostCfg) edgeForward() map[string]any {
 	}
 }
 
-// originHeaders는 origin 서버가 컨테이너로 보낼 때 엔진이 넘긴 클라이언트 정보를 X-Forwarded-*로 되돌린다.
-func originHeaders() map[string]any {
-	return map[string]any{"request": map[string]any{
-		"set": map[string][]string{
-			"X-Forwarded-For":   {"{http.request.header." + edge.HeaderClientIP + "}"},
-			"X-Forwarded-Proto": {"{http.request.header." + edge.HeaderClientProto + "}"},
-		},
-		"delete": []string{edge.HeaderClientIP, edge.HeaderClientProto},
-	}}
-}
-
 func (h *hostCfg) socket(name string) string {
 	dir := h.wakeDir
 	if dir == "" {

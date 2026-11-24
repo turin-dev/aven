@@ -270,6 +270,9 @@ func TestGraphQLMutations(t *testing.T) {
 		t.Fatalf("project volumes / environments: %v", data)
 	}
 	data = mustGQL(t, f.h, f.owner, `mutation($vid: String!) { volumeInstanceUpdate(volumeId: $vid, input: {serviceId: ""}) }`, map[string]any{"vid": volID})
+	if data["volumeInstanceUpdate"] != true {
+		t.Fatalf("volumeInstanceUpdate: %v", data)
+	}
 	if v, err := f.st.GetVolume(ctx, volID); err != nil || v.InstanceID != nil {
 		t.Fatalf("volume not detached: %+v %v", v, err)
 	}
@@ -528,6 +531,9 @@ func TestGraphQLRESTMapping(t *testing.T) {
 		t.Fatalf("deploymentRestart calls: %+v", calls)
 	}
 	data = run(`mutation { serviceInstanceRedeploy(serviceId: "svc_1", environmentId: "env_1") }`)
+	if data["serviceInstanceRedeploy"] != true {
+		t.Fatalf("serviceInstanceRedeploy: %v", data)
+	}
 	if len(calls) != 2 || calls[0].path != "/api/services/svc_1/instances/env_1/deployments?limit=1" || calls[1].path != "/api/deployments/dep_9/redeploy" {
 		t.Fatalf("serviceInstanceRedeploy calls: %+v", calls)
 	}

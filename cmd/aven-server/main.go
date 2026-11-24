@@ -74,9 +74,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer closeLog()
+	// The dashboard listener speaks plain HTTP, so it stays on loopback by default on every platform.
+	// On Windows, Docker Desktop forwards host.docker.internal to the host's loopback, so containers still reach it.
 	defaultListen := "[::1]:7070"
 	if runtime.GOOS == "windows" {
-		defaultListen = "0.0.0.0:7070"
+		defaultListen = "127.0.0.1:7070"
 	}
 	listen := flag.String("listen", env("LISTEN", defaultListen), "API/UI listen address")
 	dataDir := flag.String("data", env("DATA", compat.DefaultDataDir()), "data directory (AVEN_DATA)")
@@ -142,7 +144,45 @@ func checkEnv(listen string) error {
 	if _, err := parsePrefixes(compat.Env("TRUSTED_PROXIES")); err != nil {
 		return fmt.Errorf("%s: %w", compat.Describe("TRUSTED_PROXIES"), err)
 	}
+	if _, err := sessionMaxAge(); err != nil {
+		return fmt.Errorf("%s: %w", compat.Describe("SESSION_MAX_AGE"), err)
+	}
+	if _, err := tcpAllowDefault(); err != nil {
+		return fmt.Errorf("%s: %w", compat.Describe("TCP_PORT_ALLOW_CIDRS"), err)
+	}
 	return nil
+}
+
+// sessionMaxAge is AVEN_SESSION_MAX_AGE: the absolute lifetime of a login session, as a Go duration
+// ("2160h") or a number of days ("90d"); "off" removes the cap. Unset uses api.DefaultSessionMaxAge.
+func sessionMaxAge() (time.Duration, error) {
+	v := strings.TrimSpace(compat.Env("SESSION_MAX_AGE"))
+	switch {
+	case v == "":
+		return 0, nil
+	case strings.EqualFold(v, "off"):
+		return -1, nil
+	}
+	if days, ok := strings.CutSuffix(v, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("%q is not a number of days (e.g. 90d)", v)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < time.Hour {
+		return 0, fmt.Errorf("%q: use a duration of at least 1h (e.g. 2160h), a number of days (90d) or off", v)
+	}
+	return d, nil
+}
+
+// tcpAllowDefault is AVEN_TCP_PORT_ALLOW_CIDRS: the client allowlist of TCP proxies without their own
+// (IPv4 addresses or CIDRs separated by commas or spaces).
+func tcpAllowDefault() ([]string, error) {
+	return node.NormalizeTCPAllowCIDRs(strings.FieldsFunc(compat.Env("TCP_PORT_ALLOW_CIDRS"), func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}))
 }
 
 func run(log *slog.Logger, listen, dataDir string) (err error) {
@@ -303,6 +343,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		RailpackFrontend:   env("RAILPACK_FRONTEND", "ghcr.io/railwayapp/railpack-frontend:v0.42.0"),
 		TCPPortMin:         envInt("TCP_PORT_MIN", 20000),
 		TCPPortMax:         envInt("TCP_PORT_MAX", 29999),
+		TCPAllowDefault:    tcpAllowDefaultOrNil(),
 		PrivateAddress:     strings.TrimSpace(compat.Env("PRIVATE_ADDRESS")),
 		Mesh:               env("MESH", "auto"),
 		MeshPort:           envInt("MESH_PORT", 7443),
@@ -381,16 +422,16 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 	} else if mgr.LocalMesh != nil {
 		log.Info("mesh gateway enabled", "listen", mgr.LocalMesh.Listen)
 	}
-	bg.Go(func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
-	bg.Go(func() { mgr.EgressLoop(ctx, 30*time.Second) })  // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
-	bg.Go(func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
+	goLoop(&bg, ctx, log, "reconcile", func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
+	goLoop(&bg, ctx, log, "egress", func() { mgr.EgressLoop(ctx, 30*time.Second) })       // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
+	goLoop(&bg, ctx, log, "domain-ipv6", func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
 	if runtime.GOOS != "windows" && !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)
 	}
-	bg.Go(func() { mgr.WatchCrashes(ctx) })
-	bg.Go(func() { mgr.CronLoop(ctx) })
-	bg.Go(func() { mgr.ImageUpdateLoop(ctx) })
+	goLoop(&bg, ctx, log, "watch-crashes", func() { mgr.WatchCrashes(ctx) })
+	goLoop(&bg, ctx, log, "cron", func() { mgr.CronLoop(ctx) })
+	goLoop(&bg, ctx, log, "image-updates", func() { mgr.ImageUpdateLoop(ctx) })
 	// wake handler: keel-proxy와 같이 쓰는 볼륨의 unix socket에서만 listen한다(외부에 열지 않음).
 	if wl, err := listenWake(ctx, docker, caddy); err != nil {
 		log.Warn("wake handler disabled (sleeping services cannot wake)", "err", err)
@@ -401,15 +442,16 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		wakeHandler := mgr.WakeHandler()
 		if wakeSecret != "" {
-			wakeHandler = requireWakeSecret(wakeSecret, wakeHandler)
+			// The wake handler proxies the request on to the app, so drop the secret once it is checked.
+			wakeHandler = requireHeaderSecret(wakeSecretHeader, wakeSecret, stripHeader(wakeSecretHeader, wakeHandler))
 		}
 		ws := &http.Server{Handler: wakeHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, ws)
 		go ws.Serve(wl)
 		log.Info("wake handler listening", "addr", wl.Addr().String())
 	}
-	bg.Go(func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
-	bg.Go(func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
+	goLoop(&bg, ctx, log, "sleep", func() { mgr.SleepLoop(ctx) }) // 로컬(wake handler가 있을 때)과 원격 노드의 sleeping 판정
+	goLoop(&bg, ctx, log, "access-logs", func() { caddy.FollowAccessLogs(ctx, mgr.HTTPLogs.Add) })
 	collector := &metrics.Collector{Store: st, Docker: docker, Log: log, DataDir: dataDir, Events: bus, RemoteNodes: func(ctx context.Context) []metrics.NodeSource {
 		var out []metrics.NodeSource
 		for _, id := range mgr.OnlineRemoteNodeIDs(ctx) {
@@ -427,14 +469,14 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		return out
 	}}
-	bg.Go(func() { collector.Run(ctx) })
+	goLoop(&bg, ctx, log, "metrics", func() { collector.Run(ctx) })
 	// 지표 알림 규칙(30초마다)과 시간별 사용량 집계(매시, 놓친 시간은 보관 중인 지표로 채운다).
 	sources := &alerts.Sources{Store: st, HTTP: mgr.HTTPLogs.Window, Restarts: mgr.InstanceRestarts, VolumeSize: collector.VolumeSize}
-	bg.Go(func() { (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx) })
+	goLoop(&bg, ctx, log, "alerts", func() { (&alerts.Evaluator{Store: st, Events: bus, Log: log, Value: sources.Value}).Run(ctx) })
 	// 수평 자동 확장(30초마다, 최근 2분 지표 평균으로 HPA 방식 계산).
-	bg.Go(func() { mgr.AutoscaleLoop(ctx) })
-	bg.Go(func() { (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx) })
-	bg.Go(func() {
+	goLoop(&bg, ctx, log, "autoscale", func() { mgr.AutoscaleLoop(ctx) })
+	goLoop(&bg, ctx, log, "usage", func() { (&usage.Roller{Store: st, Events: bus, Log: log, Instances: mgr}).Run(ctx) })
+	goLoop(&bg, ctx, log, "prune", func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
@@ -456,7 +498,8 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		Store: st, Agents: hub, Deploy: mgr, Events: bus, Metrics: collector, AdminPassword: password, APIToken: compat.Env("API_TOKEN"),
 		AllowFileRepo: compat.Env("ALLOW_FILE_REPO") != "",
 		SessionKey:    key, SecureCookie: compat.Env("INSECURE_COOKIE") == "",
-		Web: webui.FS(), Version: version, NodeName: hostname, Log: log,
+		SessionMaxAge: mustSessionMaxAge(),
+		Web:           webui.FS(), Version: version, NodeName: hostname, Log: log,
 		GitHubSecret: compat.Env("GITHUB_WEBHOOK_SECRET"), GitHubAPIBase: env("GITHUB_API_URL", "https://api.github.com"),
 		GitHubClientID: compat.Env("GITHUB_CLIENT_ID"), GitHubClientSecret: compat.Env("GITHUB_CLIENT_SECRET"), PublicURL: compat.Env("PUBLIC_URL"),
 		AgentBinDir:        compat.Env("AGENT_BIN_DIR"),
@@ -464,10 +507,10 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		Notifier:           notifier, Pricing: pricing,
 		Traces: traceReceiver,
 	}
-	bg.Go(func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
+	goLoop(&bg, ctx, log, "trace-retention", func() { tracing.RetentionLoop(ctx, st, traceRetention(log), log) })
 	trusted, _ := parsePrefixes(compat.Env("TRUSTED_PROXIES")) // checked by checkEnv
 	srv.TrustedProxies = trusted
-	bg.Go(func() { srv.RunHA(ctx) }) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
+	goLoop(&bg, ctx, log, "ha", func() { srv.RunHA(ctx) }) // 데이터베이스 HA 클러스터 감시와 자동 failover(10초마다)
 	// 공개 도메인 상태 확인(DNS 분류, Cloudflare/터널 감지, 소유 확인, 인증서): 60초마다, 검증된 도메인은 최대 10분까지 간격을 늘린다.
 	domainChecker := &netcheck.Checker{Store: st, Targets: srv.NetCheckTargets, CheckCerts: true, Log: log}
 	// 확인 전 신규 도메인이 검증되면 라우트를 다시 보내 ACME 보류(on-demand)를 풀고 관리 정책으로 옮긴다(원격 노드 포함).
@@ -480,7 +523,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}()
 	}
 	srv.SetNetCheck(domainChecker)
-	bg.Go(func() { domainChecker.Run(ctx) })
+	goLoop(&bg, ctx, log, "domain-check", func() { domainChecker.Run(ctx) })
 	// 옛 Bearer 비밀키 agent는 기본 허용(첫 인증서 연결 때 자동 업그레이드).
 	srv.CA = agentCA
 	srv.DisableLegacyAgents = compat.Env("AGENT_LEGACY_BEARER") == "off"
@@ -499,9 +542,9 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 	}
 	handler := srv.Handler()
-	bg.Go(func() { srv.SandboxLoop(ctx) })
+	goLoop(&bg, ctx, log, "sandboxes", func() { srv.SandboxLoop(ctx) })
 	if runtime.GOOS != "windows" {
-		bg.Go(func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
+		goLoop(&bg, ctx, log, "self-update", func() { srv.SelfUpdateLoop(ctx) }) // aven-server(self 서비스) 저장소의 새 커밋 확인(30분마다)
 	}
 	hs := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 	// OTLP 수신기(OTLP/HTTP + h2c OTLP/gRPC). 컨테이너가 host-gateway로 닿아야 하므로 기본은 모든 주소다.
@@ -563,7 +606,10 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		if err != nil {
 			return fmt.Errorf("self route listener: %w", err)
 		}
-		selfServer := &http.Server{Handler: api.ViaGateway(selfSecret, handler), ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
+		// Unlike the Linux unix socket, this TCP port can be reached from the network, so a request
+		// without the proxy's secret header is refused instead of being served as an untrusted client.
+		selfHandler := requireHeaderSecret(api.GatewayHeader, selfSecret, api.ViaGateway(selfSecret, handler))
+		selfServer := &http.Server{Handler: selfHandler, ReadHeaderTimeout: 10 * time.Second, BaseContext: baseCtx}
 		servers = append(servers, selfServer)
 		go selfServer.Serve(selfListener)
 		log.Info("aven-server listening for the proxy (own public host)", "host", selfHost, "addr", proxy.NativeSelfListen)
@@ -805,13 +851,37 @@ func listenWake(ctx context.Context, docker *node.Docker, caddy *proxy.Caddy) (n
 	return l, nil
 }
 
-func requireWakeSecret(secret string, next http.Handler) http.Handler {
+// wakeSecretHeader carries the wake handler secret from Caddy when the wake handler listens on TCP (Windows).
+const wakeSecretHeader = "X-Aven-Wake-Secret"
+
+// requireHeaderSecret refuses requests whose header does not carry secret. An empty secret refuses everything.
+func requireHeaderSecret(header, secret string, next http.Handler) http.Handler {
 	want := []byte(secret)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Aven-Wake-Secret")), want) != 1 {
+		if secret == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get(header)), want) != 1 {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// stripHeader removes header from the request before next sees it.
+func stripHeader(header string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Del(header)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// tcpAllowDefaultOrNil is tcpAllowDefault after checkEnv has validated it.
+func tcpAllowDefaultOrNil() []string {
+	l, _ := tcpAllowDefault()
+	return l
+}
+
+// mustSessionMaxAge is sessionMaxAge after checkEnv has validated it.
+func mustSessionMaxAge() time.Duration {
+	d, _ := sessionMaxAge()
+	return d
 }

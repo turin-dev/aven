@@ -203,7 +203,7 @@ export const ServiceCard = memo(function ServiceCard({ svc, envId, selected }: {
         {state && (
           <span
             title={state === "edited" ? t("적용하지 않은 변경 사항 {count}개", { count: staged }) : undefined}
-            className={cx("absolute right-[10px] top-[10px] z-10 rounded px-1.5 py-0.5 text-[10px] font-semibold text-background", NODE_STATE[state].badge)}
+            className={cx("absolute right-[10px] top-[10px] z-10 rounded px-1.5 py-0.5 text-[10px] font-semibold text-foreground", NODE_STATE[state].badge)}
           >
             {NODE_STATE[state].label}
           </span>

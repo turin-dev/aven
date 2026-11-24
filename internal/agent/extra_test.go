@@ -671,3 +671,32 @@ func TestWakeCoalescesConcurrentRequestsPerHost(t *testing.T) {
 		t.Fatalf("%d wake flights left", left)
 	}
 }
+
+func TestTCPProxyEnsureWithAllowlist(t *testing.T) {
+	f := &extraDocker{}
+	h := &Handler{Docker: f, Proxy: &fakeProxy{}}
+	r := validTCP()
+	r.AllowCIDRs = []string{"10.0.0.0/8", "203.0.113.7/32"}
+	if _, err := handle(t, h, agentprotocol.OpTCPEnsure, r); err != nil {
+		t.Fatal(err)
+	}
+	s := f.ran[0]
+	if s.Env["AVEN_TCP_ALLOW"] != "10.0.0.0/8 203.0.113.7/32" || s.Env["AVEN_TCP_TARGET"] != "web.production.keel.internal:5432" ||
+		len(s.Cmd) != 2 || !strings.HasPrefix(s.Cmd[1], "SYSTEM:") {
+		t.Fatalf("spec: env %v cmd %v", s.Env, s.Cmd)
+	}
+	if !strings.Contains(s.Labels["aven.tcp"], ":allow=10.0.0.0/8,203.0.113.7/32") {
+		t.Fatalf("signature label %q does not carry the list", s.Labels["aven.tcp"])
+	}
+	// The agent re-validates: only normalized IPv4 CIDRs, never shell text or IPv6.
+	for _, bad := range [][]string{{"10.0.0.1/8"}, {"2001:db8::/32"}, {"10.0.0.0/8; reboot"}, {"$(id)"}} {
+		r := validTCP()
+		r.AllowCIDRs = bad
+		if _, err := handle(t, h, agentprotocol.OpTCPEnsure, r); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+	if len(f.ran) != 1 {
+		t.Fatal("container started for a rejected allowlist")
+	}
+}

@@ -227,9 +227,11 @@ func (c *Client) request(ctx context.Context, method, rawURL string, r Reference
 	scheme, params := parseChallenge(challenge)
 	switch strings.ToLower(scheme) {
 	case "bearer":
-		access, err := c.bearerToken(ctx, params, r)
-		if err != nil {
-			return nil, err
+		// tokenErr, not err: a := here would shadow err, and a failed request below would leave resp nil
+		// for the status check after the switch.
+		access, tokenErr := c.bearerToken(ctx, params, r)
+		if tokenErr != nil {
+			return nil, tokenErr
 		}
 		resp, err = makeRequest(access, false)
 	case "basic":

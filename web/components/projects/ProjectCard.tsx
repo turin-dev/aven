@@ -98,7 +98,7 @@ function StatusLine({ status }: { status: Status }) {
         </>
       )}
       {lastDeploy && (
-        <time dateTime={lastDeploy} title={t("마지막 배포: {time}", { time: new Date(lastDeploy).toLocaleString(dateLocale()) })} className="ml-auto shrink-0 pl-2 text-gray-400">
+        <time dateTime={lastDeploy} title={t("마지막 배포: {time}", { time: new Date(lastDeploy).toLocaleString(dateLocale()) })} className="ml-auto shrink-0 pl-2 text-gray-500">
           {relTime(lastDeploy)}
         </time>
       )}

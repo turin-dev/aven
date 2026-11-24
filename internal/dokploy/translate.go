@@ -141,9 +141,8 @@ type target struct {
 }
 
 type domainEntry struct {
-	svc   string
-	d     Domain
-	stack bool
+	svc string
+	d   Domain
 }
 
 type translator struct {
@@ -233,12 +232,11 @@ func Translate(s *Snapshot, o Options) *Plan {
 	}
 
 	type appItem struct {
-		p    *Project
-		e    *Environment
-		a    *Application
-		sp   *ServicePlan
-		pp   *ProjectPlan
-		name string
+		p  *Project
+		e  *Environment
+		a  *Application
+		sp *ServicePlan
+		pp *ProjectPlan
 	}
 	var items []*appItem
 	var dbItems []*ServicePlan

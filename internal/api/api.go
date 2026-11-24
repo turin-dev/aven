@@ -38,6 +38,9 @@ type Server struct {
 	APIToken      string // 비어 있으면 Bearer 인증을 쓰지 않음
 	AllowFileRepo bool   // 개발용: file:// 저장소 허용
 	SessionKey    []byte
+	// SessionMaxAge is the absolute lifetime of a login session (AVEN_SESSION_MAX_AGE). 0 uses
+	// DefaultSessionMaxAge; a negative value removes the cap (sessions then only expire when idle).
+	SessionMaxAge time.Duration
 	SecureCookie  bool
 	Web           fs.FS
 	Version       string

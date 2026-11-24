@@ -599,6 +599,9 @@ func DomainAuthKey(instanceID, host string) string { return "domain_auth:" + ins
 type TCPProxy struct {
 	ContainerPort int `json:"container_port"`
 	PublicPort    int `json:"public_port"`
+	// AllowCIDRs limits which client addresses may connect (normalized IPv4 CIDRs, node.NormalizeTCPAllowCIDRs).
+	// Empty uses the server default (AVEN_TCP_PORT_ALLOW_CIDRS); ["0.0.0.0/0"] admits everyone regardless.
+	AllowCIDRs []string `json:"allow_cidrs,omitempty"`
 }
 
 type Canvas struct {

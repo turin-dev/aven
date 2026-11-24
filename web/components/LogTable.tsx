@@ -604,11 +604,13 @@ export function LogTable({
           </div>
         </div>
       )}
+      {/* role="table" groups the header row and the log rows, so the row/cell roles have the parent ARIA requires. */}
+      <div role="table" aria-label={t("로그")} className="flex min-h-0 flex-1 flex-col">
       <div role="rowgroup" className="relative w-full shrink-0 bg-secondaryBg after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']">
         <div role="row" className="grid w-full select-none text-left text-xs font-medium text-neutral-secondary" style={{ gridTemplateColumns: gridCols(cols) }}>
           {time ? (
             <div role="columnheader" className="relative flex items-center whitespace-nowrap bg-secondaryBg px-2 py-1.5 pl-6">
-              {t("날짜")} <span className="ml-1 text-gray-400">({tz})</span>
+              {t("날짜")} <span className="ml-1 text-gray-500">({tz})</span>
             </div>
           ) : (
             <div />
@@ -636,7 +638,7 @@ export function LogTable({
                     <RotateCw className="size-3" aria-hidden /> {t("다시 연결")}
                   </button>
                 )}
-                <span className="ml-2 tabular-nums text-gray-400">
+                <span className="ml-2 tabular-nums text-gray-500">
                   {filtered ? `${shown.length.toLocaleString()} / ` : ""}
                   {t("{count}줄", { count: rows.length.toLocaleString() })}
                 </span>
@@ -648,8 +650,7 @@ export function LogTable({
       <div
         ref={scroller}
         onScroll={onScroll}
-        role="log"
-        aria-live="off"
+        role="rowgroup"
         aria-label={t("로그")}
         tabIndex={0}
         data-noscroll
@@ -673,6 +674,7 @@ export function LogTable({
           </div>
         )}
         {footer}
+      </div>
       </div>
       <div className="absolute bottom-4 right-4 flex flex-col gap-2">
         <button

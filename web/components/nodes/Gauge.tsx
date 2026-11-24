@@ -42,12 +42,17 @@ export function Gauge({
         <span className={cx("ml-auto shrink-0 text-sm font-medium tabular-nums", TEXT[lv])}>{value}</span>
       </div>
       {bar ? <div
-        role="meter"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={pct === null ? undefined : Math.round(pct)}
-        aria-valuetext={typeof value === "string" ? value : undefined}
+        // A meter must have a value; with no reading the bar is empty decoration and the label above says "—".
+        {...(pct === null
+          ? { "aria-hidden": true }
+          : {
+              role: "meter",
+              "aria-label": label,
+              "aria-valuemin": 0,
+              "aria-valuemax": 100,
+              "aria-valuenow": Math.round(pct),
+              "aria-valuetext": typeof value === "string" ? value : undefined,
+            })}
         className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-gray-100"
       >
         <div className={cx("h-full rounded-full transition-[width] duration-500 motion-reduce:transition-none", BAR[lv])} style={{ width: `${width}%` }} />

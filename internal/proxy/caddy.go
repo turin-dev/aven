@@ -429,11 +429,10 @@ func (c *Caddy) reloadThroughDocker(ctx context.Context, body []byte) error {
 }
 
 type pathRule struct {
-	path   string // 정규화된 규칙("" = catch-all)
-	strip  bool
-	routes []string
-	ups    []string
-	wake   bool
+	path  string // 정규화된 규칙("" = catch-all)
+	strip bool
+	ups   []string
+	wake  bool
 
 	trace      bool
 	traceAttrs map[string]string

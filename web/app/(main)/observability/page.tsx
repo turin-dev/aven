@@ -94,7 +94,7 @@ function RecentErrors({ envId, names, onOpen }: { envId: string; names: Map<stri
             <span className="min-w-0 flex-1 truncate font-mono text-xs text-danger" title={l.msg}>
               {l.msg}
             </span>
-            <span className="shrink-0 text-xs tabular-nums text-gray-400" title={fmtTime(l.t)}>
+            <span className="shrink-0 text-xs tabular-nums text-gray-500" title={fmtTime(l.t)}>
               {fmtRelative(l.t)}
             </span>
           </button>
@@ -241,7 +241,7 @@ function ObservabilityInner() {
                       {eventIcon(e.kind)}
                       <span className="w-[110px] shrink-0 truncate text-sm font-medium">{(e.service_id && names.get(e.service_id)) || e.service_name || (e.service_id ? t("삭제된 서비스") : t("프로젝트"))}</span>
                       <span className="min-w-0 flex-1 truncate text-sm text-gray-600">{e.message}</span>
-                      <span className="shrink-0 text-xs tabular-nums text-gray-400" title={fmtTime(e.created_at)}>
+                      <span className="shrink-0 text-xs tabular-nums text-gray-500" title={fmtTime(e.created_at)}>
                         {fmtRelative(e.created_at)}
                       </span>
                     </Link>

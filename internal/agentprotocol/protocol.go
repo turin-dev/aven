@@ -365,6 +365,9 @@ type TCPProxyRequest struct {
 	Target        string `json:"target"` // 환경 네트워크 안의 서비스 alias(<service>.<env>.keel.internal)
 	PublicPort    int    `json:"public_port"`
 	ContainerPort int    `json:"container_port"`
+	// AllowCIDRs is the effective client allowlist (normalized IPv4 CIDRs); empty admits everyone.
+	// omitempty: agents older than this field refuse it, so a proxy without a list still works with them.
+	AllowCIDRs []string `json:"allow_cidrs,omitempty"`
 }
 
 type TCPRemoveRequest struct {

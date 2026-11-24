@@ -400,15 +400,15 @@ func (s *Server) oauthSession(w http.ResponseWriter, r *http.Request) *principal
 	if !ok {
 		return nil
 	}
-	p, refresh := s.sessionPrincipal(r.Context(), c.Value)
+	p, refreshUntil := s.sessionPrincipal(r.Context(), c.Value)
 	if p == nil {
 		return nil
 	}
 	if p.ViewAsBy == nil && !s.samlSessionOK(r.Context(), p) {
 		return nil
 	}
-	if refresh {
-		http.SetCookie(w, s.sessionCookie(r, c.Value, time.Now().Add(sessionTTL), 0))
+	if !refreshUntil.IsZero() {
+		http.SetCookie(w, s.sessionCookie(r, c.Value, refreshUntil, 0))
 	}
 	return p
 }
