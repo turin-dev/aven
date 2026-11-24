@@ -1,13 +1,13 @@
 module github.com/turin-dev/aven
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/beevik/etree v1.8.1
 	github.com/coder/websocket v1.8.15
-	github.com/compose-spec/compose-go/v2 v2.16.2
+	github.com/compose-spec/compose-go/v2 v2.17.0
 	github.com/crewjam/saml v0.6.3
 	github.com/go-webauthn/webauthn v0.18.2
 	github.com/graphql-go/graphql v0.8.1
@@ -23,7 +23,6 @@ require (
 require (
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
-	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.4 // indirect
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect

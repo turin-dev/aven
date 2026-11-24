@@ -20,7 +20,7 @@ It is a small Laravel 13 app with no database, sessions or build step: Blade vie
 
 ## Run it locally
 
-With PHP 8.3+ and Composer:
+With PHP 8.4+ and Composer:
 
 ```sh
 composer install
