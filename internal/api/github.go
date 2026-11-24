@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/deploy"
 	"github.com/turin-dev/aven/internal/guardrails"
 	"github.com/turin-dev/aven/internal/store"
@@ -122,7 +123,7 @@ const maxWebhookBody = 25 << 20
 func (s *Server) githubWebhook(w http.ResponseWriter, r *http.Request) {
 	// 비밀이 없으면 본문(최대 25MB)을 읽기 전에 거절한다. GitHub payload 상한은 25MB다.
 	if s.GitHubSecret == "" {
-		writeErr(w, 403, "KEEL_GITHUB_WEBHOOK_SECRET is not configured")
+		writeErr(w, 403, compat.Describe("GITHUB_WEBHOOK_SECRET")+" is not configured")
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody+1))

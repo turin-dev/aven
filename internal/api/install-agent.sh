@@ -5,9 +5,9 @@
 #
 # Options:
 #   --server URL        aven-server URL (https:// only)
-#   --token TOKEN       one-time join token (or env KEEL_JOIN_TOKEN, or prompted on a terminal)
+#   --token TOKEN       one-time join token (or env AVEN_JOIN_TOKEN, else KEEL_JOIN_TOKEN, or prompted)
 #   --ca-file PATH      PEM CA certificate to trust for the server (private CA)
-#   --env KEY=VALUE     extra agent setting written to the env file (KEY must start with KEEL_), repeatable
+#   --env KEY=VALUE     extra agent setting (KEY must start with AVEN_ or KEEL_). A KEEL_ key is stored as AVEN_. Repeatable.
 #   --reenroll          forget the saved node credentials and join again with --token
 #
 # The join token is never put on the agent's command line or in the unit file: it goes into
@@ -27,7 +27,7 @@ CRED=$DATA_DIR/credentials.json
 UNIT=/etc/systemd/system/keel-agent.service
 
 SERVER=""
-TOKEN="${KEEL_JOIN_TOKEN:-}"
+TOKEN="${AVEN_JOIN_TOKEN:-${KEEL_JOIN_TOKEN:-}}"
 CA_FILE=""
 REENROLL=0
 EXTRA=""
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
 		--env) [ $# -ge 2 ] || die "--env needs KEY=VALUE"; EXTRA="$EXTRA$2$NL"; shift 2 ;;
 		--env=*) EXTRA="$EXTRA${1#*=}$NL"; shift ;;
 		--reenroll) REENROLL=1; shift ;;
-		-h|--help) echo "usage: install-agent.sh --server https://... [--token TOKEN] [--ca-file PEM] [--env KEEL_X=V]... [--reenroll]"; exit 0 ;;
+		-h|--help) echo "usage: install-agent.sh --server https://... [--token TOKEN] [--ca-file PEM] [--env AVEN_X=V]... [--reenroll]"; exit 0 ;;
 		*) die "unknown option: $1" ;;
 	esac
 done
@@ -86,7 +86,7 @@ if [ -n "$CA_FILE" ]; then
 		cp "$CA_FILE" "$CA_DEST.tmp" && mv -f "$CA_DEST.tmp" "$CA_DEST"
 	fi
 	chmod 644 "$CA_DEST"
-elif [ -f "$ENV_FILE" ] && grep -q '^KEEL_CA_FILE=' "$ENV_FILE" && [ -f "$CA_DEST" ]; then
+elif [ -f "$ENV_FILE" ] && grep -q -e '^AVEN_CA_FILE=' -e '^KEEL_CA_FILE=' "$ENV_FILE" && [ -f "$CA_DEST" ]; then
 	CA_FILE=$CA_DEST # keep the CA from an earlier run
 fi
 set -- --proto =https --tlsv1.2 -fsSL --retry 3
@@ -143,25 +143,28 @@ say "installed $BIN"
 # Env file: managed keys are rewritten, other lines (e.g. settings added by hand) are kept.
 : > "$TMP/agent.env"
 if [ -f "$ENV_FILE" ]; then
-	grep -v -e '^KEEL_SERVER_URL=' -e '^KEEL_JOIN_TOKEN=' -e '^KEEL_CA_FILE=' "$ENV_FILE" >> "$TMP/agent.env" || true
+	grep -v -e '^AVEN_SERVER_URL=' -e '^AVEN_JOIN_TOKEN=' -e '^AVEN_CA_FILE=' \
+		-e '^KEEL_SERVER_URL=' -e '^KEEL_JOIN_TOKEN=' -e '^KEEL_CA_FILE=' "$ENV_FILE" >> "$TMP/agent.env" || true
 fi
 printf '%s' "$EXTRA" | while IFS= read -r kv; do
 	[ -n "$kv" ] || continue
 	key=${kv%%=*}
 	case "$key" in
-		KEEL_SERVER_URL|KEEL_JOIN_TOKEN|KEEL_CA_FILE) die "--env cannot set $key" ;;
-		KEEL_*) ;;
-		*) die "--env key must start with KEEL_: $key" ;;
+		AVEN_SERVER_URL|AVEN_JOIN_TOKEN|AVEN_CA_FILE|KEEL_SERVER_URL|KEEL_JOIN_TOKEN|KEEL_CA_FILE)
+			die "--env cannot set $key" ;;
+		AVEN_*|KEEL_*) ;;
+		*) die "--env key must start with AVEN_ (KEEL_ is still accepted): $key" ;;
 	esac
 	case "$key" in *[!A-Z0-9_]*) die "invalid --env key: $key" ;; esac
-	grep -v "^$key=" "$TMP/agent.env" > "$TMP/agent.env.2" || true
+	case "$key" in KEEL_*) key="AVEN_${key#KEEL_}" ;; esac
+	grep -v -e "^${key}=" -e "^KEEL_${key#AVEN_}=" "$TMP/agent.env" > "$TMP/agent.env.2" || true
 	mv -f "$TMP/agent.env.2" "$TMP/agent.env"
-	printf '%s\n' "$kv" >> "$TMP/agent.env"
+	printf '%s=%s\n' "$key" "${kv#*=}" >> "$TMP/agent.env"
 done
 {
-	printf 'KEEL_SERVER_URL=%s\n' "$SERVER"
-	[ -n "$CA_FILE" ] && printf 'KEEL_CA_FILE=%s\n' "$CA_DEST"
-	[ -n "$TOKEN" ] && printf 'KEEL_JOIN_TOKEN=%s\n' "$TOKEN"
+	printf 'AVEN_SERVER_URL=%s\n' "$SERVER"
+	[ -n "$CA_FILE" ] && printf 'AVEN_CA_FILE=%s\n' "$CA_DEST"
+	[ -n "$TOKEN" ] && printf 'AVEN_JOIN_TOKEN=%s\n' "$TOKEN"
 } >> "$TMP/agent.env"
 chmod 600 "$TMP/agent.env"
 chown root:root "$TMP/agent.env" 2>/dev/null || true
@@ -199,7 +202,7 @@ if [ -n "$TOKEN" ]; then
 	i=0
 	while [ ! -s "$CRED" ] && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
 	# The token is single-use; drop it from the env file once it has been exchanged.
-	grep -v '^KEEL_JOIN_TOKEN=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
+	grep -v -e '^AVEN_JOIN_TOKEN=' -e '^KEEL_JOIN_TOKEN=' "$ENV_FILE" > "$ENV_FILE.tmp" || true
 	chmod 600 "$ENV_FILE.tmp"
 	mv -f "$ENV_FILE.tmp" "$ENV_FILE"
 	[ -s "$CRED" ] || die "the agent did not join within 60s (journalctl -u keel-agent); the token may be invalid or expired"

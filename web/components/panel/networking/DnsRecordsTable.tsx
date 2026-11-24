@@ -5,11 +5,12 @@
    alternative for apex domains; the `_keel-verify` TXT record optionally proves ownership. Below the table: the
    overall state (waiting / verified / certificate), the reason of the last failure and when DNS was last checked. */
 
+import { useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react";
 import type { DnsRecord } from "@/lib/api";
 import { fmtRelative, fmtTime } from "@/lib/format";
 import { dateLocale, t, tr } from "@/lib/i18n";
-import { Button, cx } from "../../ui";
+import { Button, cx, Input } from "../../ui";
 import { DomainStateLabel, type DomainExtra } from "./DomainStatus";
 import { CopyBtn } from "./parts";
 
@@ -37,15 +38,18 @@ export function domainRecords(d: DomainExtra): { main: DnsRecord[]; alt: DnsReco
 export function DnsRecordsTable({
   d,
   onVerify,
+  onVerifyCloudflare,
   verifying,
   ipv6Only,
 }: {
   d: DomainExtra;
   onVerify?: () => void;
+  onVerifyCloudflare?: (token: string) => void;
   verifying?: boolean;
   /** The node has no IPv4 address: IPv4 clients need the Cloudflare proxy in front. */
   ipv6Only?: boolean;
 }) {
+  const [cloudflareToken, setCloudflareToken] = useState("");
   const { main, alt } = domainRecords(d);
   const rows = main.length ? main : alt;
   const tunnel = d.proxy === "tunnel";
@@ -56,7 +60,7 @@ export function DnsRecordsTable({
       <p className="text-sm text-gray-600">
         {tunnel
           ? t("이 노드는 Cloudflare 터널로만 들어옵니다. DNS 제공자에 아래 CNAME을 프록시(주황 구름)로 추가하세요.")
-          : t("DNS 제공자에 아래 레코드를 추가하세요. CNAME을 권장하고, TXT 레코드로 도메인 소유를 확인합니다.")}
+          : t("DNS 제공자에 아래 레코드를 추가하세요. CNAME을 권장합니다. 필요하면 TXT 레코드나 Cloudflare 토큰으로 소유를 확인할 수 있습니다.")}
       </p>
       <RecordTable rows={rows} />
       {optionalTxt && <p className="text-xs leading-[18px] text-gray-600">{t("TXT 레코드는 선택입니다. 위 주소 레코드가 맞으면 소유 확인 없이도 연결됩니다.")}</p>}
@@ -83,6 +87,46 @@ export function DnsRecordsTable({
           <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
           {t("이 노드는 IPv6 전용입니다. IPv4 클라이언트가 접속하려면 Cloudflare 프록시가 필요합니다.")}
         </p>
+      )}
+      {onVerifyCloudflare && !d.verification?.verified_at && !d.verification?.method && (
+        <details className="rounded-md border border-gray-200 px-3 py-2">
+          <summary className="cursor-pointer select-none text-sm font-medium text-gray-700 hover:text-foreground">
+            {t("Cloudflare 토큰으로 소유 확인")}
+          </summary>
+          <form
+            className="mt-3 space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const token = cloudflareToken.trim();
+              if (!token || verifying) return;
+              setCloudflareToken("");
+              onVerifyCloudflare(token);
+            }}
+          >
+            <label htmlFor={`cloudflare-token-${d.host}`} className="text-xs font-medium text-gray-700">
+              {t("Cloudflare API 토큰")}
+            </label>
+            <Input
+              id={`cloudflare-token-${d.host}`}
+              type="password"
+              autoComplete="off"
+              size="sm"
+              value={cloudflareToken}
+              onChange={(event) => setCloudflareToken(event.target.value)}
+              placeholder={t("Cloudflare API 토큰")}
+              disabled={verifying}
+            />
+            <p className="text-xs leading-[18px] text-gray-600">
+              {t("이 도메인의 Cloudflare 존에 Zone:Read 권한이 필요합니다. 토큰은 확인에만 쓰고 저장하지 않으며 DNS를 변경하지 않습니다.")}{" "}
+              <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer" className="text-pink-600 hover:underline">
+                {t("토큰 만들기")}
+              </a>
+            </p>
+            <Button size="sm" variant="outline" type="submit" loading={verifying} disabled={!cloudflareToken.trim()}>
+              {t("토큰으로 확인")}
+            </Button>
+          </form>
+        </details>
       )}
       {d.last_error && (d.status === "error" || d.cert?.status === "error") && (
         <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs leading-[18px] text-red-600">

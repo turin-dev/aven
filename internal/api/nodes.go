@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/deploy"
 	"github.com/turin-dev/aven/internal/mesh"
 	"github.com/turin-dev/aven/internal/node"
@@ -309,7 +310,7 @@ func (s *Server) createJoinToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validPublicURL(s.PublicURL) {
-		writeErr(w, 503, "KEEL_PUBLIC_URL must be an HTTPS URL before joining nodes")
+		writeErr(w, 503, compat.Describe("PUBLIC_URL")+" must be an HTTPS URL before joining nodes")
 		return
 	}
 	token, err := agentprotocol.Secret()

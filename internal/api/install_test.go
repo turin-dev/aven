@@ -142,6 +142,40 @@ func TestInstallScriptIsValidPOSIXShell(t *testing.T) {
 	if strings.Contains(s, "--join-token") {
 		t.Error("install script passes the token on the agent command line")
 	}
+	for _, want := range []string{"AVEN_SERVER_URL=", "AVEN_JOIN_TOKEN", "AVEN_*|KEEL_*"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("install-agent.sh lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "must start with KEEL_") {
+		t.Error("install-agent.sh still rejects AVEN_ settings")
+	}
+}
+
+func TestServerInstallerScript(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "install-server.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{`ermission\ denied`, "AVEN_PRIVATE_ADDRESS", "export AVEN_JOIN_TOKEN"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("install-server.sh lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "add KEEL_PRIVATE_ADDRESS") || strings.Contains(s, `KEEL_PRIVATE_ADDRESS=$PRIVATE_ADDR`) {
+		t.Error("install-server.sh still tells a new install to use KEEL_PRIVATE_ADDRESS")
+	}
+	for _, sh := range []string{"sh", "dash", "bash"} {
+		p, err := exec.LookPath(sh)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(p, "-n", filepath.Join("..", "..", "install-server.sh"))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s -n install-server.sh: %v %s", sh, err, out)
+		}
+	}
 }
 
 func TestJoinCommandAndPublicURLValidation(t *testing.T) {

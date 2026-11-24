@@ -28,21 +28,90 @@ Railway, Coolify, Dokploy는 각 권리자의 상표입니다. Aven은 그 주�
 
 ## 빠른 시작
 
-아래 Linux 설치 명령은 [`install-server.sh`](install-server.sh)에 있습니다. Windows 10/11에서 네이티브 Windows 서비스로 실행하려면 [Windows 가이드](docs/windows-native.ko.md)를 참고하세요. Windows Server 에디션은 Docker Desktop 지원 대상이 아닙니다.
+Linux 설치 스크립트는 [`install-server.sh`](install-server.sh)입니다. 명령은 하나지만, 직접 운영하는 머신과 Docker가 필요하고, 자동 TLS를 쓰려면 내가 관리하는 도메인의 DNS도 필요합니다. 서버와 도메인 비용은 따로 냅니다. 이 저장소는 사용량 요금을 받지 않습니다.
 
-필요한 것:
+Windows 10/11에서 네이티브 Windows 서비스로 실행하는 길은 다릅니다. [Windows 가이드](docs/windows-native.ko.md)를 보세요. Windows Server 에디션은 Docker Desktop 지원 대상이 아닙니다. 아래는 Linux 경로입니다.
 
-- systemd와 Docker가 있고 80·443 포트가 비어 있는 Linux 서버(amd64 또는 arm64)
-- 대시보드용 DNS 이름(예: `aven.example.com`)과, 생성 도메인을 쓰려면 와일드카드(`*.apps.example.com`)
-- 여러 서버를 쓸 경우 Tailscale이나 WireGuard 같은 사설망으로 서로 닿는 추가 서버(선택)
+### 필요한 것
+
+설치 스크립트가 확인하는 것은 첫 목록입니다. 메모리, 디스크, Docker 버전 번호는 재지 않습니다.
+
+- **머신.** Linux, amd64(`x86_64`) 또는 arm64(`aarch64`), systemd(`systemctl`과 `/run/systemd/system`). `curl`, `tar`, 그리고 `sha256sum` 또는 `openssl`.
+- **Docker.** `docker` 명령이 있고, root로 `docker info`가 응답해야 합니다. unit 파일에 `User=`가 없으므로 `aven-server`는 root로 돕니다. Docker가 없으면 확인을 받거나 `--install-docker`를 주면 get.docker.com으로 설치할 수 있습니다. 스크립트가 띄우는 프록시 이미지는 `caddy:2-alpine`입니다.
+- **메모리와 디스크.** 검사하지 않습니다. `aven-server`는 프로세스 하나이고, 프록시는 컨테이너 하나입니다. 앱과 데이터베이스는 컨테이너가 더 생기고, 데이터베이스는 볼륨을 씁니다. 제어 평면 파일(`aven.db`, `master.key`)은 `/var/lib/aven`에 있습니다. 올릴 이미지와 볼륨을 담을 디스크를 두세요.
+- **이 호스트의 포트.** 80/tcp, 443/tcp, 443/udp가 비어 있어야 합니다. 프록시가 셋을 모두 publish합니다(443/udp는 HTTP/3). 대시보드 API는 `127.0.0.1:7070`만 듣고 바깥으로 열지 않습니다. 서버가 둘 이상이면 mesh는 그 노드의 사설 주소가 사설 IP일 때 그 주소의 7443 포트만 듣습니다.
+- **자동 TLS를 위한 이름과 DNS.** 대시보드용 `https://` 이름(예: `aven.example.com`). 서비스 호스트 이름을 자동으로 만들려면 `apps.example.com` 같은 기본 도메인. 인증서가 필요한 첫 요청 전에 이 서버를 가리키게 합니다.
+
+  | 이름 | 종류 | 값 |
+  | --- | --- | --- |
+  | `aven.example.com` | A 그리고/또는 AAAA | 이 서버의 공인 주소 |
+  | `*.apps.example.com` | A 그리고/또는 AAAA | 같은 주소 |
+
+  인증서는 호스트 이름마다 첫 TLS 핸드셰이크 때 받습니다(HTTP-01 또는 TLS-ALPN). 와일드카드 이름 자체에 인증서 하나를 요청하지는 않습니다. 인터넷에서 80과 443에 닿아야 합니다. 입력한 기본 도메인이 `AVEN_BASE_DOMAIN`이 됩니다.
+
+  도메인이 없으면 대시보드는 그 머신의 `http://localhost:7070`에만 열립니다.
+
+서버를 더 두는 것은 선택입니다. 추가 머신에는 Docker가 있어야 하고, 메인 서버에 HTTPS로 닿아야 합니다. 서로 다른 머신의 서비스가 통신하려면 Tailscale이나 WireGuard 같은 사설망을 씁니다.
+
+### 스크립트를 읽고 실행
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh
+curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh -o install-server.sh
+less install-server.sh          # 또는: sh install-server.sh --help
+sh install-server.sh
 ```
 
-터미널에서 실행하면 대시보드 주소, 서비스용 기본 도메인, Let's Encrypt 이메일, 관리자 비밀번호를 차례로 묻고 요약을 보여 준 뒤 확인을 받고 설치합니다. 스크립트는 릴리스 체크섬을 확인하고 `aven-server`, CLI, Railpack을 설치합니다. 설정을 `/etc/aven/aven.env`에 쓰고(관리자 비밀번호를 정하지 않으면 새로 만듭니다), 서비스를 시작한 뒤 로그인 정보와 만들어야 할 DNS 레코드를 알려 줍니다. `aven.example.com`(생성 도메인을 쓰려면 `AVEN_BASE_DOMAIN`과 함께 `*.apps.example.com`도)을 서버로 향하게 하고 로그인한 다음, *어드민 → Owner · 초기 설정*의 체크리스트를 따라가세요.
+일반 사용자로 실행합니다. 스크립트가 `sudo`로 스스로를 다시 실행합니다. `sudo sh`로 파이프하면 sudo-rs(Ubuntu 25.10부터 기본 sudo)가 스크립트를 터미널의 백그라운드에 두어 질문을 할 수 없으므로, `--yes`가 없으면 멈추고 그 이유를 출력합니다.
 
-그다음 프로젝트를 열고 캔버스에서 **추가**를 눌러 첫 서비스를 배포합니다. DNS, 설정, 직접 설치, 백업, 업그레이드, 서버 추가는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
+터미널에서는 먼저 이 머신의 역할을 묻습니다. 메인 서버(대시보드와 API)인지, 이미 있는 메인 서버에 붙는 리전 서버인지입니다. 메인 서버는 이어서 대시보드 주소, 기본 도메인, Let's Encrypt 이메일(선택), `admin@local` 비밀번호를 묻습니다. 요약을 보여 주고, 확인하기 전에는 아무것도 바꾸지 않습니다. 릴리스 체크섬을 확인한 뒤 아래 파일을 설치하고 `/etc/aven/aven.env`를 쓴 다음 서비스를 시작하고, 로그인 정보와 DNS 이름을 출력합니다.
+
+스크립트를 읽은 뒤 무인으로 실행하려면:
+
+```sh
+sudo sh install-server.sh --yes \
+  --public-url https://aven.example.com \
+  --base-domain apps.example.com \
+  --acme-email you@example.com
+```
+
+### 메인 서버 설치가 바꾸는 것
+
+- `/usr/local/bin/aven-server`와 `/usr/local/bin/aven`
+- `/usr/local/bin/railpack`. `--no-railpack`을 주거나 `railpack`이 이미 `PATH`에 있으면 건너뜁니다(스크립트가 받는 Railpack 릴리스 기본값은 v0.42.0)
+- `/usr/local/lib/aven/`의 agent와 CLI 다운로드
+- `/etc/systemd/system/aven-server.service`
+- `/etc/aven/aven.env`(모드 0600)와 `/etc/aven/aven.env.example`
+- 첫 기동 때 `/var/lib/aven`(`aven.db`, `master.key`, `session.key`, `logs/`), 이름이 `aven`인 Docker 네트워크, 볼륨 `aven-caddy-data`, `aven-caddy-config`, `aven-proxy-wake`를 가진 `aven-proxy` 컨테이너
+
+리전 서버는 `aven-server`를 설치하지 않습니다. `/usr/local/bin/aven-agent`를 설치하고 `/etc/keel-agent/agent.env`를 쓰며, 노드 자격 증명은 `/var/lib/keel-agent/credentials.json`에 두고 `keel-agent.service`를 켭니다. Keel을 쓴 적이 없는 머신도 지금 설치 스크립트가 만드는 경로와 unit 이름입니다. 이미 있는 agent를 그 자리에서 바꾸기 위해서입니다. 그 env 파일 안의 설정 이름은 `AVEN_*`입니다. `KEEL_*`도 계속 읽습니다.
+
+이미 `/etc/keel/aven.env`나 `/var/lib/keel`이 있는 설치는 그 경로를 유지합니다. [셀프 호스팅 가이드](docs/self-hosting.ko.md)를 보세요.
+
+### 켜졌는지 확인
+
+```sh
+systemctl is-active aven-server
+curl -fsS -o /dev/null http://127.0.0.1:7070/api/cli/downloads
+docker ps --filter name=aven-proxy --format '{{.Names}} {{.Status}}'
+```
+
+설치 스크립트는 그 URL이 응답할 때까지 기다린 뒤 대시보드 주소를 출력하고, 비밀번호를 새로 만들었으면 그것도 보여 줍니다. `admin@local`로 로그인합니다. 한국어 UI 이름은 **어드민 → Owner · 초기 설정**(`/admin/?section=setup`)입니다. 영어 UI 이름은 **Admin → Owner · Setup**입니다.
+
+프로젝트를 열고 캔버스에서 **추가**를 눌러 서비스를 배포합니다. 설치 옵션 전체, 직접 설치, 백업과 복원(PITR 포함), 업그레이드, 제거, 아래 실패 상황의 긴 설명은 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
+
+### 안 올라오면
+
+- **80 또는 443 포트를 누군가 쓰는 중.** 설치 스크립트는 경고만 하고 계속합니다. 그다음 `aven-server`가 종료됩니다. `journalctl -u aven-server`에 `start the proxy:`와 `ports AVEN_HTTP_PORT/AVEN_HTTPS_PORT, default 80/443, must be free`가 있습니다. `ss -Htlpn 'sport = :80'`으로 누가 듣는지 봅니다.
+- **DNS가 아직 퍼지지 않았거나 TLS가 발급되지 않음.** 설치는 인증서를 기다리지 않습니다. 대시보드 이름이 해석되지 않으면 설치 스크립트가 경고합니다. 인증서는 첫 HTTPS 요청 때 요청됩니다. ACME 오류는 `docker logs aven-proxy`에 있습니다. 아직 `keel-proxy`가 도는 설치는 그 컨테이너 로그를 봅니다.
+- **Docker.** root로 `docker info`가 되어야 합니다. "not running"과 "cannot use its socket"은 다른 오류입니다. 뒤의 것은 권한 문제입니다.
+- **방화벽 또는 IPv6.** Docker가 publish한 포트는 ufw의 INPUT 체인을 타지 않습니다. 호스트 앞의 클라우드 방화벽은 그대로 적용됩니다. 이 호스트가 응답하지 않는 주소로 AAAA를 만들면 IPv6를 선호하는 클라이언트만 실패하고 IPv4는 됩니다.
+- **agent가 붙지 않음.** `journalctl -u keel-agent`. 참여 토큰은 한 번만 쓸 수 있습니다. 기본 수명은 1시간입니다(API는 60초에서 24시간까지 받습니다). 메인 서버의 `AVEN_PUBLIC_URL`은 `https://` 주소여야 합니다.
+
+고치는 명령은 [문제 해결](docs/self-hosting.ko.md#troubleshooting)에 있습니다.
+
+### 직접 설치하거나 제거
+
+직접 설치는 [셀프 호스팅 가이드 3–6단계](docs/self-hosting.ko.md#3-build)입니다. 제거 스크립트는 없습니다. [제거와 되돌리기](docs/self-hosting.ko.md#uninstall-and-roll-back)에 멈출 unit, 컨테이너, 지울 파일과, `/var/lib/aven/backups/`의 업그레이드 복사본과 `/usr/local/bin/aven-server.prev`를 되돌리는 방법이 있습니다.
 
 ## 화면
 
@@ -161,7 +230,7 @@ Aven 칸은 이 저장소에서 가져왔습니다. 다른 제품 칸은 표 아
 
 Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소는 첫 Aven 릴리스(`755a737`, 2026-10-25)에서 시작하며 Keel의 기록은 들어 있지 않습니다.
 
-새 설치는 Aven 이름(`AVEN_*` 설정, `/var/lib/aven`, `aven-proxy`, `aven.*` 라벨)을 씁니다. Keel로 시작한 설치는 바꿀 것 없이 그대로 동작합니다. 예전 `KEEL_*` 이름, 경로, 컨테이너를 계속 읽고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. [Keel에서 업그레이드](#keel에서-업그레이드)를 보세요.
+새 설치는 Aven 이름(`AVEN_*` 설정, `/var/lib/aven`, `aven-proxy`, `aven.*` 라벨)을 씁니다. Keel로 시작한 설치는 바꿀 것 없이 그대로 동작합니다. 예전 `KEEL_*` 이름, 경로, 컨테이너를 계속 읽고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. [셀프 호스팅 가이드](docs/self-hosting.ko.md)를 보세요.
 
 개발에 AI 코딩 에이전트를 상당히 썼습니다. 변경은 사람이 리뷰하고 테스트했습니다.
 
@@ -171,7 +240,7 @@ Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소�
 - GitHub 저장소(Dockerfile 또는 Dockerfile 없이 [Railpack](https://github.com/railwayapp/railpack)), Docker 이미지, Docker Compose 파일, 템플릿, 단일 파일 function, 로컬 디렉터리(`aven up`)로 서비스를 만듭니다.
 - push 자동 배포, watch paths, CI 대기, 커밋 상태 표시, PR 미리보기 환경.
 - 변수 참조(`${{ db.DATABASE_URL }}`), 공유·봉인 변수, raw 편집기, config as code(`railway.json`, `aven.json`)를 갖춘 환경.
-- pre-deploy 명령, 헬스체크, 무중단 교체, 롤백, cron 작업, 앱 sleep, 이미지 자동 업데이트.
+- pre-deploy 명령, 헬스체크, 무중단 교체, 롤백, 이미지 자동 업데이트. cron 일정과 앱 sleep은 구현되어 있고, 위 표에서 실험적으로 표시합니다.
 
 **데이터**
 - 클릭 한 번으로 PostgreSQL, MySQL, Redis, MongoDB, S3 호환 버킷. 볼륨, 데이터 브라우저, S3로 보내는 논리 백업.
@@ -202,22 +271,10 @@ Aven은 Keel이라는 이전 프로젝트를 잇습니다. 이 공개 저장소�
 
 ## 구조
 
-```mermaid
-flowchart TB
-  users((인터넷<br/>IPv6 / IPv4)) --> proxy1
-  subgraph main["첫 서버"]
-    proxy1["aven-proxy (Caddy)<br/>TLS · 라우팅 · 엣지"] --> apps1["서비스<br/>데이터베이스 · 볼륨"]
-    server["aven-server<br/>API · 대시보드 · 스케줄러<br/>빌드 · SQLite"] -- Docker API --> apps1
-    server -.->|설정| proxy1
-  end
-  subgraph node2["추가 서버"]
-    agent["aven-agent"] -->|Docker API| apps2["서비스"]
-    proxy2["aven-proxy"] --> apps2
-  end
-  users --> proxy2
-  agent <-->|"Tailscale / WireGuard 위 mTLS"| server
-  apps1 <-.->|"사설망(mesh)"| apps2
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.ko.svg">
+  <img alt="Aven 구조: 인터넷은 각 서버의 aven-proxy로 들어오고, 첫 서버의 aven-server가 프록시를 설정하고 Docker API로 서비스를 돌립니다. 추가 서버의 aven-agent는 mTLS로 서버에 연결하고, 서비스끼리는 사설 mesh로 통신합니다" src="docs/assets/architecture-light.ko.svg" width="900">
+</picture>
 
 - `aven-server`는 대시보드가 들어 있는 Go 바이너리 하나입니다. 상태는 SQLite(`/var/lib/aven`)에 두고, Docker와 Railpack으로 이미지를 빌드하고, Docker API로 컨테이너를 돌립니다.
 - `aven-proxy`는 Aven이 설정하는 Caddy 컨테이너입니다(Keel로 시작한 설치에서는 `keel-proxy`). TLS를 끝내고 도메인을 자기 노드의 replica로 보내며 엣지 기능을 처리합니다.
@@ -242,10 +299,6 @@ AVEN_HTTP_PORT=18080 AVEN_HTTPS_PORT=18443 AVEN_PROXY_BIND=127.0.0.1 \
 
 `http://127.0.0.1:7070`에서 `admin@local`로 로그인합니다. 서버는 Docker로 프록시 컨테이너를 띄우므로, 네트워크에서 돌리기 전에 포트와 bind 주소를 바꾸세요. 운영에는 [`deploy/aven.env.example`](deploy/aven.env.example)과 [`deploy/aven-server.service`](deploy/aven-server.service)를 쓰거나, 컨테이너 이미지는 `docker build -t aven-server .`로 만듭니다.
 
-## Keel에서 업그레이드
-
-Aven은 Keel을 잇는 프로젝트이고, 기존 Keel 설치는 그 자리에서 올릴 수 있습니다. Aven은 설정마다 `AVEN_*` 이름을 먼저 읽고, 없으면 `KEEL_*` 이름을 읽은 뒤 한 번 경고합니다. `/var/lib/keel`, `/etc/keel/aven.env`, 실행 중인 `keel-proxy`, `keel-<env>` 네트워크, `keel.*` 라벨이 이미 있으면 그대로 씁니다. 기존 세션과 `keel_` API 토큰도 계속 동작하고, 사설 주소는 `<service>.<env>.keel.internal`로 유지됩니다. 업그레이드 뒤에 배포한 컨테이너는 `.aven.internal`로도 응답합니다. systemd의 `keel-server`에서 옮길 때는 `deploy/aven-server.service`와 `aven-server` 바이너리를 설치한 뒤 `keel-server`를 멈추고 `aven-server`를 켜세요. 두 서버를 같은 데이터 디렉터리로 동시에 돌리면 안 됩니다. 서버를 먼저 올리고, 그다음 다른 노드의 agent를 올리세요. 아직 받아들이는 예전 이름 전체는 [셀프 호스팅 가이드](docs/self-hosting.ko.md)에 있습니다.
-
 ## Railway와의 관계
 
 Aven은 독립 구현입니다. 이 저장소에는 Railway 소스 코드가 없습니다. 서버, agent, CLI, 프록시 설정, 대시보드는 Aven을 위해 작성했습니다.
@@ -260,7 +313,7 @@ Railway는 그 권리자의 상표이며, 여기서는 호환성을 설명하는
 
 ## 문서
 
-- [셀프 호스팅 가이드](docs/self-hosting.ko.md): 설치, DNS, 설정, 백업, 업그레이드, 노드
+- [셀프 호스팅 가이드](docs/self-hosting.ko.md): 설치, DNS, 설치 스크립트가 바꾸는 파일, 백업과 복원, 업그레이드, 제거, 문제 해결
 - [Aven on Aven](docs/selfhost.ko.md): Aven이 자기 서버를 관리하고 업그레이드하기
 - [CLI 안내](docs/cli.md)
 - [HTTP API](docs/api-v1.md)와 [GraphQL API](docs/graphql.md)
@@ -276,7 +329,7 @@ Railway는 그 권리자의 상표이며, 여기서는 호환성을 설명하는
 
 **GitHub가 꼭 필요한가요?** 아니요. Docker 이미지, Compose 파일, 템플릿, 로컬 디렉터리(`aven up`)로도 배포할 수 있습니다. push 자동 배포와 미리보기 환경에만 GitHub가 필요합니다.
 
-**어떻게 업그레이드하나요?** 설치 스크립트를 다시 실행하거나, Aven이 자기 캔버스에서 스스로 업그레이드하게 하세요([Aven on Aven](docs/selfhost.ko.md)). DB 마이그레이션은 시작할 때 자동으로 실행됩니다.
+**어떻게 업그레이드하나요?** 설치 스크립트를 다시 실행하거나, Aven이 자기 캔버스에서 스스로 업그레이드하게 하세요([Aven on Aven](docs/selfhost.ko.md)). 스크립트는 `/etc/aven/aven.env`를 유지하고, 서버를 멈춘 뒤 `aven.db`(아직 그 파일이 DB라면 `keel.db`도)를 `/var/lib/aven/backups/`에 복사하며, 이전 바이너리를 `/usr/local/bin/aven-server.prev`로 남깁니다. 마이그레이션은 시작할 때 실행됩니다. `master.key`는 스크립트가 복사하지 않으니 따로 보관하세요. 마이그레이션이 이미 돌았다면 DB 복사본 없이 이전 바이너리만 되돌리면 열리지 않을 수 있습니다. 절차는 [셀프 호스팅 가이드](docs/self-hosting.ko.md#8-backups-and-upgrades)에 있습니다.
 
 **Railway나 Dokploy에서 옮겨 올 수 있나요?** Aven은 `railway.json` / `railway.toml`을 읽고 Railway 형태의 GraphQL 질의에 답합니다. `aven import dokploy`는 Dokploy 설치의 서비스, 변수, 도메인, 볼륨을 다시 만듭니다. 데이터는 옮기지 않으니 DB 내용은 평소 쓰는 덤프·복원 도구로 옮기세요.
 

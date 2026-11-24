@@ -687,11 +687,21 @@ if [ "$ROLE" = region ]; then
 			[ -z "$p" ] && break
 			UI_ERR="The address $p."
 		done
-		ui_done "Private address" "${PRIVATE_ADDR:-none (add KEEL_PRIVATE_ADDRESS to $AGENT_ENV later)}"
+		ui_done "Private address" "${PRIVATE_ADDR:-none (add AVEN_PRIVATE_ADDRESS to $AGENT_ENV later)}"
 	fi
 	p=$(address_problem "$PRIVATE_ADDR")
 	[ -z "$p" ] || die "--private-address $p"
 fi
+
+# docker info fails for a stopped daemon and for a socket this user cannot open. Say which.
+docker_info_fails() {
+	_err=$(head -n 4 "$TMP/docker.err" 2>/dev/null | tr '\n' ' ')
+	case "$_err" in
+		*[Pp]ermission\ denied*)
+			die "Docker is installed but this user cannot use its socket. The installer and aven-server run as root. docker info: $_err" ;;
+	esac
+	die "Docker is installed but not running (systemctl start docker). docker info: ${_err:-no output}"
+}
 
 NEED_DOCKER=0
 if ! command -v docker >/dev/null 2>&1; then
@@ -704,13 +714,13 @@ if ! command -v docker >/dev/null 2>&1; then
 	[ "$INSTALL_DOCKER" -eq 1 ] || die "Docker is required. Install it first (curl -fsSL https://get.docker.com | sh) or pass --install-docker"
 	NEED_DOCKER=1
 else
-	docker info >/dev/null 2>&1 || die "Docker is installed but not running (systemctl start docker)"
+	docker info >/dev/null 2>"$TMP/docker.err" || docker_info_fails
 fi
 
 install_docker() {
 	spin "Installing Docker" "Installed Docker" sh -c 'curl -fsSL https://get.docker.com | sh' || die "Docker installation failed"
 	systemctl enable --now docker >/dev/null 2>&1 || systemctl enable --now docker
-	docker info >/dev/null 2>&1 || die "Docker was installed but is not running (systemctl start docker)"
+	docker info >/dev/null 2>"$TMP/docker.err" || docker_info_fails
 }
 
 # ---- region server: aven-agent from the main server ----
@@ -742,9 +752,14 @@ EOF
 		spin "Contacting $SERVER" "Reached $SERVER" fetch_agent_script "$SERVER" ||
 		die "could not download $SERVER/install-agent.sh (is this the main server's dashboard URL?)"
 	set -- --server "$SERVER"
-	[ -z "$PRIVATE_ADDR" ] || set -- "$@" --env "KEEL_PRIVATE_ADDRESS=$PRIVATE_ADDR"
+	[ -z "$PRIVATE_ADDR" ] || set -- "$@" --env "AVEN_PRIVATE_ADDRESS=$PRIVATE_ADDR"
 	# the token goes through the environment, never on a command line
-	if [ -n "$JOIN_TOKEN" ]; then export KEEL_JOIN_TOKEN="$JOIN_TOKEN"; else unset KEEL_JOIN_TOKEN AVEN_JOIN_TOKEN 2>/dev/null || true; fi
+	if [ -n "$JOIN_TOKEN" ]; then
+		export AVEN_JOIN_TOKEN="$JOIN_TOKEN"
+		unset KEEL_JOIN_TOKEN 2>/dev/null || true
+	else
+		unset KEEL_JOIN_TOKEN AVEN_JOIN_TOKEN 2>/dev/null || true
+	fi
 	spin "Installing aven-agent" "aven-agent is running" sh "$TMP/install-agent.sh" "$@" ||
 		die "aven-agent setup failed; see: journalctl -u keel-agent"
 	JOIN_TOKEN="" KEEL_JOIN_TOKEN=""

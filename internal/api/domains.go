@@ -456,10 +456,68 @@ func (s *Server) verifyDomain(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var body struct {
+		CloudflareToken string `json:"cloudflare_token"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
 	host := strings.ToLower(r.PathValue("host"))
 	for _, d := range c.in.Domains {
 		if d.Host != host {
 			continue
+		}
+		if token := strings.TrimSpace(body.CloudflareToken); token != "" {
+			if d.Kind != "custom" {
+				writeErr(w, http.StatusBadRequest, "Cloudflare token verification is only available for custom domains")
+				return
+			}
+			cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			err := netcheck.VerifyCloudflareZone(cctx, host, token)
+			cancel()
+			if err != nil {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+
+			state, err := s.Store.GetDomainState(ctx, host)
+			if err != nil {
+				s.storeErr(w, err)
+				return
+			}
+			if state == nil || state.InstanceID != c.in.ID {
+				writeErr(w, http.StatusConflict, "domain ownership changed during verification")
+				return
+			}
+			wasVerified := state.Verified()
+			method := store.VerifyCloudflare
+			if wasVerified {
+				method = ""
+			}
+			if err := s.Store.RecordDomainCheck(ctx, host, c.in.ID, store.DomainCheck{
+				DNSStatus:    state.DNSStatus,
+				Proxy:        state.Proxy,
+				Observed:     state.Observed,
+				VerifyMethod: method,
+				CheckedAt:    time.Now().UTC(),
+			}); err != nil {
+				s.storeErr(w, err)
+				return
+			}
+			updated, err := s.Store.GetDomainState(ctx, host)
+			if err != nil {
+				s.storeErr(w, err)
+				return
+			}
+			if updated == nil || updated.InstanceID != c.in.ID || !updated.Verified() {
+				writeErr(w, http.StatusConflict, "domain ownership changed during verification")
+				return
+			}
+			if !wasVerified && s.dns.checker != nil && s.dns.checker.OnVerified != nil {
+				s.dns.checker.OnVerified(host)
+			}
+			writeJSON(w, http.StatusOK, s.domainView(ctx, c.in, d))
+			return
 		}
 		if s.dns.checker != nil {
 			cctx, cancel := context.WithTimeout(ctx, 30*time.Second)

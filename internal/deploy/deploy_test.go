@@ -6,10 +6,20 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/turin-dev/aven/internal/store"
 )
+
+func TestRailpackMissingNamesCurrentSetting(t *testing.T) {
+	got := errRailpackMissing().Error()
+	aven := strings.Index(got, "AVEN_RAILPACK_BIN")
+	keel := strings.Index(got, "KEEL_RAILPACK_BIN")
+	if aven < 0 || keel < 0 || aven > keel {
+		t.Fatalf("error should name AVEN_RAILPACK_BIN before the old name: %s", got)
+	}
+}
 
 func TestParseFilter(t *testing.T) {
 	f := ParseFilter(`error "connection refused" -healthcheck -"GET /favicon"`)

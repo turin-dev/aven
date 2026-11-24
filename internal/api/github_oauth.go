@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/ghoauth"
 	"github.com/turin-dev/aven/internal/store"
 )
@@ -417,7 +418,7 @@ func (s *Server) githubEnsureWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.GitHubSecret == "" {
-		writeErr(w, 409, "KEEL_GITHUB_WEBHOOK_SECRET is not configured; aven could not verify the deliveries")
+		writeErr(w, 409, compat.Describe("GITHUB_WEBHOOK_SECRET")+" is not configured; aven could not verify the deliveries")
 		return
 	}
 	tok := s.Deploy.UserGitHubToken(r.Context(), principalID(r))
@@ -427,7 +428,7 @@ func (s *Server) githubEnsureWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	hookURL := s.publicBase(r) + "/api/webhooks/github"
 	if !strings.HasPrefix(hookURL, "https://") {
-		writeErr(w, 409, "KEEL_PUBLIC_URL must be an https:// URL that GitHub can reach")
+		writeErr(w, 409, compat.Describe("PUBLIC_URL")+" must be an https:// URL that GitHub can reach")
 		return
 	}
 	cfg := map[string]any{"url": hookURL, "content_type": "json", "secret": s.GitHubSecret, "insecure_ssl": "0"}

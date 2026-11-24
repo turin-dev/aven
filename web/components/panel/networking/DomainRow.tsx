@@ -152,6 +152,7 @@ export function DomainRow({
       ipv6Only={ipv6Only}
       verifying={busy === "verify"}
       onVerify={() => void run("verify", () => api.verifyDomain(svc.id, env.id, d.host))}
+      onVerifyCloudflare={(token) => void run("verify", () => api.verifyDomain(svc.id, env.id, d.host, token))}
     />
   );
   return (

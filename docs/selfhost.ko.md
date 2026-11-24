@@ -14,7 +14,7 @@ Aven은 `aven-server` 자신을 빌드하고 배포할 수 있습니다. Aven �
   3. 성공하면 `aven-server-prev`를 지웁니다. 새 서버가 시작하면서 배포를 live로 끝냅니다.
   4. 실패하면 새 컨테이너를 지우고 데이터 디렉터리에 `selfhost-result.json`을 남긴 뒤 이전 서버를 다시 띄웁니다. 이전 서버는 그 배포를 실패(`rolled back: …`)로 끝내고 이전 배포를 계속 현재 배포로 둡니다.
 - 교체하기 전에 진행 중인 다른 배포가 끝나기를 최대 15분 기다립니다. 그때까지 끝나지 않은 배포는 다른 재시작 때와 마찬가지로 실패 처리됩니다.
-- 교체하는 몇 초 동안 대시보드와 API가 끊깁니다. `keel-proxy`와 앱 컨테이너는 건드리지 않으므로 서비스는 계속 돕니다.
+- 교체하는 몇 초 동안 대시보드와 API가 끊깁니다. `aven-proxy`(그 컨테이너가 아직 돌면 `keel-proxy`)와 앱 컨테이너는 건드리지 않으므로 서비스는 계속 돕니다.
 - 대시보드는 특별 서비스로 다룹니다. 패널에는 배포와 설정(소스·빌드)만 있고, 배포 상세에는 상세와 빌드 로그만 있으며, 캔버스 메뉴에는 열기·설정·배포·롤백·복사만 있습니다. 카드에는 지금 도는 버전이 나옵니다.
 - **업데이트 확인.** 30분마다(그리고 시작 1분 뒤) 서비스 브랜치의 최신 커밋을 지금 배포와 GitHub API로 비교합니다(프로젝트의 GitHub 연결을 씁니다). 뒤처져 있으면 캔버스 카드에 분홍 점이 붙고, 서비스 패널에 새 커밋 목록과 **업데이트**(브랜치 최신 커밋 배포), **지금 확인**(`POST /api/owner/self-service/check`)이 나오며, 활동 기록에 새 버전마다 한 번 `aven.update_available`이 남습니다. 업데이트를 자동으로 적용하지는 않습니다.
 - **서버 설정.** 서비스의 설정 탭 맨 위 *서버 설정*에서 env 파일의 `AVEN_*` 값을 그룹(일반, 네트워크, GitHub, 메일, 고급)별로 보고 고칩니다. 비밀값은 설정 여부만 보입니다(`GET/PUT /api/owner/server-config`, 서버 owner 전용). 저장하면 파일만 바뀌고, 지금 서버와 다른 값은 *적용 대기*로 표시되며 aven-server를 다시 배포할 때 적용됩니다(**저장하고 배포**는 지금 이미지로 다시 배포하므로 빌드하지 않습니다). 그 배포가 되돌려지면 env 파일도 마지막으로 정상 동작한 서버의 사본(`AVEN_DATA/selfhost-env.good`)으로 되돌리므로 잘못된 값이 남지 않습니다. 데이터 경로와 컨테이너가 덮어쓰는 값(`AVEN_DATA`, `AVEN_GATEWAY_SECRET_FILE`, `AVEN_AGENT_BIN_DIR`, `AVEN_RAILPACK_BIN`, `AVEN_SELF_*` 파일·서비스)은 읽기 전용입니다. 이를 위해 컨테이너는 env 파일 디렉터리를 읽기·쓰기로 마운트합니다.
@@ -68,7 +68,8 @@ aven-server selfhost run-args --image aven-server
 ## 운영
 
 ```sh
-docker ps --filter label=keel.self           # aven-server, 교체 중이면 aven-selfupgrade / aven-server-prev
+docker ps --filter label=aven.self           # aven-server, 교체 중이면 aven-selfupgrade / aven-server-prev
+# 예전 라벨을 아직 쓰는 설치: docker ps --filter label=keel.self
 docker logs -f aven-server                   # 서버 로그
 docker logs aven-selfupgrade                 # 마지막 교체(새 서버가 로그를 거둬 가면 지워집니다)
 ```
