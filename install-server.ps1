@@ -119,7 +119,7 @@ Assert-Administrator
 
 $os = Get-CimInstance Win32_OperatingSystem
 if ($os.ProductType -ne 1) {
-    throw 'Aven native hosting currently requires Windows 10/11 with Docker Desktop. Windows Server editions do not support Docker Desktop; use a Linux server for the Docker host.'
+    throw 'This script installs the Aven manager on Windows 10/11. For a Windows Server region, download install-region-vm.ps1 from the Aven release and run it; it creates an Ubuntu VM. After its Linux agent joins, pair the Hyper-V host from Admin > Server nodes to control VM power in Aven.'
 }
 if (-not [Environment]::Is64BitOperatingSystem -or [int]$os.BuildNumber -lt 19045 -or ([int]$os.BuildNumber -gt 19045 -and [int]$os.BuildNumber -lt 22631)) {
     throw 'Use 64-bit Windows 10 22H2 (build 19045) or Windows 11 23H2 (build 22631) or later.'

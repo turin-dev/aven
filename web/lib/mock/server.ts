@@ -163,6 +163,7 @@ const NODES: AvenNode[] = [
     labels: { region: "region-a", disk: "nvme" },
     last_seen_at: new Date().toISOString(),
     created_at: new Date(Date.now() - 9 * 864e5).toISOString(),
+    hyperv: { vm_name: "AvenRegion", host_name: "win-region-01", host_online: true, power_state: "running", last_seen_at: new Date().toISOString() },
   },
   {
     id: "node_edge",
@@ -3432,6 +3433,28 @@ route("PATCH", "/nodes/{nid}", ([nid], r) => {
   Object.assign(n, b);
   if (b.schedulable && n.status === "draining") n.status = "online";
   return n;
+});
+route("POST", "/nodes/{nid}/hyperv/pair-token", ([nid], r) => {
+  const n = NODES.find((x) => x.id === nid);
+  if (!n || n.is_local) throw new HttpError(404, "node not found");
+  const vmName = ((r.body ?? {}) as { vm_name?: string }).vm_name || "AvenRegion";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(vmName)) throw new HttpError(400, "invalid vm name");
+  const token = secret(32);
+  n.hyperv = { vm_name: vmName, host_name: "win-region-01", host_online: true, power_state: "running", last_seen_at: iso(now()) };
+  return [201, { token, expires_at: iso(now() + 15 * 60_000), command: `Invoke-WebRequest https://github.com/turin-dev/aven/releases/latest/download/aven-hyperv-host.ps1 -OutFile .\\aven-hyperv-host.ps1 -UseBasicParsing; powershell -ExecutionPolicy Bypass -File .\\aven-hyperv-host.ps1 -Server 'https://aven.example.com' -NodeId '${nid}' -Token '${token}' -VmName '${vmName}'` }];
+});
+route("POST", "/nodes/{nid}/hyperv/power", ([nid], r) => {
+  const n = NODES.find((x) => x.id === nid);
+  if (!n?.hyperv) throw new HttpError(409, "node has no paired Hyper-V host");
+  const action = (r.body as { action?: string } | undefined)?.action;
+  if (action !== "start" && action !== "stop") throw new HttpError(400, "action must be start or stop");
+  const state = action === "start" ? "running" : "off";
+  const command: NonNullable<NonNullable<AvenNode["hyperv"]>["last_command"]> = { id: rid("hvc"), node_id: nid, action, status: "done", created_at: iso(now()), updated_at: iso(now()) };
+  n.hyperv.power_state = state;
+  n.hyperv.last_seen_at = iso(now());
+  n.hyperv.last_command = command;
+  n.status = action === "start" ? "online" : "offline";
+  return [202, command];
 });
 route("DELETE", "/nodes/{nid}", ([nid], r) => {
   const n = NODES.find((x) => x.id === nid);

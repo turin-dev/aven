@@ -32,6 +32,8 @@ Linux 설치 스크립트는 [`install-server.sh`](install-server.sh)입니다. 
 
 Windows 10/11에서 네이티브 Windows 서비스로 실행하는 길은 다릅니다. [Windows 가이드](docs/windows-native.ko.md)를 보세요. Windows Server 에디션은 Docker Desktop 지원 대상이 아닙니다. 아래는 Linux 경로입니다.
 
+Windows Server를 리전 호스트로 쓰려면 Hyper-V Ubuntu VM을 만들고 [Windows Server 리전 설치 안내](docs/windows-hyperv-region.ko.md)를 따르세요.
+
 ### 필요한 것
 
 설치 스크립트가 확인하는 것은 첫 목록입니다. 메모리, 디스크, Docker 버전 번호는 재지 않습니다.

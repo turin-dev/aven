@@ -51,13 +51,13 @@ jobs:
           done
           cp bin/aven-server-windows-amd64.exe bin/aven-windows-amd64.exe dist/
           cp bin/aven-agent-linux-amd64 bin/aven-agent-linux-arm64 dist/
-          cp install-server.sh install-server.ps1 dist/
-          (cd dist && sha256sum *.tar.gz install-server.sh install-server.ps1 aven-server-windows-amd64.exe aven-windows-amd64.exe aven-agent-linux-amd64 aven-agent-linux-arm64 > checksums.txt)
+          cp install-server.sh install-server.ps1 install-region-vm.ps1 aven-hyperv-host.ps1 dist/
+          (cd dist && sha256sum *.tar.gz install-server.sh install-server.ps1 install-region-vm.ps1 aven-hyperv-host.ps1 aven-server-windows-amd64.exe aven-windows-amd64.exe aven-agent-linux-amd64 aven-agent-linux-arm64 > checksums.txt)
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ github.ref_name }}
         run: |
           gh release create "$VERSION" --title "$VERSION" --generate-notes \
-            dist/*.tar.gz dist/install-server.sh dist/install-server.ps1 dist/aven-server-windows-amd64.exe dist/aven-windows-amd64.exe \
+            dist/*.tar.gz dist/install-server.sh dist/install-server.ps1 dist/install-region-vm.ps1 dist/aven-hyperv-host.ps1 dist/aven-server-windows-amd64.exe dist/aven-windows-amd64.exe \
             dist/aven-agent-linux-amd64 dist/aven-agent-linux-arm64 dist/checksums.txt

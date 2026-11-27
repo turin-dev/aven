@@ -64,6 +64,44 @@ var migrations = []func(ctx context.Context, tx *Store) error{
 	migrateGitHubTokenRefresh,
 	migrateHotIndexes,
 	migrateOrphanSettings,
+	migrateHyperVHostControl,
+}
+
+// migrateHyperVHostControl stores the scoped controller credential and power commands for a Hyper-V-backed region node.
+func migrateHyperVHostControl(ctx context.Context, tx *Store) error {
+	for _, q := range []string{
+		`CREATE TABLE IF NOT EXISTS node_hyperv_hosts (
+			node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+			credential_hash TEXT NOT NULL UNIQUE,
+			vm_name TEXT NOT NULL,
+			host_name TEXT NOT NULL,
+			power_state TEXT NOT NULL DEFAULT 'unknown',
+			last_seen_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS hyperv_pair_tokens (
+			token_hash TEXT PRIMARY KEY,
+			node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+			vm_name TEXT NOT NULL,
+			expires_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS hyperv_commands (
+			id TEXT PRIMARY KEY,
+			node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+			action TEXT NOT NULL CHECK (action IN ('start','stop')),
+			status TEXT NOT NULL CHECK (status IN ('queued','running','done','failed')),
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS hyperv_pair_tokens_node ON hyperv_pair_tokens(node_id)`,
+		`CREATE INDEX IF NOT EXISTS hyperv_commands_queue ON hyperv_commands(node_id, status, created_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS hyperv_one_active_command ON hyperv_commands(node_id) WHERE status IN ('queued','running')`,
+	} {
+		if _, err := tx.q.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // noForeignKeyMigrations는 외래 키 검사를 끄고 돌리는 마이그레이션이다(테이블을 다시 만드는 경우). PRAGMA foreign_keys는

@@ -2,6 +2,8 @@
 
 [English](windows-native.md) · [Linux 셀프 호스팅](self-hosting.ko.md)
 
+Windows Server에서 Hyper-V Ubuntu 리전 노드를 만들려면 [Windows Server Hyper-V 리전 설치 안내](windows-hyperv-region.ko.md)를 보세요.
+
 Aven 서버를 Windows 실행 파일과 Windows 서비스로 실행할 수 있습니다. 지원 구성은 x64 Windows 10 22H2(build 19045) 또는 Windows 11 23H2(build 22631) 이상과 **Linux 컨테이너 모드**의 Docker Desktop입니다. Aven 프로세스는 Windows에서 실행되고, Docker Desktop은 설정된 VM 백엔드에서 Linux 컨테이너 엔진을 실행합니다.
 
 > Windows Server 에디션은 이 설치 프로그램에서 지원하지 않습니다. Docker Desktop은 Windows Server를 지원하지 않고, Aven의 proxy와 앱 컨테이너에는 Linux Docker 엔진이 필요합니다.
