@@ -82,3 +82,6 @@ func DiskFreeBytes(path string) uint64 {
 	}
 	return available
 }
+
+// hostNet은 Windows에서 아직 읽지 않는다(데이터 상한 집계는 Linux 노드만).
+func hostNet() (rx, tx uint64, ok bool) { return 0, 0, false }

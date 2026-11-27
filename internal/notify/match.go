@@ -26,7 +26,7 @@ var KnownKinds = []string{
 	"postgres.upgrade.reverted", "postgres.upgrade.revert_failed",
 	"alert.firing", "alert.resolved", "usage.threshold_reached",
 	"usage.limit_reached", "usage.unsuspended", "usage.resumed",
-	"node.unavailable",
+	"node.unavailable", "node.data_cap_warning", "node.data_cap_reached",
 	"image.updated", "image.update_failed",
 	"notification.test",
 }

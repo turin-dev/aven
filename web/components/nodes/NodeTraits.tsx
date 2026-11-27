@@ -38,6 +38,8 @@ export type TraitsDraft = {
   site: NodeSite | "";
   price: string;
   currency: string;
+  idleW: string;
+  maxW: string;
   ups: boolean;
   connection: NodeConnection | "";
   down: string;
@@ -56,6 +58,8 @@ export function traitsToDraft(tr?: NodeTraits): TraitsDraft {
     site: tr?.site ?? "",
     price: tr?.power_price_per_kwh != null ? String(tr.power_price_per_kwh) : "",
     currency: tr?.power_currency || defaultCurrency(),
+    idleW: num(tr?.idle_watts),
+    maxW: num(tr?.max_watts),
     ups: !!tr?.ups,
     connection: tr?.connection ?? "",
     down: num(tr?.downlink_mbps),
@@ -85,6 +89,9 @@ export function draftToTraits(d: TraitsDraft): NodeTraits {
     out.power_price_per_kwh = +price;
     out.power_currency = cur;
   }
+  out.idle_watts = int(d.idleW, t("대기 전력"));
+  out.max_watts = int(d.maxW, t("최대 전력"));
+  if (out.idle_watts && out.max_watts && out.idle_watts > out.max_watts) throw new Error(t("대기 전력이 최대 전력보다 클 수 없습니다."));
   if (d.ups) out.ups = true;
   if (d.connection) out.connection = d.connection;
   out.downlink_mbps = int(d.down, t("다운로드"));
@@ -161,6 +168,15 @@ export function NodeTraitsFields({ draft, onChange }: { draft: TraitsDraft; onCh
                 <Input mono maxLength={3} value={draft.currency} onChange={(e) => set("currency", e.target.value.toUpperCase())} />
               </Field>
             </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label={t("대기 전력 (W)")} hint={t("거의 놀 때 기계 전체가 쓰는 전력")}>
+                <Input inputMode="numeric" value={draft.idleW} onChange={(e) => set("idleW", e.target.value)} placeholder="8" />
+              </Field>
+              <Field label={t("최대 전력 (W)")} hint={t("CPU를 다 쓸 때. 모르면 어댑터 정격의 70% 정도")}>
+                <Input inputMode="numeric" value={draft.maxW} onChange={(e) => set("maxW", e.target.value)} placeholder="45" />
+              </Field>
+            </div>
+            <p className="text-xs text-gray-500">{t("전기요금과 소비전력을 적으면 최근 CPU 사용률로 월 전기료를 어림해 노드 목록에 보여 줍니다.")}</p>
             <ToggleRow checked={draft.ups} onChange={(v) => set("ups", v)} label={t("UPS(무정전 전원) 있음")} hint={t("정전 때 잠깐이라도 버틸 수 있는지")} />
           </fieldset>
 
@@ -300,5 +316,53 @@ export function NodeTraitsDialog({ node, onClose }: { node: AvenNode | null; onC
         {error ? <ErrorBox error={error} /> : null}
       </div>
     </Dialog>
+  );
+}
+
+function fmtMoney(v: number, currency: string) {
+  try {
+    return new Intl.NumberFormat(getLocale() === "ko" ? "ko-KR" : "en-US", { style: "currency", currency, maximumFractionDigits: v < 10 ? 2 : 0 }).format(v);
+  } catch {
+    return `${v.toFixed(2)} ${currency}`;
+  }
+}
+
+/** 1 GB = 10^9 bytes(회선 약관 표기). */
+const fmtGB = (b: number) => (b >= 1e12 ? `${nf(Math.round(b / 1e10) / 100)} TB` : b >= 1e9 ? `${nf(Math.round(b / 1e7) / 100)} GB` : `${nf(Math.round(b / 1e6))} MB`);
+
+/** 노드 줄의 월 전기료 추정과 이번 달 트래픽(상한이 있으면 막대). 둘 다 없으면 아무것도 그리지 않는다. */
+export function NodeUsageLine({ n }: { n: AvenNode }) {
+  const pe = n.power_estimate;
+  const tr = n.traffic;
+  if (!pe && !tr) return null;
+  const pct = tr?.cap_percent;
+  return (
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-gray-600">
+      {pe ? (
+        <span title={t("최근 {days}일 평균 CPU {cpu}% 기준, {model}", { days: Math.max(1, Math.round(pe.window_s / 86400)), cpu: pe.avg_cpu_percent, model: pe.model === "linear" ? t("대기~최대 전력 사이를 CPU 사용률로 보간") : t("적힌 전력을 늘 쓴다고 가정") })}>
+          ⚡{" "}
+          {pe.cost_month != null && pe.currency
+            ? t("월 전기료 약 {cost} ({kwh}kWh, 평균 {w}W)", { cost: fmtMoney(pe.cost_month, pe.currency), kwh: pe.kwh_month, w: pe.avg_watts })
+            : t("월 약 {kwh}kWh (평균 {w}W)", { kwh: pe.kwh_month, w: pe.avg_watts })}
+        </span>
+      ) : null}
+      {tr ? (
+        <span className="flex min-w-0 items-center gap-2" title={t("받음 {rx} · 보냄 {tx} ({month}, UTC)", { rx: fmtGB(tr.rx_bytes), tx: fmtGB(tr.tx_bytes), month: tr.month })}>
+          <span>
+            {tr.cap_bytes
+              ? t("이번 달 트래픽 {used} / {cap}", { used: fmtGB(tr.total_bytes), cap: fmtGB(tr.cap_bytes) })
+              : t("이번 달 트래픽 {used}", { used: fmtGB(tr.total_bytes) })}
+          </span>
+          {pct != null ? (
+            <>
+              <span className="h-1.5 w-24 overflow-hidden rounded-full bg-gray-100" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, pct)} aria-label={t("월 데이터 상한 사용률")}>
+                <span className={cx("block h-full rounded-full", pct >= 100 ? "bg-red-500" : pct >= 80 ? "bg-yellow-500" : "bg-pink-500")} style={{ width: `${Math.min(100, pct)}%` }} />
+              </span>
+              <span className={cx("tabular-nums", pct >= 100 ? "text-danger" : pct >= 80 ? "text-yellow-700" : "")}>{pct}%</span>
+            </>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
   );
 }

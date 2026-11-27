@@ -209,6 +209,9 @@ func (m *Manager) applyRegion(ctx context.Context, t *Target, d *store.Deploymen
 	if err != nil {
 		return err
 	}
+	if isPublic(t.Instance) {
+		nodes = SortForPublic(nodes) // 같은 region 안에서는 공개 요청을 직접 받을 수 있는 노드를 먼저 고른다
+	}
 	cands := RegionNodes(nodes, region)
 	if len(cands) == 0 {
 		b.Printf("WARN: deploy.region=%s: 이름이나 region 라벨이 맞는 배포 가능한 노드가 없어 무시합니다", region)

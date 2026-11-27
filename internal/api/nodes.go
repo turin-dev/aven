@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/netip"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"github.com/turin-dev/aven/internal/compat"
 	"github.com/turin-dev/aven/internal/deploy"
 	"github.com/turin-dev/aven/internal/mesh"
+	"github.com/turin-dev/aven/internal/metrics"
 	"github.com/turin-dev/aven/internal/node"
 	"github.com/turin-dev/aven/internal/store"
 	"github.com/turin-dev/aven/internal/sysstat"
@@ -83,6 +85,8 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 			nodes[i].Traits.Note = "" // 자유 메모는 집 위치 같은 사적인 내용일 수 있어 관리자에게만 보인다
 		}
 		view := nodeView{Node: nodes[i], Mesh: s.Deploy.MeshStatus(r.Context(), nodes[i]), IPv6Status: s.Deploy.IPv6Status(r.Context(), nodes[i].ID)}
+		view.PowerEstimate, view.Traffic = s.nodeUsageViews(r.Context(), nodes[i])
+		view.PublicRank = deploy.PublicIngressRank(nodes[i])
 		if host, ok := hypervHosts[nodes[i].ID]; ok {
 			view.HyperV = s.hyperVNodeJSON(r, host)
 		}
@@ -98,6 +102,49 @@ type nodeView struct {
 	HyperV *hyperVNodeView `json:"hyperv,omitempty"`
 	// IPv6Status는 도메인별 IPv6 반영 상태다(풀이 없으면 null).
 	IPv6Status *deploy.IPv6NodeStatus `json:"ipv6_status"`
+	// PowerEstimate는 특성의 소비전력과 최근 7일 CPU 사용률로 어림한 월 전기 사용량·요금이다(소비전력이 없으면 null).
+	PowerEstimate *store.PowerEstimate `json:"power_estimate"`
+	// Traffic은 이번 달(UTC) 물리 인터페이스 트래픽과 월 데이터 상한 대비 사용률이다(카운터를 받은 적 없으면 null).
+	Traffic *nodeTrafficView `json:"traffic"`
+	// PublicRank는 공개 서비스 배치 순위다: 0 알맞음, 1 유동 IP, 2 CGNAT(터널 없음).
+	PublicRank int `json:"public_rank"`
+}
+
+type nodeTrafficView struct {
+	Month      string   `json:"month"`
+	RxBytes    int64    `json:"rx_bytes"`
+	TxBytes    int64    `json:"tx_bytes"`
+	TotalBytes int64    `json:"total_bytes"`
+	CapBytes   int64    `json:"cap_bytes,omitempty"`
+	CapPercent *float64 `json:"cap_percent,omitempty"`
+}
+
+// powerWindow는 전기료 추정에 쓰는 CPU 평균 구간이다(노드 지표 보관 기간과 같다).
+const powerWindow = 7 * 24 * time.Hour
+
+// nodeUsageViews는 노드의 전기료 추정과 이번 달 트래픽이다.
+func (s *Server) nodeUsageViews(ctx context.Context, n *store.Node) (*store.PowerEstimate, *nodeTrafficView) {
+	var pe *store.PowerEstimate
+	if n.Traits.IdleWatts > 0 || n.Traits.MaxWatts > 0 {
+		avg, win, err := s.Store.NodeAvgCPU(ctx, n.ID, time.Now().Add(-powerWindow).Unix())
+		if err == nil {
+			pe = store.EstimatePower(n.Traits, avg, win)
+		}
+	}
+	if !s.Store.HasNodeTrafficCounter(ctx, n.ID) {
+		return pe, nil
+	}
+	tr, err := s.Store.NodeTrafficFor(ctx, n.ID, store.TrafficMonth(time.Now()))
+	if err != nil {
+		return pe, nil
+	}
+	tv := &nodeTrafficView{Month: tr.Month, RxBytes: tr.RxBytes, TxBytes: tr.TxBytes, TotalBytes: tr.Total()}
+	if n.Traits.DataCapGB > 0 {
+		tv.CapBytes = metrics.DataCapBytes(n.Traits.DataCapGB)
+		p := math.Round(float64(tr.Total())*1000/float64(tv.CapBytes)) / 10
+		tv.CapPercent = &p
+	}
+	return pe, tv
 }
 
 func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {

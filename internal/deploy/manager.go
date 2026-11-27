@@ -827,6 +827,7 @@ func (m *Manager) run(ctx context.Context, t *Target, d *store.Deployment, b *lo
 		}
 		b.Printf("원격 노드 %s(%s)에 배포합니다", n.Name, n.ID)
 	}
+	m.warnPublicNode(ctx, t.Instance, d.NodeID, b)
 	// function 소스는 배포 스냅샷 코드로 빌드 컨텍스트(tar.gz)를 만들어 업로드 빌드 경로를 그대로 쓴다(DB의 source는 그대로 "").
 	if d.Image == nil && t.Service.SourceType == "function" && d.Source == "" {
 		p, err := m.functionUpload(ctx, d, b)

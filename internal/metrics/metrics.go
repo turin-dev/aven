@@ -49,7 +49,7 @@ type Collector struct {
 func (c *Collector) Run(ctx context.Context) {
 	t := time.NewTicker(Interval)
 	defer t.Stop()
-	lastCompact, lastVol := time.Time{}, time.Time{}
+	lastCompact, lastVol, lastCap := time.Time{}, time.Time{}, time.Time{}
 	for {
 		if time.Since(lastVol) > 5*time.Minute {
 			lastVol = time.Now()
@@ -57,6 +57,10 @@ func (c *Collector) Run(ctx context.Context) {
 		}
 		if err := c.collect(ctx); err != nil && ctx.Err() == nil && c.Log != nil {
 			c.Log.Warn("metrics collect", "err", err)
+		}
+		if time.Since(lastCap) >= time.Minute {
+			lastCap = time.Now()
+			c.CheckDataCaps(ctx, lastCap)
 		}
 		if time.Since(lastCompact) > time.Hour {
 			lastCompact = time.Now()

@@ -445,6 +445,10 @@ type NodeStats struct {
 	CPUPercent    float64 `json:"cpu_percent"`
 	MemoryBytes   uint64  `json:"memory_bytes"`
 	DiskFreeBytes uint64  `json:"disk_free_bytes"`
+	// Net*는 물리 인터페이스의 누적 받은/보낸 바이트다(부팅 이후). NetOK가 false면(옛 agent, Linux 아님) 모른다.
+	NetRxBytes uint64 `json:"net_rx_bytes,omitempty"`
+	NetTxBytes uint64 `json:"net_tx_bytes,omitempty"`
+	NetOK      bool   `json:"net_ok,omitempty"`
 }
 
 // WakeRequest는 agent가 서버에 "이 host의 잠든 서비스를 깨워 달라"고 한다.

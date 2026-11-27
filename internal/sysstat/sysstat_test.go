@@ -64,3 +64,23 @@ func TestParseMemWithoutMemAvailable(t *testing.T) {
 		t.Fatalf("garbage parsed: %d", total)
 	}
 }
+
+func TestParseNetDevSkipsVirtual(t *testing.T) {
+	in := `Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 500 1 0 0 0 0 0 0 500 1 0 0 0 0 0 0
+enp41s0: 1000 9 0 0 0 0 0 9 200 2 0 2 0 0 0 0
+  eth1: 30 1 0 0 0 0 0 0 7 1 0 0 0 0 0 0
+   wg0: 99 1 0 0 0 0 0 0 99 1 0 0 0 0 0 0
+tailscale0: 99 1 0 0 0 0 0 0 99 1 0 0 0 0 0 0
+veth1a2b: 99 1 0 0 0 0 0 0 99 1 0 0 0 0 0 0
+docker0: 99 1 0 0 0 0 0 0 99 1 0 0 0 0 0 0
+`
+	rx, tx, ok := ParseNetDev(in)
+	if !ok || rx != 1030 || tx != 207 {
+		t.Fatalf("got rx=%d tx=%d ok=%v", rx, tx, ok)
+	}
+	if _, _, ok := ParseNetDev("garbage"); ok {
+		t.Fatal("garbage parsed")
+	}
+}

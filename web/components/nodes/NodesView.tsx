@@ -15,7 +15,7 @@ import { t, tr } from "@/lib/i18n";
 import { Button, CopyButton, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Menu, MenuItem, RowList, Select, Spinner, Textarea, Toggle, cx, errorMessage } from "../ui";
 import { Gauge } from "./Gauge";
 import { drainNode, invalidatePlacements, useNodePlacements, type DrainResult, type Placement } from "./nodeApi";
-import { draftToTraits, NodeTraitsBadges, NodeTraitsDialog, NodeTraitsFields, traitsToDraft } from "./NodeTraits";
+import { draftToTraits, NodeTraitsBadges, NodeTraitsDialog, NodeTraitsFields, NodeUsageLine, traitsToDraft } from "./NodeTraits";
 
 const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
@@ -1078,6 +1078,7 @@ function NodeRow({
 
       <div className="mt-4 space-y-2 sm:ml-12">
         <NodeTraitsBadges n={n} />
+        <NodeUsageLine n={n} />
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
           {labels.map(([k, v]) => (
             <span key={k} className="rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-gray-600">

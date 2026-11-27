@@ -53,5 +53,27 @@ const en: Record<string, string> = {
   "집 PC나 사무실 서버도 리전이 될 수 있습니다. 클라우드 콘솔에는 없는 전기요금, 회선 같은 사정을 적어 두면 노드 목록에 함께 보입니다. 모두 선택이고 나중에 노드 메뉴 › 기계 정보에서 고칠 수 있습니다.":
     "A home PC or an office server can be a region too. Note what no cloud console tells you, such as electricity price and connection, and it shows up in the node list. Everything is optional, and you can change it later under the node menu › Machine details.",
   "기계 정보": "Machine details",
+  "노드 월 데이터 상한": "Node monthly data cap",
+  "대기 전력": "Idle power",
+  "최대 전력": "Peak power",
+  "대기 전력이 최대 전력보다 클 수 없습니다.": "Idle power cannot be higher than peak power.",
+  "대기 전력 (W)": "Idle power (W)",
+  "거의 놀 때 기계 전체가 쓰는 전력": "What the whole machine draws when it is mostly idle",
+  "최대 전력 (W)": "Peak power (W)",
+  "CPU를 다 쓸 때. 모르면 어댑터 정격의 70% 정도": "With the CPU fully busy. If unsure, about 70% of the power adapter rating",
+  "전기요금과 소비전력을 적으면 최근 CPU 사용률로 월 전기료를 어림해 노드 목록에 보여 줍니다.": "With an electricity price and power draw, the node list estimates the monthly electricity cost from recent CPU usage.",
+  "최근 {days}일 평균 CPU {cpu}% 기준, {model}": "Based on {cpu}% average CPU over the last {days} {days|day|days}, {model}",
+  "대기~최대 전력 사이를 CPU 사용률로 보간": "interpolating between idle and peak power by CPU usage",
+  "적힌 전력을 늘 쓴다고 가정": "assuming the entered power is drawn all the time",
+  "월 전기료 약 {cost} ({kwh}kWh, 평균 {w}W)": "About {cost}/month in electricity ({kwh} kWh, {w} W average)",
+  "월 약 {kwh}kWh (평균 {w}W)": "About {kwh} kWh/month ({w} W average)",
+  "받음 {rx} · 보냄 {tx} ({month}, UTC)": "Received {rx} · sent {tx} ({month}, UTC)",
+  "이번 달 트래픽 {used} / {cap}": "Traffic this month {used} / {cap}",
+  "이번 달 트래픽 {used}": "Traffic this month {used}",
+  "월 데이터 상한 사용률": "Monthly data cap usage",
+  "{node}는 통신사 NAT(CGNAT) 뒤에 있다고 적혀 있어 공개 도메인으로 들어오는 요청을 받지 못합니다. 노드의 공개 진입을 Cloudflare 터널로 바꾸거나 다른 노드를 고르세요.":
+    "{node} is marked as behind carrier-grade NAT (CGNAT), so it cannot receive requests for public domains. Switch the node's public ingress to Cloudflare Tunnel or pick another node.",
+  "{node}는 공인 IP가 바뀔 수 있다고 적혀 있습니다. IP가 바뀌면 DNS가 따라갈 때까지 공개 도메인이 끊깁니다.":
+    "{node} is marked as having a public IP that can change. When it changes, public domains are down until DNS catches up.",
 };
 export default en;

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,9 @@ type NodeTraits struct {
 	PowerPricePerKWh *float64 `json:"power_price_per_kwh,omitempty"`
 	// PowerCurrency는 ISO 4217 통화 코드다(예: KRW, EUR, USD).
 	PowerCurrency string `json:"power_currency,omitempty"`
+	// IdleWatts / MaxWatts는 기계 전체의 소비전력(W)이다: 놀 때와 CPU를 다 쓸 때. 전기료 추정(EstimatePower)에 쓴다.
+	IdleWatts int `json:"idle_watts,omitempty"`
+	MaxWatts  int `json:"max_watts,omitempty"`
 	// UPS는 정전 때 버티는 무정전 전원이 있는지다.
 	UPS bool `json:"ups,omitempty"`
 	// Connection은 회선 종류다: fiber | cable | dsl | mobile | satellite | datacenter | other.
@@ -80,10 +84,16 @@ func (t *NodeTraits) Normalize() error {
 	for _, v := range []struct {
 		name string
 		n    int
-	}{{"downlink_mbps", t.DownlinkMbps}, {"uplink_mbps", t.UplinkMbps}, {"data_cap_gb", t.DataCapGB}} {
+	}{{"downlink_mbps", t.DownlinkMbps}, {"uplink_mbps", t.UplinkMbps}, {"data_cap_gb", t.DataCapGB}, {"idle_watts", t.IdleWatts}, {"max_watts", t.MaxWatts}} {
 		if v.n < 0 || v.n > 10_000_000 {
 			return fmt.Errorf("%s must be between 0 and 10000000", v.name)
 		}
+	}
+	if t.IdleWatts > 100_000 || t.MaxWatts > 100_000 {
+		return errors.New("idle_watts and max_watts must be at most 100000")
+	}
+	if t.IdleWatts > 0 && t.MaxWatts > 0 && t.IdleWatts > t.MaxWatts {
+		return errors.New("idle_watts must not be greater than max_watts")
 	}
 	if utf8.RuneCountInString(t.Note) > 200 {
 		return errors.New("note must be at most 200 characters")
@@ -118,4 +128,57 @@ func parseTraits(raw string) NodeTraits {
 // SetNodeTraits는 노드(로컬 포함)의 특성을 통째로 바꾼다. 검증은 호출자가 한다(Normalize).
 func (s *Store) SetNodeTraits(ctx context.Context, id string, t NodeTraits) error {
 	return affected(s.q.ExecContext(ctx, `UPDATE nodes SET traits=? WHERE id=?`, jsonStr(t), NormNode(id)))
+}
+
+// HoursPerMonth는 월 추정에 쓰는 시간이다(365일 × 24시간 ÷ 12).
+const HoursPerMonth = 730.0
+
+// PowerEstimate는 최근 CPU 사용률과 운영자가 적은 소비전력으로 어림한 월 전기 사용량과 요금이다.
+type PowerEstimate struct {
+	// Model은 linear(대기~최대 사이를 CPU 사용률로 보간) 또는 flat(값 하나만 적혀 늘 그만큼 쓴다고 본다)이다.
+	Model         string  `json:"model"`
+	AvgCPUPercent float64 `json:"avg_cpu_percent"`
+	AvgWatts      float64 `json:"avg_watts"`
+	KWhMonth      float64 `json:"kwh_month"`
+	// CostMonth는 power_price_per_kwh가 있을 때만 채운다.
+	CostMonth *float64 `json:"cost_month,omitempty"`
+	Currency  string   `json:"currency,omitempty"`
+	// WindowSeconds는 평균을 낸 지표 구간의 길이다(최대 7일).
+	WindowSeconds int64 `json:"window_s"`
+}
+
+// EstimatePower는 평균 CPU 사용률(0..100)로 월 전기 사용량을 어림한다. 소비전력이 적혀 있지 않으면 nil이다.
+func EstimatePower(t NodeTraits, avgCPU float64, windowS int64) *PowerEstimate {
+	if t.IdleWatts <= 0 && t.MaxWatts <= 0 {
+		return nil
+	}
+	avgCPU = math.Max(0, math.Min(100, avgCPU))
+	e := &PowerEstimate{AvgCPUPercent: math.Round(avgCPU*10) / 10, WindowSeconds: windowS}
+	switch {
+	case t.IdleWatts > 0 && t.MaxWatts > 0:
+		e.Model = "linear"
+		e.AvgWatts = float64(t.IdleWatts) + float64(t.MaxWatts-t.IdleWatts)*avgCPU/100
+	case t.MaxWatts > 0:
+		e.Model, e.AvgWatts = "flat", float64(t.MaxWatts)
+	default:
+		e.Model, e.AvgWatts = "flat", float64(t.IdleWatts)
+	}
+	e.KWhMonth = e.AvgWatts * HoursPerMonth / 1000
+	if t.PowerPricePerKWh != nil && t.PowerCurrency != "" {
+		c := e.KWhMonth * *t.PowerPricePerKWh
+		e.CostMonth, e.Currency = &c, t.PowerCurrency
+	}
+	e.AvgWatts = math.Round(e.AvgWatts*10) / 10
+	e.KWhMonth = math.Round(e.KWhMonth*10) / 10
+	return e
+}
+
+// NodeAvgCPU는 from 이후 노드 CPU 사용률의 시간 가중 평균과, 평균을 낸 구간 길이(초)다.
+func (s *Store) NodeAvgCPU(ctx context.Context, nodeID string, from int64) (avg float64, windowS int64, err error) {
+	var sum, w sql.NullFloat64
+	err = s.q.QueryRowContext(ctx, `SELECT SUM(cpu*res), SUM(res) FROM node_metrics WHERE node_id=? AND t>=?`, NormNode(nodeID), from).Scan(&sum, &w)
+	if err != nil || !w.Valid || w.Float64 <= 0 {
+		return 0, 0, err
+	}
+	return sum.Float64 / w.Float64, int64(w.Float64), nil
 }

@@ -66,6 +66,7 @@ var migrations = []func(ctx context.Context, tx *Store) error{
 	migrateOrphanSettings,
 	migrateHyperVHostControl,
 	migrateNodeTraits,
+	migrateNodeTraffic,
 }
 
 // migrateHyperVHostControl stores the scoped controller credential and power commands for a Hyper-V-backed region node.
