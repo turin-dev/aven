@@ -227,8 +227,21 @@ function CanvasPageInner() {
           rightInset={canvasInset}
         />
       ) : (
-        <div className="dot-grid h-full overflow-y-auto px-4 pb-10 pt-16">
-          <div className="mx-auto flex max-w-[288px] flex-col gap-5" {...listTrigger}>
+        <div className="dot-grid h-full overflow-y-auto px-3 pb-28 pt-4">
+          <div className="mx-auto flex max-w-md flex-col gap-4" {...listTrigger}>
+            <div className="flex items-end justify-between px-1 pt-1">
+              <div>
+                <h1 className="text-[22px] font-bold leading-tight tracking-tight">{ws.detail?.name ?? t("서비스")}</h1>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {t("서비스 {count}개", { count: list.length })} · {t("{online}개 온라인", { online: list.filter((s) => s.instance.status === "online").length })}
+                </p>
+              </div>
+              {ws.env && ws.envs.length > 1 && (
+                <Button size="sm" variant="ghost" {...lock(canEdit)} onClick={() => setSyncing(true)}>
+                  <RefreshCcw className="text-gray-500" /> {t("동기화")}
+                </Button>
+              )}
+            </div>
             {list.map((s) => (
               <div
                 key={s.id}
@@ -238,16 +251,29 @@ function CanvasPageInner() {
                 onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), open(s.id))}
                 aria-label={t("{name} 서비스 열기", { name: s.name })}
                 data-svc-id={s.id}
-                className="cursor-pointer rounded-xl text-left"
+                className="cursor-pointer rounded-xl text-left transition-transform duration-150 active:scale-[0.98]"
               >
-                <ServiceCard svc={s} envId={envId} selected={s.id === svc} />
+                <ServiceCard svc={s} envId={envId} selected={s.id === svc} fluid />
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {!pending && ws.pid && !(svc && desktop) && (
+      {/* Phones: floating "add" button above the tab bar instead of the corner toolbar. */}
+      {!pending && ws.pid && !desktop && !svc && list.length > 0 && (
+        <button
+          type="button"
+          {...lock(canEdit)}
+          onClick={() => canEdit && go({ isNew: "1" })}
+          aria-label={t("서비스 추가")}
+          className="absolute bottom-5 right-4 z-30 flex h-14 items-center gap-2 rounded-full bg-pink-500 pl-4 pr-5 text-[15px] font-semibold text-white shadow-[0_10px_30px_rgba(156,107,255,0.45)] transition-transform active:scale-95 aria-disabled:opacity-50"
+        >
+          <Plus className="size-5" aria-hidden /> {t("추가")}
+        </button>
+      )}
+
+      {!pending && ws.pid && desktop && !svc && (
         <div className="pointer-events-none absolute right-4 top-4 z-20 flex items-center gap-2">
           {ws.env && ws.envs.length > 1 && (
             <Button

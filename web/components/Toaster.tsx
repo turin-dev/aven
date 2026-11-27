@@ -28,7 +28,7 @@ export function Toaster({ shifted = false }: { shifted?: boolean }) {
       aria-live="polite"
       aria-relevant="additions"
       className={cx(
-        "pointer-events-none fixed bottom-14 left-6 z-[100000] md:left-auto md:transition-[right] md:duration-200 md:ease-out motion-reduce:transition-none",
+        "pointer-events-none fixed bottom-[calc(env(safe-area-inset-bottom)+100px)] left-4 right-4 z-[100000] md:bottom-14 md:left-auto md:transition-[right] md:duration-200 md:ease-out motion-reduce:transition-none",
         shifted ? "md:right-[344px]" : "md:right-6",
       )}
     >

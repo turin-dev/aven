@@ -521,6 +521,99 @@ function menuItems(root: HTMLElement | null): HTMLElement[] {
   );
 }
 
+/** Phones (below Tailwind `sm`). False during SSR / first paint so the desktop markup hydrates cleanly. */
+export function useIsMobile(query = "(max-width: 639px)") {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const h = () => setM(mq.matches);
+    h();
+    mq.addEventListener("change", h);
+    return () => mq.removeEventListener("change", h);
+  }, [query]);
+  return m;
+}
+
+/**
+ * Bottom sheet for phones: slides up from the bottom edge, grab handle on top, drag the handle (or the header) down to dismiss.
+ * Pads itself for the home indicator.
+ */
+export function BottomSheet({
+  open,
+  onClose,
+  label,
+  title,
+  children,
+  className,
+  role = "dialog",
+  sheetRef,
+  onKeyDown,
+}: {
+  open: boolean;
+  onClose: () => void;
+  label: string;
+  title?: ReactNode;
+  children: ReactNode;
+  className?: string;
+  role?: "dialog" | "menu";
+  sheetRef?: React.Ref<HTMLDivElement>;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
+}) {
+  const [drag, setDrag] = useState(0);
+  const start = useRef<number | null>(null);
+  useEscape(onClose, open);
+  useScrollLock(open);
+  if (!open || typeof document === "undefined") return null;
+  const down = (e: React.PointerEvent) => {
+    start.current = e.clientY;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const move = (e: React.PointerEvent) => {
+    if (start.current !== null) setDrag(Math.max(0, e.clientY - start.current));
+  };
+  const up = () => {
+    if (start.current === null) return;
+    start.current = null;
+    if (drag > 80) onClose();
+    setDrag(0);
+  };
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex flex-col justify-end">
+      <div
+        aria-hidden
+        className="absolute inset-0 animate-modal-overlay-in bg-black/40 backdrop-blur-[2px] dark:bg-black/70"
+        style={{ opacity: drag ? Math.max(0.2, 1 - drag / 300) : undefined }}
+        onClick={onClose}
+      />
+      <div
+        ref={sheetRef}
+        role={role}
+        aria-modal={role === "dialog" ? true : undefined}
+        aria-label={label}
+        onKeyDown={onKeyDown}
+        className={cx(
+          "relative flex max-h-[85dvh] w-full animate-sheet-up flex-col overflow-hidden rounded-t-[22px] border-t border-gray-200 bg-background shadow-[0_-12px_40px_rgba(0,0,0,0.25)] dark:border-white/10 dark:bg-secondaryBg",
+          className,
+        )}
+        style={{ transform: drag ? `translateY(${drag}px)` : undefined, transition: drag ? "none" : "transform 200ms cubic-bezier(0.32,0.72,0,1)" }}
+      >
+        <div
+          className="shrink-0 cursor-grab touch-none select-none px-5 pb-1 pt-2.5 active:cursor-grabbing"
+          onPointerDown={down}
+          onPointerMove={move}
+          onPointerUp={up}
+          onPointerCancel={up}
+        >
+          <div className="mx-auto h-[5px] w-9 rounded-full bg-gray-300 dark:bg-white/20" />
+          {title && <div className="pb-1 pt-3 text-[15px] font-semibold text-foreground">{title}</div>}
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function Menu({
   trigger,
   children,
@@ -538,6 +631,8 @@ export function Menu({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  // On phones the menu becomes a bottom sheet (portaled to <body>) with larger touch rows.
+  const mobile = useIsMobile();
   const triggerEl = () => ref.current?.querySelector<HTMLElement>('[aria-haspopup="menu"]') ?? null;
   // Closing from inside the menu (Esc, picking an item) returns focus to the trigger; clicking elsewhere does not.
   const close = (restore = true) => {
@@ -545,21 +640,22 @@ export function Menu({
     setOpen(false);
     if (restore && inside) triggerEl()?.focus({ preventScroll: true });
   };
-  useEscape(() => close(), open);
+  useEscape(() => close(), open && !mobile);
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     const h = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
-  }, [open]);
+  }, [open, mobile]);
   // Move focus into the menu so arrow keys work right away (focus-visible keeps it quiet for mouse users).
   useEffect(() => {
-    if (open && !list.current?.contains(document.activeElement)) menuItems(list.current)[0]?.focus({ preventScroll: true });
-  }, [open]);
+    if (open && !mobile && !list.current?.contains(document.activeElement)) menuItems(list.current)[0]?.focus({ preventScroll: true });
+  }, [open, mobile]);
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Tab") {
+      if (mobile) return;
       // Menus may hold links and buttons too; close only once Tab has moved focus out.
       setTimeout(() => {
         if (ref.current && !ref.current.contains(document.activeElement)) setOpen(false);
@@ -583,7 +679,20 @@ export function Menu({
   return (
     <div ref={ref} className="relative">
       {trigger({ onClick: () => setOpen((o) => !o), "aria-expanded": open, "aria-haspopup": "menu", "data-state": open ? "open" : "closed" })}
-      {open && (
+      {open && mobile && (
+        <BottomSheet
+          open
+          role="menu"
+          label={label}
+          onClose={() => close()}
+          sheetRef={list}
+          onKeyDown={onKeyDown}
+          className="menu-sheet"
+        >
+          {children(() => close())}
+        </BottomSheet>
+      )}
+      {open && !mobile && (
         <div
           ref={list}
           role="menu"

@@ -176,7 +176,7 @@ function LogsInner() {
             </div>
           )}
         </Menu>
-        <LogFilter value={q} onChange={setQ} onApply={() => setQuery(q)} className="flex-1" placeholder={kind === "deploy" ? undefined : NETWORK_FILTER_PLACEHOLDER[kind]} />
+        <LogFilter value={q} onChange={setQ} onApply={() => setQuery(q)} className="flex-1 max-sm:order-last max-sm:basis-full" placeholder={kind === "deploy" ? undefined : NETWORK_FILTER_PLACEHOLDER[kind]} />
         <Button
           variant="outline"
           aria-label={t("로그 다운로드")}

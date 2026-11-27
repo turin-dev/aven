@@ -152,7 +152,7 @@ function AttachmentRow({ icon, children }: { icon: ReactNode; children: ReactNod
 }
 
 /** Canvas node for a service. Memoised: it re-renders only when its service object, environment or selection changes. */
-export const ServiceCard = memo(function ServiceCard({ svc, envId, selected }: { svc: CanvasService; envId: string; selected: boolean }) {
+export const ServiceCard = memo(function ServiceCard({ svc, envId, selected, fluid }: { svc: CanvasService; envId: string; selected: boolean; /** Stretch to the container (phone list) instead of the canvas node width. */ fluid?: boolean }) {
   const inst = svc.instance;
   const domain = inst.domains[0]?.host;
   // aven-server 자신(self 서비스)은 도메인 대신 지금 도는 서버 버전을 보여 준다.
@@ -184,10 +184,11 @@ export const ServiceCard = memo(function ServiceCard({ svc, envId, selected }: {
       : t("레플리카 {count}개", { count: Math.max(replicas, running) });
 
   return (
-    <div className="relative w-[287px]" style={{ height: cardHeight(svc) }}>
+    <div className={cx("relative", fluid ? "w-full" : "w-[287px]")} style={{ height: cardHeight(svc) }}>
       <div
         className={cx(
-          "node group pointer-events-auto relative z-10 flex h-[144px] w-[287px] translate-x-px translate-y-px cursor-pointer flex-col justify-between rounded-xl border p-6 shadow-sm transition-[border-color,box-shadow] duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700",
+          fluid ? "w-full" : "w-[287px]",
+          "node group pointer-events-auto relative z-10 flex h-[144px] translate-x-px translate-y-px cursor-pointer flex-col justify-between rounded-xl border p-6 shadow-sm transition-[border-color,box-shadow] duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-pink-700",
           selected && "shadow-[0px_0px_0px_4px_rgba(166,_103,_228,_0.14)] dark:shadow-[0px_0px_0px_4px_rgba(166,_103,_228,_0.22)]",
           state ? NODE_STATE[state].card : "bg-white dark:bg-secondaryBg",
           selected

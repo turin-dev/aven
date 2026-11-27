@@ -39,6 +39,8 @@ const en: Record<string, string> = {
   "읽지 않음 {count}개": "{count} unread",
   "알림을 불러오지 못했습니다.": "Could not load notifications.",
   "읽지 않음": "Unread",
+  "더보기": "More",
+  "{online}개 온라인": "{online} online",
 };
 
 export default en;

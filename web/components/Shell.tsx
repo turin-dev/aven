@@ -13,6 +13,7 @@ import {
   GitPullRequest,
   LayoutTemplate,
   LogOut,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCcw,
@@ -20,6 +21,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  ChevronRight,
   Share2,
   Trash2,
   UserRound,
@@ -42,7 +44,7 @@ import { AgentButton } from "./AgentPanel";
 import { BootSplash } from "./Providers";
 import { InboxMenu } from "./InboxMenu";
 import { CommandPalette, openCommandPalette } from "./CommandPalette";
-import { Button, Dialog, ErrorBox, Field, Input, AvenMark, Menu, MenuItem, Select, Spinner, Textarea, cx, errorMessage } from "./ui";
+import { Button, BottomSheet, Dialog, ErrorBox, Field, Input, AvenMark, Menu, MenuItem, Select, Spinner, Textarea, cx, errorMessage } from "./ui";
 import { useKeyboardShortcuts } from "./KeyboardShortcuts";
 import { t, tr } from "@/lib/i18n";
 
@@ -524,13 +526,13 @@ function ProjectMenu({ ws }: { ws: Workspace }) {
         align="start"
         label={t("프로젝트")}
         trigger={(p) => (
-          <button type="button" {...p} className={cx(crumbBtn, "select-project")} aria-label={t("프로젝트: {name}. 프로젝트 바꾸기", { name })}>
+          <button type="button" {...p} className={cx(crumbBtn, "select-project max-md:!h-[24px] max-md:!px-1.5 max-md:text-[15px] max-md:font-semibold")} aria-label={t("프로젝트: {name}. 프로젝트 바꾸기", { name })}>
             <span className="hidden size-4 shrink-0 overflow-hidden rounded-full sm:inline-block" aria-hidden>
               <span className="flex h-full w-full items-center justify-center rounded-full bg-gradient-to-br from-[#6f31aa] to-[#306ee8] text-[9px] font-semibold leading-none text-white">
                 {(user ?? "?").slice(0, 1).toUpperCase()}
               </span>
             </span>
-            <span className="project-name max-w-[80px] truncate whitespace-nowrap text-left font-medium text-sm sm:max-w-[240px]">{name}</span>
+            <span className="project-name max-w-[46vw] truncate whitespace-nowrap text-left font-medium text-sm max-md:text-[15px] max-md:font-semibold sm:max-w-[240px]">{name}</span>
             {!health.ok && <span className="size-2 shrink-0 rounded-full bg-red-600" title={health.label} />}
             {crumbChevron}
           </button>
@@ -653,11 +655,11 @@ function EnvMenu({ ws }: { ws: Workspace }) {
             type="button"
             {...p}
             aria-label={t("환경: {name}. 환경 바꾸기", { name: env?.name ?? "" })}
-            className={cx(crumbBtn, color && "!border")}
+            className={cx(crumbBtn, color && "!border", "max-md:!h-[20px] max-md:!px-1.5 max-md:!text-xs max-md:text-gray-500")}
             style={color ? { borderColor: `${color}66`, background: `${color}1f`, color } : undefined}
           >
-            {color && <span className="size-2 shrink-0 rounded-full" style={{ background: color }} />}
-            <span className="environment-name min-w-0 max-w-[64px] truncate text-left font-medium text-sm sm:max-w-[160px]">{env?.name ?? "…"}</span>
+            {color ? <span className="size-2 shrink-0 rounded-full" style={{ background: color }} /> : <span className="size-1.5 shrink-0 rounded-full bg-green-600 md:hidden" />}
+            <span className="environment-name min-w-0 max-w-[44vw] truncate text-left font-medium text-sm max-md:text-xs sm:max-w-[160px]">{env?.name ?? "…"}</span>
             {crumbChevron}
           </button>
         )}
@@ -929,8 +931,8 @@ function PageCrumb() {
 }
 function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: boolean }) {
   return (
-    <div className="relative z-10 bg-transparent px-4">
-      <header className="flex h-[56px] items-center justify-between py-3">
+    <div className="pt-safe relative z-10 bg-transparent px-3 md:px-4">
+      <header className="flex h-[56px] items-center justify-between py-2 md:py-3">
         <div className="flex min-w-0 flex-1 items-center">
           <Link href="/projects/" aria-label={t("모든 프로젝트")} title={t("모든 프로젝트")} className="mr-2 flex shrink-0 items-center md:mr-3">
             <div className="relative">
@@ -939,14 +941,14 @@ function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: bool
           </Link>
           {admin ? (
             <div className="flex items-center gap-2 text-sm font-medium"><ShieldCheck className="size-4" />{t("서버 관리")}</div>
-          ) : <nav aria-label={t("경로")} className="flex min-w-0 flex-nowrap items-center gap-1">
-            <div className="ml-1 mr-1 h-5 w-px shrink-0 border-l border-neutral-secondary md:ml-2 md:mr-2" />
+          ) : <nav aria-label={t("경로")} className="flex min-w-0 flex-nowrap items-center gap-1 max-md:flex-col max-md:items-start max-md:gap-0">
+            <div className="ml-2 mr-2 hidden h-5 w-px shrink-0 border-l border-neutral-secondary md:block" />
             <div className="min-w-0">
               <ProjectMenu ws={ws} />
             </div>
             {(ws.pid || ws.isPending) && (
               <div className="flex min-w-0 items-center rounded-none bg-transparent">
-                <div className="mr-1 hidden h-5 w-px shrink-0 rotate-[15deg] border-l border-neutral-secondary sm:block" />
+                <div className="mr-1 hidden h-5 w-px shrink-0 rotate-[15deg] border-l border-neutral-secondary md:block" />
                 <EnvMenu ws={ws} />
               </div>
             )}
@@ -955,20 +957,14 @@ function TopBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: bool
         </div>
         <nav className="ml-auto flex shrink-0 items-center gap-x-3">
           <div className="flex items-center">
-            <div className="flex items-center gap-2">
-              <div className="hidden sm:block">
-                <SearchButton />
-              </div>
+            <div className="flex items-center gap-1 md:gap-2">
+              <SearchButton />
               {!admin && <div className="hidden md:block">
                 <ActivityButton />
               </div>}
               <InboxMenu />
               <div className="mx-1 hidden h-5 w-0.5 rounded-full bg-black/[0.05] lg:block dark:bg-white/10" />
               {!admin && <AgentButton ws={ws} />}
-              <div className="flex items-center md:hidden">
-                <div className="mx-1 h-5 w-0.5 rounded-full bg-black/[0.05] dark:bg-white/10" />
-                <AccountMenu user={user} />
-              </div>
             </div>
           </div>
         </nav>
@@ -1008,24 +1004,22 @@ function Rail({ user }: { user?: string }) {
   return (
     <nav
       aria-label={t("주 메뉴")}
-      className="relative flex flex-shrink-0 flex-row items-center justify-start gap-1 overflow-x-auto px-4 py-2 md:flex-col md:overflow-visible md:px-2 md:pb-3 md:pt-4"
+      className="relative hidden flex-shrink-0 flex-col items-center justify-start gap-1 px-2 pb-3 pt-4 md:flex"
     >
-      <div className="relative mx-auto flex shrink-0 flex-row gap-1 md:mx-0 md:flex-col">
+      <div className="relative flex shrink-0 flex-col gap-1">
         <div
           className={cx(
-            "absolute h-10 w-10 translate-y-0 rounded-lg bg-gray-100 transition-transform duration-[250ms] ease-out translate-x-[var(--pill-x)] md:translate-x-0 md:translate-y-[var(--pill-y)] dark:bg-white/10",
+            "absolute h-10 w-10 rounded-lg bg-gray-100 transition-transform duration-[250ms] ease-out translate-y-[var(--pill-y)] dark:bg-white/10",
             idx < 0 && "opacity-0",
           )}
-          style={{ "--pill-x": `${step}rem`, "--pill-y": `${step}rem` } as React.CSSProperties}
+          style={{ "--pill-y": `${step}rem` } as React.CSSProperties}
         />
         {nav.map((n) => (
           <RailLink key={n.href} n={n} active={n.match(pathname)} />
         ))}
       </div>
-      <div className="hidden flex-1 md:block" />
-      <div className="hidden md:block">
-        <AccountMenu user={user} side="right" />
-      </div>
+      <div className="flex-1" />
+      <AccountMenu user={user} side="right" />
     </nav>
   );
 }
@@ -1106,6 +1100,211 @@ function ActivityColumn({ ws, open }: { ws: Workspace; open: boolean }) {
   );
 }
 
+/* ── mobile navigation ──────────────────────────────────────────────── */
+/** Tabs that stay on the phone tab bar; everything else lives in the "더보기" sheet. */
+const MOBILE_PRIMARY = ["/", "/observability/", "/logs/", "/nodes/"];
+
+function MobileTab({ label, icon, active, href, onClick, badge }: { label: string; icon: ReactNode; active: boolean; href?: string; onClick?: () => void; badge?: boolean }) {
+  const inner = (
+    <>
+      <span
+        className={cx(
+          "relative flex h-8 w-14 items-center justify-center rounded-full transition-[background-color,transform] duration-200 ease-out group-active:scale-90 [&_svg]:size-[20px]",
+          active ? "bg-pink-500/15 text-pink-600 dark:bg-pink-500/20 dark:text-pink-700" : "text-gray-500",
+        )}
+        aria-hidden
+      >
+        {icon}
+        {badge && <span className="absolute right-3 top-1 size-1.5 rounded-full bg-pink-500" />}
+      </span>
+      <span className={cx("text-[10.5px] leading-none tracking-tight", active ? "font-semibold text-foreground" : "font-medium text-gray-500")}>{label}</span>
+    </>
+  );
+  const cls = "group flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-pink-500 rounded-2xl";
+  return href ? (
+    <Link href={href} aria-label={label} aria-current={active ? "page" : undefined} className={cls}>
+      {inner}
+    </Link>
+  ) : (
+    <button type="button" aria-label={label} aria-expanded={active} onClick={onClick} className={cls}>
+      {inner}
+    </button>
+  );
+}
+
+/** Floating tab bar for phones (the left rail on desktop). */
+function MobileTabBar({ user, ws, admin }: { user?: string; ws: Workspace; admin: boolean }) {
+  const pathname = usePathname() || "/";
+  const href = useCtxHref();
+  const me = useMe().data;
+  const [more, setMore] = useState(false);
+  const [activity, setActivity] = useState(false);
+  // Leaving the page (a tab, a link in the sheet) closes the sheet.
+  const [prevPath, setPrevPath] = useState(pathname);
+  if (prevPath !== pathname) {
+    setPrevPath(pathname);
+    setMore(false);
+  }
+  const nav = SHELL_NAV.filter((n) => n.href !== "/admin/" || me?.instance_admin);
+  const primary = MOBILE_PRIMARY.map((h) => nav.find((n) => n.href === h)).filter((n): n is ShellNavItem => !!n);
+  const overflow = nav.filter((n) => !MOBILE_PRIMARY.includes(n.href));
+  const overflowActive = overflow.some((n) => n.match(pathname)) || pathname.startsWith("/account");
+  const link = (n: ShellNavItem) => (n.href === "/admin/" ? n.href : href(n.href));
+  return (
+    <>
+      <div className="relative z-20 shrink-0 px-3 pb-[max(env(safe-area-inset-bottom),10px)] pt-2 md:hidden">
+        <nav
+          aria-label={t("주 메뉴")}
+          className="glass flex h-[62px] items-stretch rounded-[22px] border border-black/[0.06] px-1 shadow-[0_8px_30px_rgba(0,0,0,0.12)] dark:border-white/[0.08] dark:shadow-[0_8px_30px_rgba(0,0,0,0.45)]"
+        >
+          {primary.map((n) => {
+            const Icon = n.icon;
+            return <MobileTab key={n.href} label={n.label} icon={<Icon />} href={link(n)} active={!more && n.match(pathname)} />;
+          })}
+          <MobileTab label={t("더보기")} icon={<MoreHorizontal />} active={more || overflowActive} badge={overflowActive && !more} onClick={() => setMore((o) => !o)} />
+        </nav>
+      </div>
+      <BottomSheet open={more} onClose={() => setMore(false)} label={t("더보기")}>
+        <MoreSheetBody
+          user={user}
+          items={overflow}
+          link={link}
+          pathname={pathname}
+          canActivity={!admin && !!ws.pid && !!ws.env}
+          onActivity={() => {
+            setMore(false);
+            setActivity(true);
+          }}
+          close={() => setMore(false)}
+        />
+      </BottomSheet>
+      {!admin && <MobileActivitySheet ws={ws} open={activity} onClose={() => setActivity(false)} />}
+    </>
+  );
+}
+
+function MoreSheetBody({
+  user,
+  items,
+  link,
+  pathname,
+  canActivity,
+  onActivity,
+  close,
+}: {
+  user?: string;
+  items: ShellNavItem[];
+  link: (n: ShellNavItem) => string;
+  pathname: string;
+  canActivity: boolean;
+  onActivity: () => void;
+  close: () => void;
+}) {
+  const qc = useQueryClient();
+  const href = useCtxHref();
+  const me = useMe().data;
+  const logout = async () => {
+    try {
+      await api.logout();
+    } finally {
+      qc.clear();
+      window.location.href = "/login/";
+    }
+  };
+  const row =
+    "flex min-h-[50px] w-full items-center gap-3 rounded-xl px-3.5 text-left text-[15px] font-medium text-foreground transition-colors active:bg-gray-100 dark:active:bg-white/[0.06]";
+  return (
+    <div className="px-1 pb-1">
+      <Link href={href("/account/")} onClick={close} className="mb-3 mt-1 flex items-center gap-3 rounded-2xl border border-gray-200 bg-secondaryBg p-3 active:scale-[0.99] dark:border-white/[0.08] dark:bg-white/[0.03]">
+        <span className="inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#6f31aa] to-[#306ee8] text-base font-semibold text-white">
+          {(user ?? "?").slice(0, 1).toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[15px] font-semibold text-foreground">{user ?? "…"}</span>
+          {me && (
+            <span className="block truncate text-xs text-gray-500">
+              {me.email} · {ROLE_LABEL[me.role] ?? me.role}
+            </span>
+          )}
+        </span>
+        <ChevronRight className="size-4 shrink-0 text-gray-400" aria-hidden />
+      </Link>
+      <div className="grid grid-cols-4 gap-2">
+        {items.map((n) => {
+          const Icon = n.icon;
+          const active = n.match(pathname);
+          return (
+            <Link
+              key={n.href}
+              href={link(n)}
+              onClick={close}
+              aria-current={active ? "page" : undefined}
+              className={cx(
+                "flex h-[78px] flex-col items-center justify-center gap-1.5 rounded-2xl border text-xs font-medium transition-transform active:scale-95",
+                active
+                  ? "border-pink-500/40 bg-pink-500/10 text-foreground"
+                  : "border-gray-200 bg-secondaryBg text-neutral-secondary dark:border-white/[0.08] dark:bg-white/[0.03]",
+              )}
+            >
+              <Icon className={cx("size-[22px]", active ? "text-pink-600 dark:text-pink-700" : "text-gray-500")} aria-hidden />
+              {n.label}
+            </Link>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex flex-col">
+        <button
+          type="button"
+          className={row}
+          onClick={() => {
+            close();
+            openCommandPalette();
+          }}
+        >
+          <Search className="size-[18px] text-gray-500" aria-hidden />
+          {t("검색 및 명령")}
+        </button>
+        {canActivity && (
+          <button type="button" className={row} onClick={onActivity}>
+            <Activity className="size-[18px] text-gray-500" aria-hidden />
+            {t("활동")}
+          </button>
+        )}
+        <div className="mx-3.5 my-1 h-px bg-gray-100 dark:bg-white/[0.06]" />
+        <button type="button" className={cx(row, "text-danger")} onClick={logout}>
+          <LogOut className="size-[18px]" aria-hidden />
+          {t("로그아웃")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The canvas activity feed as a sheet on phones (the desktop shows it as a side column). */
+function MobileActivitySheet({ ws, open, onClose }: { ws: Workspace; open: boolean; onClose: () => void }) {
+  const router = useRouter();
+  const href = useCtxHref();
+  const canvas = useCanvas(ws.env?.id, false);
+  if (!ws.pid || !ws.env) return null;
+  return (
+    <BottomSheet open={open} onClose={onClose} label={t("활동")} className="h-[85dvh]">
+      <div className="h-full min-h-0">
+        <ActivityPanel
+          pid={ws.pid}
+          envId={ws.env.id}
+          services={canvas.data?.services ?? []}
+          onClose={onClose}
+          onOpen={(ev) => {
+            if (!ev.service_id) return;
+            onClose();
+            router.push(href("/", { svc: ev.service_id }), { scroll: false });
+          }}
+        />
+      </div>
+    </BottomSheet>
+  );
+}
+
 function ShellInner({ children }: { children: ReactNode }) {
   const me = useQuery({ queryKey: qk.me, queryFn: api.me, staleTime: 60_000 });
   const ws = useWorkspace();
@@ -1126,7 +1325,7 @@ function ShellInner({ children }: { children: ReactNode }) {
         <Toaster shifted={activityShown} />
         {me.data && <CommandPalette ws={ws} />}
         <TopBar user={me.data?.user} ws={ws} admin={admin} />
-        <div className="flex min-h-0 flex-1 flex-col-reverse md:flex-row">
+        <div className="flex min-h-0 flex-1 flex-row">
           <Rail user={me.data?.user} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-row">
             <div className="relative min-h-0 min-w-0 flex-1">
@@ -1143,7 +1342,7 @@ function ShellInner({ children }: { children: ReactNode }) {
                         panelOpen && "sm:grid-cols-[0px_100%] lg:grid-cols-[1fr_70%] xl:grid-cols-[1fr_minmax(auto,_919px)] 2xl:grid-cols-[1fr_minmax(auto,_1023px)] 3xl:grid-cols-[1fr_minmax(auto,_1199px)]",
                       )}
                     >
-                      <div className="absolute inset-0 flex sm:pr-2">
+                      <div className="absolute inset-0 flex pr-2">
                         <div className="w-2 flex-shrink-0 md:hidden" />
                         <main
                           className="canvas-container relative grid flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-xl border border-neutral bg-secondaryBg dark:bg-background"
@@ -1189,6 +1388,7 @@ function ShellInner({ children }: { children: ReactNode }) {
             {!admin && <ActivityColumn ws={ws} open={activityShown} />}
           </div>
         </div>
+        <MobileTabBar user={me.data?.user} ws={ws} admin={admin} />
       </div>
     </div>
   );
