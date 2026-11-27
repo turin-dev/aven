@@ -44,9 +44,11 @@ type Node struct {
 	NodeIngress
 	// IPv6Pool은 도메인별 공개 IPv6를 배정할 이 노드의 풀(CIDR, /64~/120)이다. 비면 도메인은 노드의 기본 IPv6를 같이 쓴다.
 	// 로컬 노드는 KEEL_IPV6_POOL이 있으면 그 값이 우선한다.
-	IPv6Pool   string    `json:"ipv6_pool"`
-	LastSeenAt time.Time `json:"last_seen_at"`
-	CreatedAt  time.Time `json:"created_at"`
+	IPv6Pool string `json:"ipv6_pool"`
+	// Traits는 운영자가 적은 그 기계의 사정(집 PC, 전기요금, 회선)이다. nodetraits.go 참고.
+	Traits     NodeTraits `json:"traits"`
+	LastSeenAt time.Time  `json:"last_seen_at"`
+	CreatedAt  time.Time  `json:"created_at"`
 }
 
 type NodeAddress struct {
@@ -57,12 +59,13 @@ type NodeAddress struct {
 
 func (s *Store) LocalNode(ctx context.Context) (*Node, error) {
 	var n Node
-	var labels, created string
-	err := s.q.QueryRowContext(ctx, `SELECT id, name, schedulable, labels, created_at, `+ingressCols+` FROM nodes WHERE id=?`, LocalNodeID).
-		Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
+	var labels, created, traits string
+	err := s.q.QueryRowContext(ctx, `SELECT id, name, schedulable, labels, created_at, traits, `+ingressCols+` FROM nodes WHERE id=?`, LocalNodeID).
+		Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &traits, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
 	if err != nil {
 		return nil, notFound(err)
 	}
+	n.Traits = parseTraits(traits)
 	n.IsLocal, n.Status = true, "online"
 	n.CreatedAt, n.LastSeenAt = parseTS(created), time.Now().UTC()
 	json.Unmarshal([]byte(labels), &n.Labels)
@@ -76,8 +79,9 @@ func (s *Store) UpdateLocalNode(ctx context.Context, n *Node) error {
 	return affected(s.q.ExecContext(ctx, `UPDATE nodes SET name=?, schedulable=?, labels=? WHERE id=?`, n.Name, n.Schedulable, jsonStr(n.Labels), LocalNodeID))
 }
 
-func (s *Store) CreateJoinToken(ctx context.Context, hash, name string, expiry time.Time) error {
-	_, err := s.q.ExecContext(ctx, `INSERT INTO node_join_tokens (token_hash, name, expires_at) VALUES (?,?,?)`, hash, name, ts(expiry))
+// CreateJoinToken은 가입 토큰을 저장한다. traits는 가입하는 노드에 그대로 옮겨진다.
+func (s *Store) CreateJoinToken(ctx context.Context, hash, name string, expiry time.Time, traits NodeTraits) error {
+	_, err := s.q.ExecContext(ctx, `INSERT INTO node_join_tokens (token_hash, name, expires_at, traits) VALUES (?,?,?,?)`, hash, name, ts(expiry), jsonStr(traits))
 	return err
 }
 
@@ -85,8 +89,8 @@ func (s *Store) CreateJoinToken(ctx context.Context, hash, name string, expiry t
 func (s *Store) ConsumeJoinToken(ctx context.Context, hash, credentialHash string) (*Node, error) {
 	var result *Node
 	err := s.Tx(ctx, func(tx *Store) error {
-		var name, expires string
-		if err := tx.q.QueryRowContext(ctx, `SELECT name, expires_at FROM node_join_tokens WHERE token_hash=?`, hash).Scan(&name, &expires); err != nil {
+		var name, expires, traits string
+		if err := tx.q.QueryRowContext(ctx, `SELECT name, expires_at, traits FROM node_join_tokens WHERE token_hash=?`, hash).Scan(&name, &expires, &traits); err != nil {
 			return ErrNotFound
 		}
 		if !parseTS(expires).After(time.Now().UTC()) {
@@ -95,20 +99,20 @@ func (s *Store) ConsumeJoinToken(ctx context.Context, hash, credentialHash strin
 		if _, err := tx.q.ExecContext(ctx, `DELETE FROM node_join_tokens WHERE token_hash=?`, hash); err != nil {
 			return err
 		}
-		result = &Node{ID: NewID("nod"), Name: name, Status: "offline", Schedulable: true, Labels: map[string]string{}, CreatedAt: time.Now().UTC()}
-		_, err := tx.q.ExecContext(ctx, `INSERT INTO nodes (id, name, schedulable, labels, created_at, credential_hash) VALUES (?,?,?,?,?,?)`, result.ID, name, true, "{}", ts(result.CreatedAt), credentialHash)
+		result = &Node{ID: NewID("nod"), Name: name, Status: "offline", Schedulable: true, Labels: map[string]string{}, Traits: parseTraits(traits), CreatedAt: time.Now().UTC()}
+		_, err := tx.q.ExecContext(ctx, `INSERT INTO nodes (id, name, schedulable, labels, created_at, credential_hash, traits) VALUES (?,?,?,?,?,?,?)`, result.ID, name, true, "{}", ts(result.CreatedAt), credentialHash, jsonStr(result.Traits))
 		return err
 	})
 	return result, err
 }
 
-const nodeCols = `id, name, schedulable, labels, created_at, status, address, last_seen_at, info, draining, ` + ingressCols
+const nodeCols = `id, name, schedulable, labels, created_at, status, address, last_seen_at, info, draining, traits, ` + ingressCols
 
 func scanNode(r scanner) (*Node, error) {
 	var n Node
-	var address, labels, created, info string
+	var address, labels, created, info, traits string
 	var seen *string
-	err := r.Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &n.Status, &address, &seen, &info, &n.Draining, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
+	err := r.Scan(&n.ID, &n.Name, &n.Schedulable, &labels, &created, &n.Status, &address, &seen, &info, &n.Draining, &traits, &n.IngressMode, &n.IngressHostname, &n.TCPHostname, &n.IPv6Pool)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -119,6 +123,7 @@ func scanNode(r scanner) (*Node, error) {
 		n.ExternalUpstreams = ni.ExternalUpstreams
 	}
 	n.IsLocal = n.ID == LocalNodeID
+	n.Traits = parseTraits(traits)
 	n.CreatedAt = parseTS(created)
 	if seen != nil {
 		n.LastSeenAt = parseTS(*seen)

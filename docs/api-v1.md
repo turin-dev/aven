@@ -404,6 +404,7 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
   ingress_hostname: string;                                     // CNAME target for custom domains ("" = A/AAAA records)
   tcp_hostname: string;                                         // host shown for TCP proxies ("" = node address / AVEN_TCP_PROXY_DOMAIN)
   ipv6_pool: string;                                            // per-domain public IPv6 pool (CIDR, /64-/120; "" = domains share the node IPv6)
+  traits: NodeTraits;                                           // what the operator wrote about the machine (see "Node traits" below)
   ipv6_status?: { pool: string; supported: boolean | null; reason?: string; iface?: string;   // GET /nodes only; null without a pool
                   desired: number; present: number; foreign?: string[]; last_error?: string; checked_at?: string } | null;
   hyperv?: { vm_name: string; host_name: string; host_online: boolean; power_state: "running"|"off"|"paused"|"unknown";
@@ -411,7 +412,7 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
   last_seen_at: string; created_at: string };
 ```
 - `GET    /nodes` → `Node[]`
-- `POST   /nodes/join-tokens` `{name?, ttl_s?: number}` → `{ token: string; expires_at: string; command: string }`
+- `POST   /nodes/join-tokens` `{name?, ttl_s?: number, traits?: NodeTraits}` → `{ token: string; expires_at: string; command: string }`. `traits` is stored with the token and copied onto the node when it joins.
   The command is one line to run on the new server. Example: `curl -fsSL <AVEN_PUBLIC_URL>/install-agent.sh | sudo sh -s -- --server <url> --token <token>`.
   The token is single-use and expires after 1 hour by default.
 - `POST   /nodes/{nid}/hyperv/pair-token` `{vm_name}` → `{token, expires_at, command}`. Instance admin; audited as `hyperv.pair_token`. The 15-minute, single-use token pairs one remote Linux node with a Windows Hyper-V host. `command` downloads `GET /downloads/aven-hyperv-host.ps1` from this server (the script embedded in this build; `GET /downloads/aven-hyperv-host.ps1.sha256` is its SHA-256), compares `Get-FileHash` before running it, and does not fetch `releases/latest`.
@@ -423,7 +424,28 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
 - `POST   /hyperv/commands/{id}/result` `{ok, error?, power_state?}` (host credential) → `204`.
 - `GET    /downloads/aven-hyperv-host.ps1` and `GET /downloads/aven-hyperv-host.ps1.sha256` (no auth) → the host controller script bundled with this server, and its SHA-256.
 - `GET    /install-agent.sh` (no auth) → install script. It downloads the `aven-agent` binary from `GET /downloads/aven-agent-linux-{amd64,arm64}`, writes the compatible `keel-agent.service` unit and starts the agent.
-- `PATCH  /nodes/{nid}` `{name?, schedulable?, labels?, ingress_mode?, ingress_hostname?, tcp_hostname?, ipv6_pool?}` → `Node` (ingress fields: see "Networking" > "Node ingress"; `ipv6_pool`: "Per-domain IPv6")
+- `PATCH  /nodes/{nid}` `{name?, schedulable?, labels?, ingress_mode?, ingress_hostname?, tcp_hostname?, ipv6_pool?, traits?}` → `Node` (ingress fields: see "Networking" > "Node ingress"; `ipv6_pool`: "Per-domain IPv6"; `traits` replaces the whole object, `null` or absent leaves it alone)
+- **Node traits.** Facts about the machine that no cloud API reports, entered by the operator when adding a server (or later, including for the local node). Every field is optional; `0`, `false` and absent mean "unknown". They are informational today and do not change scheduling.
+  ```ts
+  type NodeTraits = {
+    site?: "datacenter" | "home" | "office" | "other";
+    power_price_per_kwh?: number;   // 0..1000000; requires power_currency
+    power_currency?: string;        // ISO 4217, three letters (KRW, EUR, USD)
+    idle_watts?: number; max_watts?: number;        // whole-machine power draw, idle and CPU-bound (0..100000, idle <= max)
+    ups?: boolean;                  // battery backup
+    connection?: "fiber" | "cable" | "dsl" | "mobile" | "satellite" | "datacenter" | "other";
+    downlink_mbps?: number; uplink_mbps?: number;   // 0..10000000
+    data_cap_gb?: number;           // monthly cap; 0 = unlimited or unknown
+    dynamic_ip?: boolean;           // the public IP can change
+    cgnat?: boolean;                // behind carrier-grade NAT (needs a Cloudflare tunnel for ingress)
+    note?: string;                  // up to 200 characters; returned only to instance admins
+  };
+  ```
+  Invalid values return `400`.
+- **What the traits change.**
+  - *Placement of public services.* `GET /nodes` returns `public_rank` per node: `0` fine (or the node uses Cloudflare Tunnel ingress), `1` `dynamic_ip`, `2` `cgnat`. For an instance with at least one domain, `deploy.region` and `deploy.multiRegionConfig` pick the best-ranked connected node within a region, and draining sends it to the best-ranked node before the least-loaded one. A node the service is already on, or a node picked explicitly, is kept. Deploying a public service to a rank 1 or 2 node writes a `WARN` line to the deploy log.
+  - *Electricity estimate.* With `idle_watts` and/or `max_watts`, `GET /nodes` returns `power_estimate: {model: "linear"|"flat", avg_cpu_percent, avg_watts, kwh_month, cost_month?, currency?, window_s}`. `linear` interpolates idle→max by the time-weighted average node CPU over the stored metrics (up to 7 days, `window_s`). With only one value it is `flat`. A month is 730 hours. `cost_month` needs `power_price_per_kwh`.
+  - *Monthly traffic and data cap.* The local node and agents report the cumulative bytes of physical interfaces (`/proc/net/dev`, excluding `lo`, Docker bridges, veth, WireGuard, Tailscale and similar; Linux only). The server adds the difference of each 10 s sample to the node's calendar month in UTC (a counter that goes down is treated as a reboot). `GET /nodes` returns `traffic: {month, rx_bytes, tx_bytes, total_bytes, cap_bytes?, cap_percent?}`, or `null` before the first sample (old agent, Windows). With `data_cap_gb` (1 GB = 10^9 bytes, received + sent), the server checks once a minute and emits `node.data_cap_warning` at 80% and `node.data_cap_reached` at 100%, each at most once per node per month, to every project with an instance whose primary node is that node.
 - `DELETE /nodes/{nid}` → `204`. Returns 409 if services are still placed on it. With `?force=1` it removes the node anyway, and its instances become `offline`.
 - `GET    /nodes/{nid}/metrics?range=` → `{ points: { t; cpu_percent; memory_bytes; disk_free_bytes }[] }`
 - `ServiceInstance.node_id: ID` is the node the instance runs on. The default is the local node. Changing it applies on the next deploy, and the volumes must be moved or recreated (400 if attached volumes would be orphaned, unless `?move_volumes=1`).
@@ -1148,6 +1170,7 @@ Object keys: valid UTF-8, at most 1024 bytes, no control characters, no leading 
 - IPv6: when an environment network also has an IPv6 subnet, the gateway opens a second local port on the network's IPv6 gateway and the forwarder container listens on IPv6 too (`TCP6-LISTEN ... ipv6only=1`), so containers that resolve the private domain to AAAA reach the service.
 - Failover: `mesh.Import` gains `nodes: string[]` (all nodes serving the service, primary first; omitted when there is only one). `node` is kept (the primary). Each forwarded connection tries candidates with status `ok` in ascending RTT, then `pending`, and skips `unreachable` ones unless no other candidate is left. A failed dial marks the peer `unreachable` until the next successful probe. An agent that rejects the `nodes` field is sent the same config without it.
 - Offline nodes: `DesiredMesh` leaves out nodes whose agent is not connected (they are neither peers nor import targets), and `Domain.dns` leaves out the records of offline serving nodes (unless every serving node is offline, in which case all records stay).
+- Events `node.data_cap_warning` and `node.data_cap_reached` (project scoped, no service): see "Node traits". Listed in the notification kinds.
 - Event `node.unavailable` (project scoped, one per affected service): emitted once when a remote node that was connected is seen disconnected by the 30 s mesh/reconcile pass, for each service that has replicas on it. It is listed in the notification kinds.
 
 ### Functions (single-file Bun services)

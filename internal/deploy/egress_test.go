@@ -107,7 +107,7 @@ func TestSyncEgress(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 	mkNode := func(name string) *store.Node {
-		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour))
+		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour), store.NodeTraits{})
 		n, err := st.ConsumeJoinToken(ctx, "h-"+name, "")
 		if err != nil {
 			t.Fatal(err)

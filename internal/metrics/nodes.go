@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/turin-dev/aven/internal/store"
+	"github.com/turin-dev/aven/internal/sysstat"
 )
 
 // NodeStat은 노드 하나의 한 시점 사용량이다.
@@ -13,6 +14,9 @@ type NodeStat struct {
 	CPUPercent    float64
 	MemoryBytes   uint64
 	DiskFreeBytes uint64
+	// NetRx/NetTx는 물리 인터페이스의 누적 바이트(부팅 이후)다. NetOK가 false면 모른다.
+	NetRx, NetTx uint64
+	NetOK        bool
 }
 
 // NodeSource는 연결된 원격 노드에서 사용량을 읽어 오는 함수다.
@@ -29,7 +33,10 @@ func (c *Collector) collectNodes(ctx context.Context) {
 		return store.NodeMetricRow{T: now, Resolution: int(Interval.Seconds()), CPU: s.CPUPercent, Mem: int64(s.MemoryBytes), DiskFree: int64(s.DiskFreeBytes)}
 	}
 	ls := c.sampler.Sample(c.DataDir)
-	c.Store.InsertNodeMetrics(ctx, store.LocalNodeID, []store.NodeMetricRow{row(NodeStat{ls.CPUPercent, ls.MemoryBytes, ls.DiskFreeBytes})})
+	local := NodeStat{CPUPercent: ls.CPUPercent, MemoryBytes: ls.MemoryBytes, DiskFreeBytes: ls.DiskFreeBytes}
+	local.NetRx, local.NetTx, local.NetOK = sysstat.NetBytes()
+	c.Store.InsertNodeMetrics(ctx, store.LocalNodeID, []store.NodeMetricRow{row(local)})
+	c.recordTraffic(ctx, store.LocalNodeID, local)
 	if c.RemoteNodes == nil {
 		return
 	}
@@ -44,6 +51,17 @@ func (c *Collector) collectNodes(ctx context.Context) {
 			continue
 		}
 		c.Store.InsertNodeMetrics(ctx, src.ID, []store.NodeMetricRow{row(st)})
+		c.recordTraffic(ctx, src.ID, st)
+	}
+}
+
+// recordTraffic은 누적 카운터를 이번 달 노드 트래픽에 더한다(월 데이터 상한, store/nodetraffic.go).
+func (c *Collector) recordTraffic(ctx context.Context, nodeID string, s NodeStat) {
+	if !s.NetOK {
+		return
+	}
+	if err := c.Store.AddNodeTraffic(ctx, nodeID, s.NetRx, s.NetTx, time.Now()); err != nil && c.Log != nil && ctx.Err() == nil {
+		c.Log.Warn("node traffic", "node", nodeID, "err", err)
 	}
 }
 

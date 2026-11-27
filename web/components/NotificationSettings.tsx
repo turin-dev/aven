@@ -29,6 +29,7 @@ const EVENT_PRESETS: { value: string; label: string }[] = [
   { value: "usage.threshold_reached", label: t("사용량 기준 도달") },
   { value: "usage.limit_reached", label: t("사용량 한도 도달") },
   { value: "node.unavailable", label: t("노드 연결 끊김") },
+  { value: "node.data_cap_*", label: t("노드 월 데이터 상한") },
   { value: "*", label: t("모든 이벤트") },
 ];
 

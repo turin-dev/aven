@@ -796,7 +796,9 @@ func (h *Handler) Handle(ctx context.Context, op string, payload []byte, stream 
 		}
 		dir := h.DataDir
 		s := h.sampler.Sample(dir)
-		return agentprotocol.NodeStats{CPUPercent: s.CPUPercent, MemoryBytes: s.MemoryBytes, DiskFreeBytes: s.DiskFreeBytes}, nil
+		rx, tx, netOK := sysstat.NetBytes()
+		return agentprotocol.NodeStats{CPUPercent: s.CPUPercent, MemoryBytes: s.MemoryBytes, DiskFreeBytes: s.DiskFreeBytes,
+			NetRxBytes: rx, NetTxBytes: tx, NetOK: netOK}, nil
 
 	case agentprotocol.OpMeshEnsure:
 		var r agentprotocol.MeshEnsureRequest

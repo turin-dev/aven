@@ -41,3 +41,11 @@ func DiskFreeBytes(path string) uint64 {
 	}
 	return fs.Bavail * uint64(fs.Bsize)
 }
+
+func hostNet() (rx, tx uint64, ok bool) {
+	b, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return 0, 0, false
+	}
+	return ParseNetDev(string(b))
+}

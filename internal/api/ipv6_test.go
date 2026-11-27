@@ -58,7 +58,7 @@ func TestPatchNodeIPv6Pool(t *testing.T) {
 		return w.Code, out
 	}
 	// 원격 노드 하나에 풀이 있다.
-	f.st.CreateJoinToken(f.ctx, "h-us", "us", time.Now().Add(time.Hour))
+	f.st.CreateJoinToken(f.ctx, "h-us", "us", time.Now().Add(time.Hour), store.NodeTraits{})
 	us, err := f.st.ConsumeJoinToken(f.ctx, "h-us", "")
 	if err != nil {
 		t.Fatal(err)

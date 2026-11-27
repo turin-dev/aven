@@ -1309,6 +1309,14 @@ export type AvenNode = {
   ipv6_pool?: string;
   /** §7 (GET /nodes only) 풀의 주소를 노드에 붙인 상태. 풀이 없으면 null. */
   ipv6_status?: NodeIPv6Status | null;
+  /** 운영자가 적은 그 기계의 사정(집 PC, 전기요금, 회선). 0/빈 값은 모름. note는 서버 관리자에게만 보인다. */
+  traits?: NodeTraits;
+  /** (GET /nodes only) 소비전력과 최근 7일 CPU 평균으로 어림한 월 전기 사용량·요금. 소비전력을 적지 않았으면 null. */
+  power_estimate?: NodePowerEstimate | null;
+  /** (GET /nodes only) 이번 달(UTC) 물리 인터페이스 트래픽. 카운터를 받은 적 없으면(옛 agent, Windows) null. */
+  traffic?: NodeTraffic | null;
+  /** (GET /nodes only) 공개 서비스 배치 순위: 0 알맞음, 1 유동 IP, 2 CGNAT(터널 없음). */
+  public_rank?: 0 | 1 | 2;
   last_seen_at: string;
   created_at: string;
   /** v1.5 (GET /nodes only) */
@@ -1364,6 +1372,36 @@ export type CloudflareSettings = {
 };
 export type CloudflareTest = { ok: boolean; error?: string; zones: CloudflareZone[]; load_balancing: "available" | "unavailable"; load_balancing_error?: string };
 export type NodeIngressMode = "direct" | "cloudflare_tunnel";
+export type NodePowerEstimate = {
+  model: "linear" | "flat";
+  avg_cpu_percent: number;
+  avg_watts: number;
+  kwh_month: number;
+  cost_month?: number;
+  currency?: string;
+  window_s: number;
+};
+export type NodeTraffic = { month: string; rx_bytes: number; tx_bytes: number; total_bytes: number; cap_bytes?: number; cap_percent?: number };
+export type NodeSite = "datacenter" | "home" | "office" | "other";
+export type NodeConnection = "fiber" | "cable" | "dsl" | "mobile" | "satellite" | "datacenter" | "other";
+export type NodeTraits = {
+  site?: NodeSite;
+  power_price_per_kwh?: number;
+  /** ISO 4217 (KRW, EUR, USD …). power_price_per_kwh가 있으면 필수. */
+  power_currency?: string;
+  /** 기계 전체 소비전력(W): 놀 때 / CPU를 다 쓸 때. */
+  idle_watts?: number;
+  max_watts?: number;
+  ups?: boolean;
+  connection?: NodeConnection;
+  downlink_mbps?: number;
+  uplink_mbps?: number;
+  /** 월 데이터 상한(GB). 0/없음은 무제한 또는 모름. */
+  data_cap_gb?: number;
+  dynamic_ip?: boolean;
+  cgnat?: boolean;
+  note?: string;
+};
 export type NodeIngressInput = { ingress_mode?: NodeIngressMode | ""; ingress_hostname?: string; tcp_hostname?: string; ipv6_pool?: string };
 export type NodeIPv6Status = {
   pool: string;
@@ -2167,11 +2205,11 @@ export const api = {
 
   // nodes (v1.2)
   nodes: () => request<AvenNode[]>("GET", "/nodes"),
-  createJoinToken: (input: { name?: string; ttl_s?: number }) => request<JoinToken>("POST", "/nodes/join-tokens", input),
+  createJoinToken: (input: { name?: string; ttl_s?: number; traits?: NodeTraits }) => request<JoinToken>("POST", "/nodes/join-tokens", input),
   createHyperVNodePairToken: (nid: ID, vm_name: string) => request<JoinToken>("POST", `/nodes/${enc(nid)}/hyperv/pair-token`, { vm_name }),
   requestHyperVNodePower: (nid: ID, action: "start" | "stop") => request<{ id: ID; node_id: ID; action: "start" | "stop"; status: string }>("POST", `/nodes/${enc(nid)}/hyperv/power`, { action }),
   disconnectHyperVHost: (nid: ID) => request<void>("DELETE", `/nodes/${enc(nid)}/hyperv`),
-  updateNode: (nid: ID, input: { name?: string; schedulable?: boolean; labels?: Record<string, string> } & NodeIngressInput) =>
+  updateNode: (nid: ID, input: { name?: string; schedulable?: boolean; labels?: Record<string, string>; traits?: NodeTraits } & NodeIngressInput) =>
     request<AvenNode>("PATCH", `/nodes/${enc(nid)}`, input),
   deleteNode: (nid: ID, force = false) => request<void>("DELETE", `/nodes/${enc(nid)}${force ? "?force=1" : ""}`),
   nodeMetrics: (nid: ID, range: MetricRange) => request<{ points: NodeMetricPoint[] }>("GET", `/nodes/${enc(nid)}/metrics?range=${range}`),

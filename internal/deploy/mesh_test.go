@@ -96,7 +96,7 @@ func TestSyncMeshAndCrossNodeRefs(t *testing.T) {
 	hub := &meshHub{reqs: map[string]mesh.Config{}}
 	m := &Manager{Store: st, Agents: hub}
 	mkNode := func(name, private string, meshPort int) *store.Node {
-		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour))
+		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour), store.NodeTraits{})
 		n, err := st.ConsumeJoinToken(ctx, "h-"+name, "")
 		if err != nil {
 			t.Fatal(err)

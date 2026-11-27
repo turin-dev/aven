@@ -35,7 +35,7 @@ func TestMeshAPI(t *testing.T) {
 	}
 
 	// 원격 노드(mesh 가능)에 db를 두고 web이 db를 참조한다. 로컬 노드는 사설 주소가 없어 mesh를 쓸 수 없다.
-	f.st.CreateJoinToken(f.ctx, "h", "fra-1", time.Now().Add(time.Hour))
+	f.st.CreateJoinToken(f.ctx, "h", "fra-1", time.Now().Add(time.Hour), store.NodeTraits{})
 	n, err := f.st.ConsumeJoinToken(f.ctx, "h", "")
 	if err != nil {
 		t.Fatal(err)

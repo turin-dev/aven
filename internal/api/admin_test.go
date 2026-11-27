@@ -61,7 +61,7 @@ func TestInstanceOverviewAuthorityAndInventory(t *testing.T) {
 		}
 	}
 	// Database status alone cannot make a disconnected agent online.
-	if err := f.st.CreateJoinToken(ctx, "inventory-node-hash", "remote-inventory", time.Now().Add(time.Hour)); err != nil {
+	if err := f.st.CreateJoinToken(ctx, "inventory-node-hash", "remote-inventory", time.Now().Add(time.Hour), store.NodeTraits{}); err != nil {
 		t.Fatal(err)
 	}
 	remote, err := f.st.ConsumeJoinToken(ctx, "inventory-node-hash", "")

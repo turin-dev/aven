@@ -245,6 +245,9 @@ func (m *Manager) applyMultiRegion(ctx context.Context, t *Target, d *store.Depl
 	if err != nil {
 		return err
 	}
+	if isPublic(t.Instance) {
+		nodes = SortForPublic(nodes)
+	}
 	pl, missing := MapRegions(nodes, regions, d.NodeID, m.nodeOnline)
 	for _, r := range missing {
 		b.Printf("WARN: deploy.multiRegionConfig: region %s에 맞는 연결된 배포 가능 노드가 없어 건너뜁니다", r)

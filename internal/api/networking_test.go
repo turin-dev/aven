@@ -222,7 +222,7 @@ func TestNetworkingSlowAgent(t *testing.T) {
 // 공인 IP가 없는 노드(Cloudflare 터널 노드)는 TCP 프록시를 쓸 수 없고 고정 IP도 없다.
 func TestNetworkingTunnelNode(t *testing.T) {
 	f := newNetFixture(t, store.LocalNodeID)
-	if err := f.st.CreateJoinToken(f.ctx, "h", "remote", time.Now().Add(time.Hour)); err != nil {
+	if err := f.st.CreateJoinToken(f.ctx, "h", "remote", time.Now().Add(time.Hour), store.NodeTraits{}); err != nil {
 		t.Fatal(err)
 	}
 	n, err := f.st.ConsumeJoinToken(f.ctx, "h", "c")

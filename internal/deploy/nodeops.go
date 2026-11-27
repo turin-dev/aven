@@ -87,29 +87,31 @@ type DrainSkip struct {
 	Reason     string `json:"reason"`
 }
 
-// DrainTargets는 drain으로 옮길 수 있는 노드(스케줄 가능, 연결됨, 대상 노드가 아님)와 그 노드의 현재 인스턴스 수다.
-func (m *Manager) drainTargets(ctx context.Context, from string) (map[string]int, error) {
+// DrainTargets는 drain으로 옮길 수 있는 노드(스케줄 가능, 연결됨, 대상 노드가 아님)와 그 노드의 현재 인스턴스 수,
+// 그리고 노드마다 공개 순위(PublicIngressRank)다.
+func (m *Manager) drainTargets(ctx context.Context, from string) (map[string]int, map[string]int, error) {
 	nodes, err := m.Store.ListNodes(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	load := map[string]int{}
+	load, rank := map[string]int{}, map[string]int{}
 	for _, n := range nodes {
 		if n.ID == from || !n.Schedulable || n.Draining || !m.nodeOnline(n.ID) {
 			continue
 		}
 		load[nodeKey(n.ID)] = 0
+		rank[nodeKey(n.ID)] = PublicIngressRank(n)
 	}
 	insts, err := m.Store.ListInstances(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, in := range insts {
 		if _, ok := load[m.homeNode(ctx, in)]; ok {
 			load[m.homeNode(ctx, in)]++
 		}
 	}
-	return load, nil
+	return load, rank, nil
 }
 
 // DrainNode는 노드를 draining으로 표시하고(새 배포를 받지 않는다) 그 노드의 인스턴스를 다른 노드에 다시 배포한다.
@@ -123,7 +125,7 @@ func (m *Manager) DrainNode(ctx context.Context, nodeID, target string) ([]Drain
 	if target != "" && target == nodeID {
 		return nil, nil, errors.New("target must be a different node")
 	}
-	load, err := m.drainTargets(ctx, nodeID)
+	load, rank, err := m.drainTargets(ctx, nodeID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -146,13 +148,8 @@ func (m *Manager) DrainNode(ctx context.Context, nodeID, target string) ([]Drain
 	sort.Slice(insts, func(i, j int) bool { return insts[i].ID < insts[j].ID })
 	var moves []DrainMove
 	var skips []DrainSkip
-	pick := func() string {
-		best := ""
-		for n, c := range load {
-			if best == "" || c < load[best] || (c == load[best] && n < best) {
-				best = n
-			}
-		}
+	pick := func(public bool) string {
+		best := PickDrainTarget(load, rank, public)
 		load[best]++
 		return best
 	}
@@ -168,7 +165,7 @@ func (m *Manager) DrainNode(ctx context.Context, nodeID, target string) ([]Drain
 			skip("deployed from a CLI upload; the source is not kept, so redeploy it with the CLI after setting its node_id")
 			continue
 		}
-		to := pick()
+		to := pick(isPublic(in))
 		if err := m.Store.SetInstanceNode(ctx, in.ID, to); err != nil {
 			skip(err.Error())
 			continue
@@ -205,4 +202,25 @@ func (m *Manager) OnlineRemoteNodeIDs(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// PickDrainTarget은 인스턴스 수(load)가 가장 적은 노드를 고른다(같으면 ID 순). public이면 공개 순위(rank)가 나은 노드를 먼저 본다.
+func PickDrainTarget(load, rank map[string]int, public bool) string {
+	best := ""
+	for n, c := range load {
+		if best == "" {
+			best = n
+			continue
+		}
+		if public && rank[n] != rank[best] {
+			if rank[n] < rank[best] {
+				best = n
+			}
+			continue
+		}
+		if c < load[best] || (c == load[best] && n < best) {
+			best = n
+		}
+	}
+	return best
 }

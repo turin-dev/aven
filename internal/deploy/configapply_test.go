@@ -130,7 +130,7 @@ func newRegionFixture(t *testing.T) *regionFixture {
 	t.Cleanup(func() { st.Close() })
 	f := &regionFixture{st: st}
 	f.m = &Manager{Store: st, Agents: &fakeHub{}, Dispatch: func(_, dep string) { f.mu.Lock(); f.dispatched = append(f.dispatched, dep); f.mu.Unlock() }}
-	if err := st.CreateJoinToken(ctx, "h", "fra-1", time.Now().Add(time.Hour)); err != nil {
+	if err := st.CreateJoinToken(ctx, "h", "fra-1", time.Now().Add(time.Hour), store.NodeTraits{}); err != nil {
 		t.Fatal(err)
 	}
 	if f.node, err = st.ConsumeJoinToken(ctx, "h", "cred"); err != nil {

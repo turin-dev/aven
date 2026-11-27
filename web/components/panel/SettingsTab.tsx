@@ -782,6 +782,17 @@ function Scaling({ svc, env, inst, draft, stage }: { svc: CanvasService; env: En
               ))
             )}
           </div>
+          {inst.domains.length > 0 &&
+            rows
+              .map((r) => list.find((n) => n.id === r.node_id))
+              .filter((n): n is NonNullable<typeof n> => !!n && (n.public_rank ?? 0) > 0)
+              .map((n) => (
+                <Hint key={n.id} tone="warn">
+                  {n.public_rank === 2
+                    ? t("{node}는 통신사 NAT(CGNAT) 뒤에 있다고 적혀 있어 공개 도메인으로 들어오는 요청을 받지 못합니다. 노드의 공개 진입을 Cloudflare 터널로 바꾸거나 다른 노드를 고르세요.", { node: n.name })
+                    : t("{node}는 공인 IP가 바뀔 수 있다고 적혀 있습니다. IP가 바뀌면 DNS가 따라갈 때까지 공개 도메인이 끊깁니다.", { node: n.name })}
+                </Hint>
+              ))}
           {!multiBlocked && candidates.length > 0 && total < 10 && (
             <Menu
               align="start"

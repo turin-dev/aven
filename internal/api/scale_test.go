@@ -35,7 +35,7 @@ func newScaleAPIFixture(t *testing.T) *scaleAPIFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	st.CreateJoinToken(ctx, "h-r", "remote", time.Now().Add(time.Hour))
+	st.CreateJoinToken(ctx, "h-r", "remote", time.Now().Add(time.Hour), store.NodeTraits{})
 	rn, err := st.ConsumeJoinToken(ctx, "h-r", "")
 	if err != nil {
 		t.Fatal(err)

@@ -461,7 +461,8 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 			id := id
 			out = append(out, metrics.NodeSource{ID: id, Stats: func(ctx context.Context) (metrics.NodeStat, error) {
 				s, err := mgr.NodeStats(ctx, id)
-				return metrics.NodeStat{CPUPercent: s.CPUPercent, MemoryBytes: s.MemoryBytes, DiskFreeBytes: s.DiskFreeBytes}, err
+				return metrics.NodeStat{CPUPercent: s.CPUPercent, MemoryBytes: s.MemoryBytes, DiskFreeBytes: s.DiskFreeBytes,
+					NetRx: s.NetRxBytes, NetTx: s.NetTxBytes, NetOK: s.NetOK}, err
 			}})
 		}
 		return out
