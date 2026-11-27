@@ -63,8 +63,8 @@ func (s *Store) RetireLegacyCredential(ctx context.Context, nodeID string) error
 func (s *Store) ConsumeJoinTokenForCert(ctx context.Context, hash string, issue func(nodeID string) (serial string, notAfter time.Time, err error)) (*Node, error) {
 	var result *Node
 	err := s.Tx(ctx, func(tx *Store) error {
-		var name, expires string
-		if err := tx.q.QueryRowContext(ctx, `SELECT name, expires_at FROM node_join_tokens WHERE token_hash=?`, hash).Scan(&name, &expires); err != nil {
+		var name, expires, traits string
+		if err := tx.q.QueryRowContext(ctx, `SELECT name, expires_at, traits FROM node_join_tokens WHERE token_hash=?`, hash).Scan(&name, &expires, &traits); err != nil {
 			return ErrNotFound
 		}
 		if !parseTS(expires).After(time.Now().UTC()) {
@@ -73,12 +73,12 @@ func (s *Store) ConsumeJoinTokenForCert(ctx context.Context, hash string, issue 
 		if _, err := tx.q.ExecContext(ctx, `DELETE FROM node_join_tokens WHERE token_hash=?`, hash); err != nil {
 			return err
 		}
-		result = &Node{ID: NewID("nod"), Name: name, Status: "offline", Schedulable: true, Labels: map[string]string{}, CreatedAt: time.Now().UTC()}
+		result = &Node{ID: NewID("nod"), Name: name, Status: "offline", Schedulable: true, Labels: map[string]string{}, Traits: parseTraits(traits), CreatedAt: time.Now().UTC()}
 		serial, notAfter, err := issue(result.ID)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.q.ExecContext(ctx, `INSERT INTO nodes (id, name, schedulable, labels, created_at, credential_hash) VALUES (?,?,?,?,?,'')`, result.ID, name, true, "{}", ts(result.CreatedAt)); err != nil {
+		if _, err := tx.q.ExecContext(ctx, `INSERT INTO nodes (id, name, schedulable, labels, created_at, credential_hash, traits) VALUES (?,?,?,?,?,'',?)`, result.ID, name, true, "{}", ts(result.CreatedAt), jsonStr(result.Traits)); err != nil {
 			return err
 		}
 		_, err = tx.q.ExecContext(ctx, `INSERT INTO node_certs (serial, node_id, not_after, issued_at) VALUES (?,?,?,?)`, serial, result.ID, ts(notAfter), ts(time.Now()))

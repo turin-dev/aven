@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Power, Server, Tag, Trash2, Undo2, Unplug } from "lucide-react";
+import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, House, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Power, Server, Tag, Trash2, Undo2, Unplug } from "lucide-react";
 import { api, ApiError, type JoinToken, type AvenNode, type NodeIngressMode, type NodeIPv6Status } from "@/lib/api";
 import { qk, useMe, useNodeMetrics, useNodes } from "@/lib/queries";
 import { canvasHref } from "@/lib/nav";
@@ -15,6 +15,7 @@ import { t, tr } from "@/lib/i18n";
 import { Button, CopyButton, Dialog, EmptyState, ErrorBox, Field, IconButton, Input, Menu, MenuItem, RowList, Select, Spinner, Textarea, Toggle, cx, errorMessage } from "../ui";
 import { Gauge } from "./Gauge";
 import { drainNode, invalidatePlacements, useNodePlacements, type DrainResult, type Placement } from "./nodeApi";
+import { draftToTraits, NodeTraitsBadges, NodeTraitsDialog, NodeTraitsFields, traitsToDraft } from "./NodeTraits";
 
 const NAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 
@@ -98,6 +99,7 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
   const qc = useQueryClient();
   const nodes = useNodes(open);
   const [name, setName] = useState("");
+  const [traits, setTraits] = useState(() => traitsToDraft());
   const [tok, setTok] = useState<JoinToken | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -112,6 +114,7 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
   const close = () => {
     setTok(null);
     setName("");
+    setTraits(traitsToDraft());
     setError(null);
     known.current = null;
     onClose();
@@ -120,13 +123,19 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
   const generate = async () => {
     if (busy) return;
     if (name.trim() && !NAME_RE.test(name.trim())) return setError(t("이름에는 영문 소문자, 숫자, 하이픈(-)만 쓸 수 있습니다."));
+    let parsed;
+    try {
+      parsed = draftToTraits(traits);
+    } catch (e) {
+      return setError(e);
+    }
     setBusy(true);
     setError(null);
     try {
       const snapshot = await api.nodes();
       known.current = new Set(snapshot.map((n) => n.id));
       qc.setQueryData(qk.nodes, snapshot);
-      setTok(await api.createJoinToken({ name: name.trim() || undefined }));
+      setTok(await api.createJoinToken({ name: name.trim() || undefined, traits: parsed }));
     } catch (e) {
       setError(e);
     } finally {
@@ -176,6 +185,15 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
             <Field label={t("노드 이름")} hint={t("비워 두면 서버의 hostname을 씁니다.")}>
               <Input mono autoFocus value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="hel-2" onKeyDown={(e) => e.key === "Enter" && generate()} />
             </Field>
+            <section className="space-y-3 border-t border-gray-200 pt-4">
+              <div>
+                <h4 className="text-sm font-semibold text-foreground">{t("어떤 기계인가요?")}</h4>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {t("집 PC나 사무실 서버도 리전이 될 수 있습니다. 클라우드 콘솔에는 없는 전기요금, 회선 같은 사정을 적어 두면 노드 목록에 함께 보입니다. 모두 선택이고 나중에 노드 메뉴 › 기계 정보에서 고칠 수 있습니다.")}
+                </p>
+              </div>
+              <NodeTraitsFields draft={traits} onChange={setTraits} />
+            </section>
             {error ? <ErrorBox error={error} /> : null}
           </>
         ) : (
@@ -221,6 +239,9 @@ export function AddNodeDialog({ open, onClose }: { open: boolean; onClose: () =>
                           memory: fmtBytes(joined.memory_bytes),
                           addr: <span className="font-mono text-xs">{addr(joined)}</span>,
                         })}
+                      </div>
+                      <div className="mt-1.5">
+                        <NodeTraitsBadges n={joined} />
                       </div>
                     </div>
                   </div>
@@ -815,6 +836,7 @@ function NodeRow({
   admin,
   onRename,
   onLabels,
+  onTraits,
   onIngress,
   onDrain,
   onRemove,
@@ -828,6 +850,7 @@ function NodeRow({
   admin: boolean;
   onRename: () => void;
   onLabels: () => void;
+  onTraits: () => void;
   onIngress: () => void;
   onDrain: () => void;
   onRemove: () => void;
@@ -940,6 +963,9 @@ function NodeRow({
                 <MenuItem icon={<Tag className="size-3.5" />} disabled={!admin} reason={NO_PERM} onSelect={() => (close(), onLabels())}>
                   {t("라벨 편집")}
                 </MenuItem>
+                <MenuItem icon={<House className="size-3.5" />} disabled={!admin} reason={NO_PERM} onSelect={() => (close(), onTraits())}>
+                  {t("기계 정보")}
+                </MenuItem>
                 <MenuItem icon={<Globe className="size-3.5" />} disabled={!admin} reason={NO_PERM} onSelect={() => (close(), onIngress())}>
                   {t("공개 진입 설정")}
                 </MenuItem>
@@ -1051,6 +1077,7 @@ function NodeRow({
       )}
 
       <div className="mt-4 space-y-2 sm:ml-12">
+        <NodeTraitsBadges n={n} />
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
           {labels.map(([k, v]) => (
             <span key={k} className="rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-gray-600">
@@ -1110,6 +1137,7 @@ export function NodesView({ placedCount, titled = true }: { placedCount?: Record
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState<AvenNode | null>(null);
   const [labeling, setLabeling] = useState<AvenNode | null>(null);
+  const [traiting, setTraiting] = useState<AvenNode | null>(null);
   const [ingressing, setIngressing] = useState<AvenNode | null>(null);
   const [draining, setDraining] = useState<AvenNode | null>(null);
   const [removing, setRemoving] = useState<AvenNode | null>(null);
@@ -1154,6 +1182,7 @@ export function NodesView({ placedCount, titled = true }: { placedCount?: Record
               admin={admin}
               onRename={() => setRenaming(n)}
               onLabels={() => setLabeling(n)}
+              onTraits={() => setTraiting(n)}
               onIngress={() => setIngressing(n)}
               onDrain={() => setDraining(n)}
               onRemove={() => setRemoving(n)}
@@ -1167,6 +1196,7 @@ export function NodesView({ placedCount, titled = true }: { placedCount?: Record
       <AddNodeDialog open={adding} onClose={() => setAdding(false)} />
       <RenameNode node={renaming} onClose={() => setRenaming(null)} />
       <LabelsNode node={labeling} onClose={() => setLabeling(null)} />
+      <NodeTraitsDialog node={traiting} onClose={() => setTraiting(null)} />
       <IngressNode node={ingressing} onClose={() => setIngressing(null)} />
       <DrainNodeDialog node={draining} placements={draining ? placements.data?.[draining.id] : undefined} onClose={() => setDraining(null)} />
       <RemoveNode node={removing} placed={removing ? placedOf(removing.id) : undefined} onClose={() => setRemoving(null)} onDrain={(n) => setDraining(n)} />

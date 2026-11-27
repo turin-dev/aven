@@ -54,7 +54,7 @@ func TestDecorateACMERelaySkipsNoRelayNode(t *testing.T) {
 	if err := f.st.SetNodeInfo(ctx, f.rid, store.NodeAddress{IPv4: &v4a}, store.NodeInfo{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.st.CreateJoinToken(ctx, "h-r2", "edge", time.Now().Add(time.Hour)); err != nil {
+	if err := f.st.CreateJoinToken(ctx, "h-r2", "edge", time.Now().Add(time.Hour), store.NodeTraits{}); err != nil {
 		t.Fatal(err)
 	}
 	n2, err := f.st.ConsumeJoinToken(ctx, "h-r2", "")

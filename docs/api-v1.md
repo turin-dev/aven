@@ -404,6 +404,7 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
   ingress_hostname: string;                                     // CNAME target for custom domains ("" = A/AAAA records)
   tcp_hostname: string;                                         // host shown for TCP proxies ("" = node address / AVEN_TCP_PROXY_DOMAIN)
   ipv6_pool: string;                                            // per-domain public IPv6 pool (CIDR, /64-/120; "" = domains share the node IPv6)
+  traits: NodeTraits;                                           // what the operator wrote about the machine (see "Node traits" below)
   ipv6_status?: { pool: string; supported: boolean | null; reason?: string; iface?: string;   // GET /nodes only; null without a pool
                   desired: number; present: number; foreign?: string[]; last_error?: string; checked_at?: string } | null;
   hyperv?: { vm_name: string; host_name: string; host_online: boolean; power_state: "running"|"off"|"paused"|"unknown";
@@ -411,7 +412,7 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
   last_seen_at: string; created_at: string };
 ```
 - `GET    /nodes` → `Node[]`
-- `POST   /nodes/join-tokens` `{name?, ttl_s?: number}` → `{ token: string; expires_at: string; command: string }`
+- `POST   /nodes/join-tokens` `{name?, ttl_s?: number, traits?: NodeTraits}` → `{ token: string; expires_at: string; command: string }`. `traits` is stored with the token and copied onto the node when it joins.
   The command is one line to run on the new server. Example: `curl -fsSL <AVEN_PUBLIC_URL>/install-agent.sh | sudo sh -s -- --server <url> --token <token>`.
   The token is single-use and expires after 1 hour by default.
 - `POST   /nodes/{nid}/hyperv/pair-token` `{vm_name}` → `{token, expires_at, command}`. Instance admin; audited as `hyperv.pair_token`. The 15-minute, single-use token pairs one remote Linux node with a Windows Hyper-V host. `command` downloads `GET /downloads/aven-hyperv-host.ps1` from this server (the script embedded in this build; `GET /downloads/aven-hyperv-host.ps1.sha256` is its SHA-256), compares `Get-FileHash` before running it, and does not fetch `releases/latest`.
@@ -423,7 +424,23 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
 - `POST   /hyperv/commands/{id}/result` `{ok, error?, power_state?}` (host credential) → `204`.
 - `GET    /downloads/aven-hyperv-host.ps1` and `GET /downloads/aven-hyperv-host.ps1.sha256` (no auth) → the host controller script bundled with this server, and its SHA-256.
 - `GET    /install-agent.sh` (no auth) → install script. It downloads the `aven-agent` binary from `GET /downloads/aven-agent-linux-{amd64,arm64}`, writes the compatible `keel-agent.service` unit and starts the agent.
-- `PATCH  /nodes/{nid}` `{name?, schedulable?, labels?, ingress_mode?, ingress_hostname?, tcp_hostname?, ipv6_pool?}` → `Node` (ingress fields: see "Networking" > "Node ingress"; `ipv6_pool`: "Per-domain IPv6")
+- `PATCH  /nodes/{nid}` `{name?, schedulable?, labels?, ingress_mode?, ingress_hostname?, tcp_hostname?, ipv6_pool?, traits?}` → `Node` (ingress fields: see "Networking" > "Node ingress"; `ipv6_pool`: "Per-domain IPv6"; `traits` replaces the whole object, `null` or absent leaves it alone)
+- **Node traits.** Facts about the machine that no cloud API reports, entered by the operator when adding a server (or later, including for the local node). Every field is optional; `0`, `false` and absent mean "unknown". They are informational today and do not change scheduling.
+  ```ts
+  type NodeTraits = {
+    site?: "datacenter" | "home" | "office" | "other";
+    power_price_per_kwh?: number;   // 0..1000000; requires power_currency
+    power_currency?: string;        // ISO 4217, three letters (KRW, EUR, USD)
+    ups?: boolean;                  // battery backup
+    connection?: "fiber" | "cable" | "dsl" | "mobile" | "satellite" | "datacenter" | "other";
+    downlink_mbps?: number; uplink_mbps?: number;   // 0..10000000
+    data_cap_gb?: number;           // monthly cap; 0 = unlimited or unknown
+    dynamic_ip?: boolean;           // the public IP can change
+    cgnat?: boolean;                // behind carrier-grade NAT (needs a Cloudflare tunnel for ingress)
+    note?: string;                  // up to 200 characters; returned only to instance admins
+  };
+  ```
+  Invalid values return `400`.
 - `DELETE /nodes/{nid}` → `204`. Returns 409 if services are still placed on it. With `?force=1` it removes the node anyway, and its instances become `offline`.
 - `GET    /nodes/{nid}/metrics?range=` → `{ points: { t; cpu_percent; memory_bytes; disk_free_bytes }[] }`
 - `ServiceInstance.node_id: ID` is the node the instance runs on. The default is the local node. Changing it applies on the next deploy, and the volumes must be moved or recreated (400 if attached volumes would be orphaned, unless `?move_volumes=1`).

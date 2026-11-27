@@ -71,12 +71,16 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
+	admin := s.instanceLevel(principalFrom(r)) >= lvAdmin
 	out := make([]nodeView, 0, len(nodes))
 	for i, n := range nodes {
 		if n.IsLocal {
 			nodes[i] = local
 		} else {
 			n.Status = s.nodeStatus(n)
+		}
+		if !admin {
+			nodes[i].Traits.Note = "" // 자유 메모는 집 위치 같은 사적인 내용일 수 있어 관리자에게만 보인다
 		}
 		view := nodeView{Node: nodes[i], Mesh: s.Deploy.MeshStatus(r.Context(), nodes[i]), IPv6Status: s.Deploy.IPv6Status(r.Context(), nodes[i].ID)}
 		if host, ok := hypervHosts[nodes[i].ID]; ok {
@@ -123,9 +127,17 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {
 		TCPHostname     *string `json:"tcp_hostname"`
 		// IPv6Pool은 도메인별 공개 IPv6 풀(CIDR, /64~/120)이다. 빈 문자열이나 null은 풀을 지운다(도메인은 노드 기본 IPv6를 같이 쓴다).
 		IPv6Pool *string `json:"ipv6_pool"`
+		// Traits는 기계의 사정을 통째로 바꾼다(빠진 필드는 지워진다). null이면 그대로 둔다.
+		Traits *store.NodeTraits `json:"traits"`
 	}
 	if !decode(w, r, &patch) {
 		return
+	}
+	if patch.Traits != nil {
+		if err := patch.Traits.Normalize(); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
 	}
 	if patch.Name != nil {
 		if !nameRe.MatchString(*patch.Name) {
@@ -258,6 +270,13 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {
 			applyLocalIngressEnv(&n.NodeIngress, s.localTCPProxyDomain())
 		}
 	}
+	if patch.Traits != nil {
+		if err := s.Store.SetNodeTraits(r.Context(), n.ID, *patch.Traits); err != nil {
+			s.storeErr(w, err)
+			return
+		}
+		n.Traits = *patch.Traits
+	}
 	if patch.Schedulable != nil && *patch.Schedulable && n.Draining {
 		if err := s.Store.SetNodeDraining(r.Context(), n.ID, false); err != nil {
 			s.storeErr(w, err)
@@ -308,8 +327,14 @@ func (s *Server) createJoinToken(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 		TTLS int    `json:"ttl_s"`
+		// Traits는 온보딩에서 적은 기계의 사정(집 PC, 전기요금, 회선)이다. 가입하는 노드에 옮겨진다.
+		Traits store.NodeTraits `json:"traits"`
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	if err := body.Traits.Normalize(); err != nil {
+		writeErr(w, 400, err.Error())
 		return
 	}
 	if body.Name == "" {
@@ -336,7 +361,7 @@ func (s *Server) createJoinToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	expires := time.Now().UTC().Add(time.Duration(body.TTLS) * time.Second)
-	if err := s.Store.CreateJoinToken(r.Context(), agentprotocol.Hash(token), body.Name, expires); err != nil {
+	if err := s.Store.CreateJoinToken(r.Context(), agentprotocol.Hash(token), body.Name, expires, body.Traits); err != nil {
 		s.storeErr(w, err)
 		return
 	}

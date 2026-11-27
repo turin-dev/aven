@@ -44,7 +44,7 @@ func tcpFixture(t *testing.T) (*Manager, *store.Store, func(name string, addr st
 	t.Cleanup(func() { st.Close() })
 	m := &Manager{Store: st, Cfg: Config{TCPPortMin: 20000, TCPPortMax: 20010, BaseDomain: "aven.example.com"}}
 	mkNode := func(name string, addr store.NodeAddress) *store.Node {
-		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour))
+		st.CreateJoinToken(ctx, "h-"+name, name, time.Now().Add(time.Hour), store.NodeTraits{})
 		n, err := st.ConsumeJoinToken(ctx, "h-"+name, "")
 		if err != nil {
 			t.Fatal(err)
