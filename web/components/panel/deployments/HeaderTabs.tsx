@@ -66,7 +66,7 @@ export function HeaderTabs<T extends string>({
       aria-orientation="horizontal"
       onKeyDown={onKeyDown}
       className={cx(
-        "header-tabs relative flex w-full items-center gap-3 overflow-x-auto overflow-y-hidden [scrollbar-width:none] md:min-h-[39px] md:gap-8 [&::-webkit-scrollbar]:hidden",
+        "header-tabs relative flex w-full items-center gap-3 overflow-x-auto overflow-y-hidden [scrollbar-width:none] max-md:[mask-image:linear-gradient(to_right,#000_82%,transparent)] md:min-h-[39px] md:gap-8 [&::-webkit-scrollbar]:hidden",
         className,
       )}
     >

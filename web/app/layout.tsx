@@ -17,6 +17,10 @@ export const viewport: Viewport = {
   themeColor: "#13111C",
   // Both themes are supported; ThemeScript picks one and sets color-scheme on <html> before first paint.
   colorScheme: "dark light",
+  // Draw under the notch / home indicator; the shell pads itself with env(safe-area-inset-*).
+  viewportFit: "cover",
+  // The on-screen keyboard shrinks the layout instead of covering inputs at the bottom of sheets.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -26,7 +30,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <ThemeScript />
       </head>
-      <body className="min-h-screen">
+      <body className="min-h-screen overscroll-none">
         <KeyboardShortcutProvider>
           <Providers>{children}</Providers>
         </KeyboardShortcutProvider>

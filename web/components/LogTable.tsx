@@ -16,7 +16,7 @@ import {
   type AnsiStyle,
   type Level,
 } from "@/lib/logs";
-import { cx } from "./ui";
+import { cx, useIsMobile } from "./ui";
 import { useKeyboardShortcuts } from "@/components/KeyboardShortcuts";
 import { t } from "@/lib/i18n";
 
@@ -154,6 +154,33 @@ function Body({ body, plain, terms }: { body: string; plain: string; terms: stri
   );
 }
 
+/** Phone layout: level bar, a small meta line (time · service · replica) and the message wrapped underneath. */
+const CompactRowView = memo(function CompactRowView({ r, i, cols, terms }: { r: Row; i: number; cols: Cols; terms: string[] }) {
+  const time = r.ts !== null ? fmtLocal(new Date(r.ts)).slice(-8) : "";
+  const meta = [cols.time && time, cols.service && r.service, cols.replica && r.replica].filter(Boolean);
+  return (
+    <div role="row" data-i={i} className={cx("flex gap-2.5 py-1.5 pl-3 pr-3 font-mono text-xs active:bg-gray-50", ROW_BG[r.level])}>
+      <span className={cx("w-[3px] shrink-0 self-stretch rounded-full", BAR[r.level])} aria-hidden />
+      <div role="cell" className="min-w-0 flex-1">
+        {meta.length > 0 && (
+          <div className={cx("mb-0.5 flex items-center gap-1.5 truncate font-sans text-[11px] tabular-nums", r.carried ? "text-gray-400" : "text-gray-500")}>
+            {meta.map((m, k) => (
+              <span key={k} className={cx("truncate", k === 1 && "font-medium text-neutral-secondary")}>
+                {k > 0 && <span className="mr-1.5 text-gray-300">·</span>}
+                {m}
+              </span>
+            ))}
+            {r.stream === "stderr" && <span className="text-danger/80">err</span>}
+          </div>
+        )}
+        <div className={cx("select-text whitespace-pre-wrap break-all text-[12.5px] leading-[18px]", TEXT[r.level])}>
+          <Body body={r.body} plain={r.plain} terms={terms} />
+        </div>
+      </div>
+    </div>
+  );
+});
+
 const RowView = memo(function RowView({ r, i, cols, wrap, terms }: { r: Row; i: number; cols: Cols; wrap: boolean; terms: string[] }) {
   const date = r.ts !== null ? fmtLocal(new Date(r.ts)) : "";
   return (
@@ -206,7 +233,7 @@ function gridCols(c: Cols, wrap = true) {
 export function LogToolbar({ children }: { children: ReactNode }) {
   return (
     <div className="flex w-full max-w-[100vw] flex-col gap-y-3.5 border-b border-b-neutral bg-secondaryBg pb-2">
-      <div className="flex items-stretch gap-3 px-6 pt-2">{children}</div>
+      <div className="flex flex-wrap items-stretch gap-2 px-3 pt-2 sm:flex-nowrap sm:gap-3 sm:px-6">{children}</div>
     </div>
   );
 }
@@ -368,7 +395,8 @@ export function LogTable({
   const [timePref, setTimePref] = usePref("aven.logs.time", true);
   const [level, setLevel] = useState<LevelFilter>("all");
   const [copied, setCopied] = useState(false);
-  const wrap = !tools || wrapPref;
+  const compact = useIsMobile();
+  const wrap = compact || !tools || wrapPref;
   const time = showTime && (!tools || timePref);
   const cols = useMemo(() => ({ time, service: !!showService, replica: !!showReplica }), [time, showService, showReplica]);
   const scroller = useRef<HTMLDivElement>(null);
@@ -435,21 +463,21 @@ export function LogTable({
   const heights = useRef(new Map<string, number>());
   const [hv, setHv] = useState(0);
   const [vp, setVp] = useState({ top: 0, h: 600, w: 800 });
-  const fixedW = (time ? TIME_W : BAR_W) + (showService ? 140 : 0) + (showReplica ? 110 : 0) + 24;
+  const fixedW = compact ? 40 : (time ? TIME_W : BAR_W) + (showService ? 140 : 0) + (showReplica ? 110 : 0) + 24;
   const offsets = useMemo(() => {
     const per = Math.max(10, Math.floor((vp.w - fixedW) / CHAR_W));
     const est = (r: Row) => {
       if (!wrap) return LINE_H + ROW_PAD;
       let n = 0;
       for (const part of r.plain.split("\n")) n += Math.max(1, Math.ceil(part.length / per));
-      return n * LINE_H + ROW_PAD;
+      return n * LINE_H + ROW_PAD + (compact ? 20 : 0);
     };
     const o = new Float64Array(shown.length + 1);
     const hs = heights.current;
     for (let i = 0; i < shown.length; i++) o[i + 1] = o[i] + (hs.get(heightKey(shown[i])) ?? est(shown[i]));
     return o;
     // hv re-runs this after new measurements land in the cache.
-  }, [shown, hv, wrap, vp.w, fixedW]);
+  }, [shown, hv, wrap, vp.w, fixedW, compact]);
   const total = offsets[shown.length];
   const viewTop = stick ? Math.max(0, total - vp.h) : vp.top;
   const first = shown.length ? rowAt(offsets, shown.length, viewTop - OVERSCAN) : 0;
@@ -498,7 +526,7 @@ export function LogTable({
   useEffect(() => {
     heights.current.clear();
     setHv((v) => v + 1);
-  }, [wrap, cols]);
+  }, [wrap, cols, compact]);
 
   const lastScroll = useRef({ top: 0, height: 0 });
   const onScroll = () => {
@@ -604,9 +632,24 @@ export function LogTable({
           </div>
         </div>
       )}
+      {compact && state && (
+        <div className="flex shrink-0 items-center gap-1.5 border-b border-b-neutral bg-secondaryBg px-3 py-1.5 text-xs text-neutral-secondary">
+          <span className={cx("size-1.5 rounded-full", STATE[state].cls)} aria-hidden />
+          <span role="status">{STATE[state].text}</span>
+          {(state === "error" || state === "done") && onReconnect && (
+            <button type="button" onClick={onReconnect} className="ml-1 flex items-center gap-1 rounded px-1 text-gray-600">
+              <RotateCw className="size-3" aria-hidden /> {t("다시 연결")}
+            </button>
+          )}
+          <span className="ml-auto tabular-nums text-gray-400">
+            {filtered ? `${shown.length.toLocaleString()} / ` : ""}
+            {t("{count}줄", { count: rows.length.toLocaleString() })}
+          </span>
+        </div>
+      )}
       {/* role="table" groups the header row and the log rows, so the row/cell roles have the parent ARIA requires. */}
       <div role="table" aria-label={t("로그")} className="flex min-h-0 flex-1 flex-col">
-      <div role="rowgroup" className="relative w-full shrink-0 bg-secondaryBg after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']">
+      <div role="rowgroup" className="relative hidden w-full shrink-0 bg-secondaryBg sm:block after:absolute after:inset-x-0 after:bottom-0 after:border-b after:border-b-neutral after:content-['']">
         <div role="row" className="grid w-full select-none text-left text-xs font-medium text-neutral-secondary" style={{ gridTemplateColumns: gridCols(cols) }}>
           {time ? (
             <div role="columnheader" className="relative flex items-center whitespace-nowrap bg-secondaryBg px-2 py-1.5 pl-6">
@@ -668,7 +711,11 @@ export function LogTable({
           <div style={{ paddingTop: offsets[first], paddingBottom: total - offsets[last] }}>
             <div ref={rowsBox}>
               {shown.slice(first, last).map((r, k) => (
-                <RowView key={r.n} r={r} i={first + k} cols={cols} wrap={wrap} terms={terms} />
+                compact ? (
+                  <CompactRowView key={r.n} r={r} i={first + k} cols={cols} terms={terms} />
+                ) : (
+                  <RowView key={r.n} r={r} i={first + k} cols={cols} wrap={wrap} terms={terms} />
+                )
               ))}
             </div>
           </div>

@@ -253,7 +253,7 @@ export function ServicePanel({
     { keys: "g s", label: t("설정 탭으로 이동"), group: t("서비스"), enabled: tabs.includes("settings"), onTrigger: () => onTab("settings") },
   ]);
   const header = svc && (
-    <div className="z-50 flex min-w-0 flex-col border-b !border-gray-100 pt-8 md:px-12 md:pt-12 md:!border-gray-200">
+    <div className="z-50 flex min-w-0 flex-col border-b !border-gray-100 pt-5 md:px-12 md:pt-12 md:!border-gray-200">
       <Header svc={svc} env={env} onClose={onClose} />
       <div className="mb-[-2px] px-5 md:px-0">
         <HeaderTabs
