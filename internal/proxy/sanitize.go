@@ -172,6 +172,10 @@ func sanitizeRoutes(routes []Route) []Route {
 			}
 			r.SetHeaders = set
 		}
+		if r.ACMERelay != nil && !ValidACMERelay(r.ACMERelay) {
+			slog.Warn("proxy: ACME relay ignored (invalid node or address)", "host", hosts[0])
+			r.ACMERelay = nil
+		}
 		out = append(out, r)
 	}
 	return out

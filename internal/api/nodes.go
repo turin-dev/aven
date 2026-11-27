@@ -154,6 +154,10 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if !deploy.ValidGeoLabel((*patch.Labels)["geo"]) {
+			writeErr(w, 400, `node label geo must be "<latitude>,<longitude>" (e.g. 37.57,126.98)`)
+			return
+		}
 		n.Labels = *patch.Labels
 	}
 	ingressSet := patch.IngressMode != nil || patch.IngressHostname != nil || patch.TCPHostname != nil
@@ -222,6 +226,9 @@ func (s *Server) patchNode(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.UpdateNode(r.Context(), n); err != nil {
 		s.storeErr(w, err)
 		return
+	}
+	if patch.Labels != nil || ingressSet {
+		s.Deploy.SyncCloudflareAsync() // pool 좌표(geo 라벨)와 터널 여부가 Cloudflare에 들어간다
 	}
 	if patch.IPv6Pool != nil {
 		raw := ""

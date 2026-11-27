@@ -527,6 +527,11 @@ func (s *Server) Handler() http.Handler {
 	h("GET /api/instance/notice", anyUser(), s.getInstanceNotice)
 	h("GET /api/owner", ownerOnly(), s.getOwnerOverview)
 	h("GET /api/owner/setup", ownerOnly(), s.getSetup)
+	h("GET /api/owner/cloudflare", ownerOnly(), s.getCloudflare)
+	h("PUT /api/owner/cloudflare", ownerOnly(), s.putCloudflare)
+	h("POST /api/owner/cloudflare/test", ownerOnly(), s.testCloudflare)
+	h("POST /api/owner/cloudflare/sync", ownerOnly(), s.syncCloudflareNow)
+	h("POST /api/owner/cloudflare/cleanup", ownerOnly(), s.cleanupCloudflare)
 	h("PUT /api/owner/setup", ownerOnly(), s.putSetup)
 	h("GET /api/owner/self-service", ownerOnly(), s.getSelfService)
 	if s.DisableSelfService {

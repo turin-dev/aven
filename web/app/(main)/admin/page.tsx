@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Suspense, useEffect, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AppWindow, Bell, Building2, Crown, DatabaseBackup, Gauge, KeyRound, LayoutDashboard, Rocket, MonitorSmartphone, ScrollText, Server, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, Users } from "lucide-react";
+import { AppWindow, Bell, Cloud, Building2, Crown, DatabaseBackup, Gauge, KeyRound, LayoutDashboard, Rocket, MonitorSmartphone, ScrollText, Server, ShieldCheck, SlidersHorizontal, Sparkles, UserCog, Users } from "lucide-react";
 import type { AdminCapID } from "@/lib/api";
 import { useMe } from "@/lib/queries";
 import { InstanceUsers, AuditLog } from "@/components/MembersSettings";
@@ -18,6 +18,7 @@ import { SystemStatus } from "@/components/SystemStatus";
 import { ResourceLimitsSettings } from "@/components/ResourceLimitsSettings";
 import { AdminOverview, AdminWorkspaces } from "@/components/AdminOverview";
 import { SetupChecklist } from "@/components/SetupChecklist";
+import { CloudflareSettings } from "@/components/CloudflareSettings";
 import { OwnerAccess, OwnerBackups, OwnerControl, OwnerSessions } from "@/components/OwnerSettings";
 import { Card, ErrorBox, PageBody, PageShell, SideNavLayout, Spinner } from "@/components/ui";
 import { t } from "@/lib/i18n";
@@ -42,6 +43,7 @@ const NAV: NavItem[] = [
   { id: "owner-access", label: t("Owner · 권한"), icon: <UserCog />, owner: true },
   { id: "owner-sessions", label: t("Owner · 세션·토큰"), icon: <MonitorSmartphone />, owner: true },
   { id: "owner-backups", label: t("Owner · DB 백업"), icon: <DatabaseBackup />, owner: true },
+  { id: "owner-cloudflare", label: "Owner · Cloudflare", icon: <Cloud />, owner: true },
 ];
 
 function AdminInner() {
@@ -101,6 +103,7 @@ function AdminInner() {
           : section === "owner-access" ? <OwnerAccess />
           : section === "owner-sessions" ? <OwnerSessions />
           : section === "owner-backups" ? <OwnerBackups />
+          : section === "owner-cloudflare" ? <CloudflareSettings />
           : <SystemStatus />}
       </SideNavLayout>
     </PageShell>
