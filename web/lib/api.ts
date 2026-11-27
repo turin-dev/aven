@@ -1314,6 +1314,41 @@ export type AvenNode = {
   /** v1.5 (GET /nodes only) */
   mesh?: MeshStatus;
 };
+/** GET /api/owner/cloudflare: Cloudflare 연동(docs/self-hosting.md "Cloudflare"). 토큰은 돌려주지 않는다. */
+export type CloudflareMode = "auto" | "load_balancer" | "dns";
+export type CloudflareZone = { id: string; name: string; account: string; plan: string; records: number; load_balancers: number };
+export type CloudflareHost = {
+  host: string;
+  zone: string;
+  mode: "load_balancer" | "dns" | "skipped";
+  nodes: ID[];
+  reason?: "conflict" | "no_public_node";
+  detail?: string;
+  error?: string;
+};
+export type CloudflarePool = { node_id: ID; name: string; id: string; latitude: number | null; longitude: number | null };
+export type CloudflareStatus = {
+  enabled: boolean;
+  syncing: boolean;
+  last_sync: string | null;
+  error?: string;
+  load_balancing: "" | "available" | "unavailable";
+  load_balancing_error?: string;
+  changes: number;
+  zones: CloudflareZone[];
+  hosts: CloudflareHost[];
+  pools: CloudflarePool[];
+};
+export type CloudflareSettings = {
+  enabled: boolean;
+  has_token: boolean;
+  token_hint: string;
+  mode: CloudflareMode;
+  proxied: boolean;
+  zones: string[];
+  status: CloudflareStatus;
+};
+export type CloudflareTest = { ok: boolean; error?: string; zones: CloudflareZone[]; load_balancing: "available" | "unavailable"; load_balancing_error?: string };
 export type NodeIngressMode = "direct" | "cloudflare_tunnel";
 export type NodeIngressInput = { ingress_mode?: NodeIngressMode | ""; ingress_hostname?: string; tcp_hostname?: string; ipv6_pool?: string };
 export type NodeIPv6Status = {
@@ -1803,6 +1838,12 @@ export const api = {
   ownerRevokeTokens: (input: { user_id: ID } | { scope: "non_owners" }) => request<{ revoked?: number }>("POST", "/owner/tokens/revoke", input),
   transferOwnership: (input: { user_id: ID; stay_owner: boolean }) => request<{ owner: ID; still_owner: boolean }>("POST", "/owner/transfer", input),
   lockdown: (message: string) => request<{ sessions_revoked: number; tokens_revoked: number }>("POST", "/owner/lockdown", { message }),
+  cloudflare: () => request<CloudflareSettings>("GET", "/owner/cloudflare"),
+  setCloudflare: (input: { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; zones?: string[] }) =>
+    request<CloudflareSettings>("PUT", "/owner/cloudflare", input),
+  testCloudflare: (token?: string) => request<CloudflareTest>("POST", "/owner/cloudflare/test", token ? { token } : {}),
+  syncCloudflare: () => request<CloudflareSettings>("POST", "/owner/cloudflare/sync"),
+  cleanupCloudflare: () => request<{ removed: number }>("POST", "/owner/cloudflare/cleanup"),
   avenBackups: () => request<AvenBackup[]>("GET", "/owner/backups"),
   createAvenBackup: () => request<AvenBackup>("POST", "/owner/backups"),
   deleteAvenBackup: (name: string) => request<void>("DELETE", `/owner/backups/${enc(name)}`),

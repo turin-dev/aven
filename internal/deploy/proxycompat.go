@@ -21,6 +21,31 @@ const noDomainCheckRetry = 10 * time.Minute
 type proxyCompat struct {
 	mu      sync.Mutex
 	noCheck map[string]time.Time // nodeID → 도메인 확인 필드를 거부한 시각
+	noRelay map[string]time.Time // nodeID → ACMERelay 필드를 거부한 시각
+}
+
+// isACMERelayFieldRefused는 옛 agent가 ACMERelay 필드를 몰라 거부한 오류인지다. 그런 노드는 자기 ACME 확인에만 답한다(예전 동작).
+func isACMERelayFieldRefused(err error) bool {
+	return err != nil && strings.Contains(err.Error(), `unknown field "ACMERelay"`)
+}
+
+func withoutACMERelay(routes []proxy.Route) []proxy.Route {
+	out := make([]proxy.Route, len(routes))
+	for i, r := range routes {
+		r.ACMERelay = nil
+		out[i] = r
+	}
+	return out
+}
+
+// recent는 m[id]가 noDomainCheckRetry 안에 기록됐는지다(지났으면 지운다). pc.mu를 잡고 부른다.
+func recent(m map[string]time.Time, id string) bool {
+	at, ok := m[id]
+	if ok && time.Since(at) >= noDomainCheckRetry {
+		delete(m, id)
+		return false
+	}
+	return ok
 }
 
 // isDomainCheckFieldRefused는 옛 agent가 도메인 확인 필드를 몰라 거부한 오류인지다.
@@ -42,34 +67,49 @@ func withoutDomainCheck(routes []proxy.Route) []proxy.Route {
 	return out
 }
 
-// applyRemoteProxy는 원격 노드에 라우트를 보낸다. 옛 agent가 도메인 확인 필드를 거부하면 빼고 다시 보낸다.
+// applyRemoteProxy는 원격 노드에 라우트를 보낸다. 옛 agent가 모르는 필드(도메인 확인, ACME relay)를 거부하면 그 필드를 빼고 다시 보낸다.
 func (m *Manager) applyRemoteProxy(ctx context.Context, nodeID string, routes []proxy.Route) error {
 	pc := &m.proxyCompat
-	pc.mu.Lock()
-	at, skip := pc.noCheck[nodeID]
-	if skip && time.Since(at) >= noDomainCheckRetry {
-		delete(pc.noCheck, nodeID)
-		skip = false
-	}
-	pc.mu.Unlock()
 	drv := &remoteDriver{hub: m.Agents, node: nodeID}
-	if skip {
-		return drv.applyProxy(ctx, withoutDomainCheck(routes))
+	for attempt := 0; ; attempt++ {
+		pc.mu.Lock()
+		skipCheck, skipRelay := recent(pc.noCheck, nodeID), recent(pc.noRelay, nodeID)
+		pc.mu.Unlock()
+		send := routes
+		if skipCheck {
+			send = withoutDomainCheck(send)
+		}
+		if skipRelay {
+			send = withoutACMERelay(send)
+		}
+		err := drv.applyProxy(ctx, send)
+		check, relay := isDomainCheckFieldRefused(err), isACMERelayFieldRefused(err)
+		if (!check || skipCheck) && (!relay || skipRelay) || attempt >= 2 {
+			return err
+		}
+		pc.mu.Lock()
+		if check {
+			if pc.noCheck == nil {
+				pc.noCheck = map[string]time.Time{}
+			}
+			pc.noCheck[nodeID] = time.Now()
+		}
+		if relay {
+			if pc.noRelay == nil {
+				pc.noRelay = map[string]time.Time{}
+			}
+			pc.noRelay[nodeID] = time.Now()
+		}
+		pc.mu.Unlock()
+		if m.Log != nil {
+			if check {
+				m.log().Info("node agent does not support domain check routes; sending routes without them (DNS/TXT verification only)", "node", nodeID)
+			}
+			if relay {
+				m.log().Info("node agent does not support ACME challenge relay; upgrade it so hosts served by several nodes get certificates on every node", "node", nodeID)
+			}
+		}
 	}
-	err := drv.applyProxy(ctx, routes)
-	if !isDomainCheckFieldRefused(err) {
-		return err
-	}
-	pc.mu.Lock()
-	if pc.noCheck == nil {
-		pc.noCheck = map[string]time.Time{}
-	}
-	pc.noCheck[nodeID] = time.Now()
-	pc.mu.Unlock()
-	if m.Log != nil {
-		m.log().Info("node agent does not support domain check routes; sending routes without them (DNS/TXT verification only)", "node", nodeID)
-	}
-	return drv.applyProxy(ctx, withoutDomainCheck(routes))
 }
 
 // DomainCheckSupported는 원격 노드가 도메인 확인 라우트를 받는지다(마지막으로 거부한 뒤 noDomainCheckRetry 안이면 false).

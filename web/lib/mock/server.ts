@@ -64,7 +64,7 @@ import type {
 } from "../api";
 import { SEALED_VALUE } from "../api";
 import { parseRaw, renderRaw } from "../dotenv";
-import type { AdminCapID, AnnouncementLevel, CanvasGroup, AvenBackup, UsageLimit, UsageSuspension } from "../api";
+import type { AdminCapID, AnnouncementLevel, CanvasGroup, CloudflareHost, CloudflareMode, CloudflareSettings as CloudflareSettingsT, CloudflareStatus, CloudflareTest, AvenBackup, UsageLimit, UsageSuspension } from "../api";
 import type { Dashboard, Widget } from "../layouts";
 import type { BackupDestination, BackupDestinationInput } from "../api";
 import type { PostgresCheck, PostgresPooling, PostgresPoolingInput, PostgresUpgrade } from "../postgres";
@@ -4757,4 +4757,68 @@ route("POST", "/projects/{pid}/environments/{eid}/compose/preview", (_, r) => {
     node_id: "node_local",
     ok: true,
   };
+});
+
+// ── Cloudflare (owner) ───────────────────────────────────────────────
+const CF: { enabled: boolean; token: string; mode: CloudflareMode; proxied: boolean; zones: string[]; last: string | null } = {
+  enabled: false, token: "", mode: "auto", proxied: true, zones: [], last: null,
+};
+const CF_TOKEN_OK = /^[A-Za-z0-9_-]{20,}$/;
+function cfStatus(): CloudflareStatus {
+  if (!CF.enabled) return { enabled: false, syncing: false, last_sync: null, load_balancing: "", changes: 0, zones: [], hosts: [], pools: [] };
+  const lbOK = !CF.token.startsWith("free");
+  const pub = (id: string) => { const n = NODES.find((x) => x.id === id); return !!n && !!(n.address.ipv4 || n.address.ipv6); };
+  const plan: [string, string[]][] = [["web.example.com", ["node_database", "node_local"]], ["api.example.com", ["node_local"]], ["*.pr.example.com", ["node_local"]], ["docs.example.com", ["node_local"]], ["files.example.com", ["node_remote"]]];
+  const hosts: CloudflareHost[] = plan.map(([host, ids]) => {
+    const nodes = ids.filter(pub);
+    if (!nodes.length) return { host, zone: "example.com", mode: "skipped", nodes, reason: "no_public_node" };
+    if (host === "docs.example.com") return { host, zone: "example.com", mode: "skipped", nodes, reason: "conflict", detail: "CNAME docs.example.net" };
+    const lb = nodes.length > 1 && !host.startsWith("*.") && CF.mode !== "dns";
+    if (lb && !lbOK && CF.mode === "load_balancer") return { host, zone: "example.com", mode: "skipped", nodes, error: "Load Balancing is not available: HTTP 403" };
+    return { host, zone: "example.com", mode: lb && lbOK ? "load_balancer" : "dns", nodes };
+  });
+  const lbHosts = hosts.filter((h) => h.mode === "load_balancer");
+  const poolNodes = [...new Set(lbHosts.flatMap((h) => h.nodes))];
+  const geo = (id: string) => { const g = NODES.find((n) => n.id === id)?.labels.geo?.split(",").map(Number); return g && g.length === 2 && g.every(Number.isFinite) ? g : null; };
+  return {
+    enabled: true, syncing: false, last_sync: CF.last ?? iso(now() - 40_000), changes: 0,
+    load_balancing: lbOK ? "available" : "unavailable", ...(lbOK ? {} : { load_balancing_error: "cloudflare: GET /accounts/acc1/load_balancers/pools: HTTP 403: Load Balancing is not enabled (10000)" }),
+    zones: [{ id: "z1", name: "example.com", account: "Acme", plan: lbOK ? "Pro Website" : "Free Website", records: hosts.filter((h) => h.mode === "dns").length * 2, load_balancers: lbHosts.length }],
+    hosts,
+    pools: poolNodes.map((id) => { const g = geo(id); return { node_id: id, name: `aven-1a2b3c4d-${id}`, id: "pool_" + id, latitude: g ? g[0] : null, longitude: g ? g[1] : null }; }),
+  };
+}
+function cfView(): CloudflareSettingsT {
+  return { enabled: CF.enabled, has_token: !!CF.token, token_hint: CF.token ? "…" + CF.token.slice(-4) : "", mode: CF.mode, proxied: CF.proxied, zones: CF.zones, status: cfStatus() };
+}
+route("GET", "/owner/cloudflare", () => { requireOwner(); return cfView(); });
+route("PUT", "/owner/cloudflare", (_p, r) => {
+  requireOwner();
+  const b = (r.body ?? {}) as { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; zones?: string[] };
+  if (b.token !== undefined) {
+    if (b.token && !CF_TOKEN_OK.test(b.token)) throw new HttpError(400, "Cloudflare rejected the token: cloudflare: GET /user/tokens/verify: HTTP 401: Invalid API Token (1000)");
+    CF.token = b.token;
+  }
+  if (b.mode !== undefined) CF.mode = b.mode;
+  if (b.proxied !== undefined) CF.proxied = b.proxied;
+  if (b.zones !== undefined) CF.zones = b.zones.map((z) => z.toLowerCase().replace(/\.$/, ""));
+  if (b.enabled !== undefined) CF.enabled = b.enabled;
+  if (CF.enabled && !CF.token) throw new HttpError(400, "save an API token before turning the integration on");
+  CF.last = iso(now());
+  return cfView();
+});
+route("POST", "/owner/cloudflare/test", (_p, r): CloudflareTest => {
+  requireOwner();
+  const tok = ((r.body ?? {}) as { token?: string }).token || CF.token;
+  if (!tok) return { ok: false, error: "no API token", zones: [], load_balancing: "unavailable" };
+  if (!CF_TOKEN_OK.test(tok)) return { ok: false, error: "cloudflare: GET /user/tokens/verify: HTTP 401: Invalid API Token (1000)", zones: [], load_balancing: "unavailable" };
+  const lb = !tok.startsWith("free");
+  return { ok: true, zones: [{ id: "z1", name: "example.com", account: "Acme", plan: lb ? "Pro Website" : "Free Website", records: 0, load_balancers: 0 }],
+    load_balancing: lb ? "available" : "unavailable", ...(lb ? {} : { load_balancing_error: "Load Balancing is not available for this account or token (subscription or Load Balancing permissions missing)" }) };
+});
+route("POST", "/owner/cloudflare/sync", () => { requireOwner(); CF.last = iso(now()); return cfView(); });
+route("POST", "/owner/cloudflare/cleanup", () => {
+  requireOwner();
+  if (CF.enabled) throw new HttpError(409, "turn the integration off first; the next sync would create everything again");
+  return { removed: 7 };
 });

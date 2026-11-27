@@ -307,6 +307,19 @@ Rolling back an upgrade, without uninstalling, is [Roll an upgrade back](#8-back
 
 <a id="troubleshooting"></a>
 
+## 10. Cloudflare (optional)
+
+If your domains are on Cloudflare, Aven can keep their DNS pointed at the nodes that run each service. Open *Admin → Owner · Cloudflare*, paste an API token, press **Test connection**, save it and turn the integration on.
+
+- **Token**: create it in Cloudflare under *My Profile → API Tokens* with *Zone · DNS · Edit*; for Load Balancing also *Zone · Load Balancers · Edit* and *Account · Load Balancing: Monitors and Pools · Edit*. The token is stored encrypted with the server's master key and is never shown again.
+- **What is managed**: every service domain inside a connected zone (all zones the token sees, or the list you enter). Hosts served by one node get A/AAAA records for that node. Hosts whose replicas run on several nodes get a Cloudflare load balancer with one pool per node and a TCP 443 health monitor; with every pool's location set it uses proximity steering (nearest node), otherwise dynamic latency. Without a Load Balancing subscription (method *Auto*) those hosts get A/AAAA records for every serving node instead (round-robin). Wildcards always get records. Disconnected nodes are taken out of records within about a minute; the load balancer's monitor does the same for pools.
+- **Node location**: the node label `geo=<latitude>,<longitude>` (for example `geo=37.57,126.98`), set in *Admin → 서버 노드 → 라벨*. It becomes the pool's coordinates.
+- **Proxy**: on by default (orange cloud). Nodes still get their own Let's Encrypt certificates. Off means DNS only, with a TTL of 60 s for records and 30 s for load balancers.
+- **Safety**: Aven only changes records, load balancers, pools and monitors it created (comment or description `aven:managed <id>`). If a name already has an A, AAAA or CNAME record or load balancer that Aven did not create, the host is skipped and shown as a conflict. Cloudflare tunnel nodes and nodes without a public address are never added.
+- **Turning it off** stops syncing and leaves everything in Cloudflare as it is. *Delete what Aven created in Cloudflare* removes Aven's records, load balancers, pools and monitors.
+
+Hosts served by several nodes also need port 80 open between the nodes: each node passes Let's Encrypt HTTP-01 challenges it did not start to the next node that serves the host, so every node can get its certificate.
+
 ## Troubleshooting
 
 - **Port 80 or 443 is in use.** The installer prints `Port 80 is in use` or `Port 443 is in use` (or both) and continues. `aven-server` then exits. `journalctl -u aven-server` shows `start the proxy:` and `ports AVEN_HTTP_PORT/AVEN_HTTPS_PORT, default 80/443, must be free`. `ss -Htlpn 'sport = :80'` and the same for 443 show the listener. Free the ports, or set `AVEN_HTTP_PORT` and `AVEN_HTTPS_PORT` to a free pair and `AVEN_PROXY_BIND=127.0.0.1` when another proxy on the host owns 80/443. If that other proxy terminates TLS, set `AVEN_TLS=off` and forward to the ports you chose. Restart `aven-server`.

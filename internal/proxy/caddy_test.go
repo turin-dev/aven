@@ -726,3 +726,33 @@ func TestUnverifiedHostsUseOnDemandPolicy(t *testing.T) {
 		t.Error("ask server without on-demand hosts")
 	}
 }
+
+func TestValidACMERelay(t *testing.T) {
+	ok := &ACMERelay{Self: "node_local", Next: "nod_abc234", NextAddrs: []string{"203.0.113.2:80", "[2001:db8::2]:80"}}
+	if !ValidACMERelay(ok) {
+		t.Fatal("valid relay rejected")
+	}
+	for name, r := range map[string]*ACMERelay{
+		"nil":       nil,
+		"same":      {Self: "nod_a1", Next: "nod_a1", NextAddrs: []string{"203.0.113.2:80"}},
+		"bad id":    {Self: "Nod-A", Next: "nod_b1", NextAddrs: []string{"203.0.113.2:80"}},
+		"no addr":   {Self: "nod_a1", Next: "nod_b1"},
+		"port":      {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"203.0.113.2:2019"}},
+		"private":   {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"10.0.0.2:80"}},
+		"loopback":  {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"127.0.0.1:80"}},
+		"ula":       {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"[fd00::1]:80"}},
+		"hostname":  {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"keel-proxy-admin:80"}},
+		"too many":  {Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"203.0.113.2:80", "203.0.113.3:80", "203.0.113.4:80"}},
+		"injection": {Self: "nod_a1,x", Next: "nod_b1", NextAddrs: []string{"203.0.113.2:80"}},
+	} {
+		if ValidACMERelay(r) {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// 잘못된 relay는 sanitize가 버린다(라우트는 남는다)
+	c := New(Config{TLS: TLSAuto})
+	raw, err := c.Build([]Route{{Hosts: []string{"a.example.com"}, Upstreams: []string{"keel-a-1:80"}, ACMERelay: &ACMERelay{Self: "nod_a1", Next: "nod_b1", NextAddrs: []string{"10.0.0.2:80"}}}})
+	if err != nil || strings.Contains(string(raw), "acme-challenge") || strings.Contains(string(raw), "tls-alpn") || !strings.Contains(string(raw), "a.example.com") {
+		t.Fatalf("invalid relay not dropped: %v %s", err, raw)
+	}
+}

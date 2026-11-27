@@ -181,6 +181,9 @@ type Route struct {
 	// Unverified면 아직 소유가 확인되지 않은 신규 도메인이다. 자동 TLS 호스트는 미리 인증서를 받지 않고 on-demand 정책에 두며,
 	// TLS ask(TLSAllowed)는 이 호스트(와일드카드면 그 하위 이름)를 허가하지 않는다. 확인되면 서버가 이 값 없이 다시 보낸다.
 	Unverified bool `json:",omitempty"`
+	// ACMERelay가 있으면 이 호스트를 다른 노드도 서비스한다. 이 노드가 시작하지 않은 ACME HTTP-01 확인 요청을 다음 노드로 넘기고,
+	// 이 호스트의 ACME 정책에서는 TLS-ALPN-01을 끈다(acmerelay.go). omitempty: 옛 agent는 모르는 필드를 거부한다(서버가 빼고 다시 보낸다).
+	ACMERelay *ACMERelay `json:",omitempty"`
 }
 
 // DomainCheckPath는 도메인 소유 확인 경로다(netcheck.CheckPath와 같다).
@@ -455,6 +458,7 @@ type hostCfg struct {
 	checkToken string // Route.CheckToken
 	unverified bool   // Route.Unverified
 	wakeDir    string // 비면 WakeDir. 예전 proxy는 /run/keel
+	acmeRelay  *ACMERelay
 }
 
 // normPath는 경로 규칙을 정규화한다. "", "/", "/*"는 catch-all("")이다.
@@ -671,6 +675,9 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 			if h.checkToken == "" {
 				h.checkToken = r.CheckToken
 			}
+			if h.acmeRelay == nil && r.ACMERelay != nil {
+				h.acmeRelay = r.ACMERelay
+			}
 			if h.setHeaders == nil && len(r.SetHeaders) > 0 {
 				h.setHeaders = r.SetHeaders
 			}
@@ -709,6 +716,8 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	})
 	var tlsRoutes, plainRoutes []map[string]any
 	var acmeHosts, internalHosts, onDemandHosts []string
+	var relayRoutes []map[string]any
+	relayHost := map[string]bool{} // ACME relay가 있는 호스트: 정책에서 TLS-ALPN-01을 끈다
 	var originRoutes []map[string]any
 	// 와일드카드와 TLS 모드가 다른 구체 호스트: 구체 호스트의 라우트가 없는 쪽 서버에서는 와일드카드가 그 이름을 잡아
 	// 다른 서비스로 보낸다. tls=off 호스트의 https 요청은 404로 막고, TLS 호스트의 http 요청은 https로 보낸다
@@ -753,6 +762,10 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 			internalHosts = append(internalHosts, n)
 		default:
 			tlsRoutes = append(tlsRoutes, rt)
+			if h.acmeRelay != nil {
+				relayHost[n] = true
+				relayRoutes = append(relayRoutes, acmeRelayRoutes(n, h.acmeRelay)...)
+			}
 			if IsWildcard(n) || h.unverified {
 				// 와일드카드 인증서는 DNS challenge가 필요하다. 대신 하위 이름마다 첫 TLS handshake 때 발급한다(on-demand, ask로 허가).
 				// 소유가 확인되지 않은 신규 호스트(Unverified)도 미리 받지 않는다: ask가 확인된 뒤에만 허가한다.
@@ -772,6 +785,8 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	}
 	// 어떤 라우트에도 맞지 않는 호스트(중지/삭제된 서비스 등)는 Caddy 기본값인 빈 200 대신 404를 준다.
 	// :80 서버는 TLS 호스트가 없을 때만 붙인다. 있으면 Caddy가 뒤에 덧붙이는 http→https 리다이렉트를 가리게 된다.
+	// ACME relay는 :80 서버에서 호스트 라우트(tls=off 와일드카드 등)보다 먼저 온다. Caddy가 자기 challenge는 라우트보다 먼저 답한다.
+	plainRoutes = append(relayRoutes, plainRoutes...)
 	if len(c.cfg.MetricsHosts) > 0 {
 		plainRoutes = append([]map[string]any{{
 			"match": []map[string]any{{"host": c.cfg.MetricsHosts, "path": []string{"/metrics"},
@@ -813,12 +828,26 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 	}
 	apps := map[string]any{}
 	var policies []map[string]any
-	acme := func() map[string]any {
+	acme := func(httpOnly bool) map[string]any {
 		issuer := map[string]any{"module": "acme"}
 		if c.cfg.ACMEEmail != "" {
 			issuer["email"] = c.cfg.ACMEEmail
 		}
+		if httpOnly {
+			// TLS-ALPN-01 확인은 :443에서 이 노드만 답할 수 있다(다른 노드로 넘기지 못한다). HTTP-01만 쓴다.
+			issuer["challenges"] = map[string]any{"tls-alpn": map[string]any{"disabled": true}}
+		}
 		return issuer
+	}
+	split := func(hosts []string) (plain, relayed []string) {
+		for _, h := range hosts {
+			if relayHost[h] {
+				relayed = append(relayed, h)
+			} else {
+				plain = append(plain, h)
+			}
+		}
+		return plain, relayed
 	}
 	// Caddy는 이름에 맞는 첫 automation policy를 쓴다. 구체 호스트 policy가 와일드카드 policy보다
 	// 먼저 와야 *.example.com(auto)과 a.example.com(internal)이 함께 있을 때 a가 ACME로 새지 않는다.
@@ -830,14 +859,22 @@ func (c *Caddy) Build(routes []Route) ([]byte, error) {
 			internalExact = append(internalExact, n)
 		}
 	}
-	if len(acmeHosts) > 0 {
-		policies = append(policies, map[string]any{"subjects": acmeHosts, "issuers": []any{acme()}})
+	acmePlain, acmeRelayed := split(acmeHosts)
+	if len(acmePlain) > 0 {
+		policies = append(policies, map[string]any{"subjects": acmePlain, "issuers": []any{acme(false)}})
+	}
+	if len(acmeRelayed) > 0 {
+		policies = append(policies, map[string]any{"subjects": acmeRelayed, "issuers": []any{acme(true)}})
 	}
 	if len(internalExact) > 0 {
 		policies = append(policies, map[string]any{"subjects": internalExact, "issuers": []any{map[string]any{"module": "internal"}}})
 	}
-	if len(onDemandHosts) > 0 {
-		policies = append(policies, map[string]any{"subjects": onDemandHosts, "issuers": []any{acme()}, "on_demand": true})
+	odPlain, odRelayed := split(onDemandHosts)
+	if len(odPlain) > 0 {
+		policies = append(policies, map[string]any{"subjects": odPlain, "issuers": []any{acme(false)}, "on_demand": true})
+	}
+	if len(odRelayed) > 0 {
+		policies = append(policies, map[string]any{"subjects": odRelayed, "issuers": []any{acme(true)}, "on_demand": true})
 	}
 	if len(internalWild) > 0 {
 		policies = append(policies, map[string]any{"subjects": internalWild, "issuers": []any{map[string]any{"module": "internal"}}})

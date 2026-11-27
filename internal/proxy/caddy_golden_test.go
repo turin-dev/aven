@@ -89,6 +89,18 @@ func tunnelRoutes() []Route {
 	return append(rs, p)
 }
 
+// multiNodeRoutes는 replica가 다른 노드에도 있는 호스트(ACME relay)와 이 노드에만 있는 호스트가 섞인 원격 노드다.
+func multiNodeRoutes() []Route {
+	relay := &ACMERelay{Self: "nod_seoul", Next: "nod_tokyo", NextAddrs: []string{"198.51.100.3:80", "[2001:db8::3]:80"}}
+	return []Route{
+		{Hosts: []string{"web.apps.example.com"}, Upstreams: []string{"keel-web-aaaa1111-2:3000"}, ACMERelay: relay},
+		{Hosts: []string{"web.apps.example.com"}, Path: "/api/*", Upstreams: []string{"keel-api-bbbb2222-1:8080"}, ACMERelay: relay},
+		{Hosts: []string{"*.pr.apps.example.com"}, Upstreams: []string{"keel-pr-cccc3333-1:3000"}, ACMERelay: relay},
+		{Hosts: []string{"solo.apps.example.com"}, Upstreams: []string{"keel-solo-dddd4444-1:3000"}},
+		{Hosts: []string{"intra.apps.example.com"}, Upstreams: []string{"keel-intra-eeee5555-1:3000"}, TLS: TLSInternal, ACMERelay: relay},
+	}
+}
+
 // goldenToken은 가짜 도메인 확인 토큰이다(운영 토큰은 마스터 키 HMAC이라 넣지 않는다).
 func goldenToken(host string) string {
 	sum := sha256.Sum256([]byte("golden:" + host))
@@ -115,6 +127,7 @@ func TestCaddyGolden(t *testing.T) {
 	}{
 		{"main", Config{TLS: TLSAuto, MetricsHosts: []string{"100.64.0.3"}}, true, withCheckTokens(mainRoutes())},
 		{"tunnel", Config{TLS: TLSAuto, MetricsHosts: []string{"100.64.0.1"}}, true, withCheckTokens(tunnelRoutes())},
+		{"multinode", Config{TLS: TLSAuto}, false, withCheckTokens(multiNodeRoutes())},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
