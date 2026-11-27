@@ -1,6 +1,10 @@
 package api
 
 import (
+	"bytes"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -10,6 +14,43 @@ import (
 	"github.com/turin-dev/aven/internal/agentprotocol"
 	"github.com/turin-dev/aven/internal/store"
 )
+
+// hyperVHostScript is the host controller bundled with this server build.
+// The repo-root aven-hyperv-host.ps1 is the release copy and must stay identical.
+//
+//go:embed aven-hyperv-host.ps1
+var hyperVHostScript []byte
+
+const hyperVHostScriptName = "aven-hyperv-host.ps1"
+
+func hyperVHostScriptSHA256() string {
+	sum := sha256.Sum256(hyperVHostScript)
+	return hex.EncodeToString(sum[:])
+}
+
+func hyperVConnectCommand(publicURL, nodeID, token, vmName string) string {
+	server := strings.ReplaceAll(strings.TrimRight(publicURL, "/"), "'", "''")
+	vm := strings.ReplaceAll(vmName, "'", "''")
+	return fmt.Sprintf("$p='.\\aven-hyperv-host.ps1'; Invoke-WebRequest '%s/downloads/aven-hyperv-host.ps1' -OutFile $p -UseBasicParsing -ErrorAction Stop; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash -ne '%s') { Remove-Item -Force -LiteralPath $p; throw 'aven-hyperv-host.ps1 failed its SHA-256 check' }; powershell -ExecutionPolicy Bypass -File $p -Server '%s' -NodeId '%s' -Token '%s' -VmName '%s'",
+		server, strings.ToUpper(hyperVHostScriptSHA256()), server, nodeID, token, vm)
+}
+
+func (s *Server) serveHyperVHostScript(w http.ResponseWriter, r *http.Request, checksum bool) {
+	sum := hyperVHostScriptSHA256()
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if s.Version != "" {
+		w.Header().Set("X-Aven-Version", s.Version)
+	}
+	if checksum {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintf(w, "%s  %s\n", sum, hyperVHostScriptName)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="aven-hyperv-host.ps1"`)
+	http.ServeContent(w, r, hyperVHostScriptName, time.Time{}, bytes.NewReader(hyperVHostScript))
+}
 
 var hyperVNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 
@@ -53,9 +94,8 @@ func (s *Server) createHyperVPairToken(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
-	server := strings.ReplaceAll(strings.TrimRight(s.PublicURL, "/"), "'", "''")
-	command := fmt.Sprintf("Invoke-WebRequest https://github.com/turin-dev/aven/releases/latest/download/aven-hyperv-host.ps1 -OutFile .\\aven-hyperv-host.ps1 -UseBasicParsing -ErrorAction Stop; powershell -ExecutionPolicy Bypass -File .\\aven-hyperv-host.ps1 -Server '%s' -NodeId '%s' -Token '%s' -VmName '%s'",
-		server, nodeID, token, strings.ReplaceAll(body.VMName, "'", "''"))
+	command := hyperVConnectCommand(s.PublicURL, nodeID, token, body.VMName)
+	s.audit(r, "hyperv.pair_token", nodeID, "Hyper-V 호스트 연결 토큰을 발급했습니다")
 	writeJSON(w, http.StatusCreated, map[string]any{"token": token, "expires_at": expires, "command": command})
 }
 
@@ -223,5 +263,34 @@ func (s *Server) requestHyperVPower(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
+	s.audit(r, "hyperv.power", nodeID, "Hyper-V VM "+body.Action+" 명령을 큐에 넣었습니다")
 	writeJSON(w, http.StatusAccepted, cmd)
+}
+
+func (s *Server) deleteHyperVHost(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("nid")
+	if err := s.Store.DeleteHyperVHost(r.Context(), nodeID); err != nil {
+		s.storeErr(w, err)
+		return
+	}
+	s.audit(r, "hyperv.disconnected", nodeID, "Hyper-V 호스트 연결을 끊었습니다")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) hyperVNodeJSON(r *http.Request, host store.HyperVHost) *hyperVNodeView {
+	online := host.LastSeenAt != nil && time.Since(*host.LastSeenAt) <= 45*time.Second
+	view := &hyperVNodeView{
+		VMName: host.VMName, HostName: host.HostName, HostOnline: online,
+		PowerState: host.PowerState, LastSeenAt: host.LastSeenAt, LastCommand: host.LastCommand,
+	}
+	if s.instanceLevel(principalFrom(r)) >= lvAdmin {
+		return view
+	}
+	view.HostName = ""
+	if host.LastCommand != nil {
+		cmd := *host.LastCommand
+		cmd.Error = ""
+		view.LastCommand = &cmd
+	}
+	return view
 }

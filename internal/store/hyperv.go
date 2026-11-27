@@ -97,7 +97,39 @@ func (s *Store) SetHyperVHostStatus(ctx context.Context, nodeID, powerState stri
 	return affected(s.q.ExecContext(ctx, `UPDATE node_hyperv_hosts SET power_state=?,last_seen_at=? WHERE node_id=?`, powerState, ts(time.Now()), nodeID))
 }
 
+const (
+	// hyperVQueuedMaxAge is how long a queued command may wait for the host to claim it.
+	hyperVQueuedMaxAge = 120 * time.Second
+	// hyperVRunningMaxAge is how long a claimed command may stay running before it is failed.
+	hyperVRunningMaxAge = 5 * time.Minute
+)
+
+// expireStaleHyperVCommands fails queued commands older than hyperVQueuedMaxAge and running
+// commands that have not finished within hyperVRunningMaxAge. An empty nodeID covers every node.
+// Callers that hand a command to the host must do this first so a stale command is never claimed.
+func expireStaleHyperVCommands(ctx context.Context, q querier, nodeID string, now time.Time) error {
+	nowTS := ts(now)
+	queued := `UPDATE hyperv_commands SET status='failed', error='Hyper-V command expired before the host claimed it', updated_at=? WHERE status='queued' AND created_at<?`
+	running := `UPDATE hyperv_commands SET status='failed', error='Hyper-V host did not finish the command', updated_at=? WHERE status='running' AND updated_at<?`
+	queuedArgs := []any{nowTS, ts(now.Add(-hyperVQueuedMaxAge))}
+	runningArgs := []any{nowTS, ts(now.Add(-hyperVRunningMaxAge))}
+	if nodeID != "" {
+		queued += ` AND node_id=?`
+		running += ` AND node_id=?`
+		queuedArgs = append(queuedArgs, nodeID)
+		runningArgs = append(runningArgs, nodeID)
+	}
+	if _, err := q.ExecContext(ctx, queued, queuedArgs...); err != nil {
+		return err
+	}
+	_, err := q.ExecContext(ctx, running, runningArgs...)
+	return err
+}
+
 func (s *Store) ListHyperVHosts(ctx context.Context) (map[string]HyperVHost, error) {
+	if err := expireStaleHyperVCommands(ctx, s.q, "", time.Now().UTC()); err != nil {
+		return nil, err
+	}
 	rows, err := s.q.QueryContext(ctx, `SELECT h.node_id,h.vm_name,h.host_name,h.power_state,h.last_seen_at,
 		c.id,c.action,c.status,c.error,c.created_at,c.updated_at
 		FROM node_hyperv_hosts h LEFT JOIN hyperv_commands c ON c.id=(SELECT id FROM hyperv_commands WHERE node_id=h.node_id ORDER BY created_at DESC LIMIT 1)
@@ -139,6 +171,9 @@ func (s *Store) EnqueueHyperVCommand(ctx context.Context, nodeID, action string)
 		if host != 1 {
 			return ErrNotFound
 		}
+		if err := expireStaleHyperVCommands(ctx, tx.q, nodeID, time.Now().UTC()); err != nil {
+			return err
+		}
 		var pending int
 		if err := tx.q.QueryRowContext(ctx, `SELECT count(*) FROM hyperv_commands WHERE node_id=? AND status IN ('queued','running')`, nodeID).Scan(&pending); err != nil {
 			return err
@@ -158,8 +193,7 @@ func (s *Store) ClaimHyperVCommand(ctx context.Context, nodeID string) (*HyperVC
 	var noCommand bool
 	err := s.Tx(ctx, func(tx *Store) error {
 		now := time.Now().UTC()
-		if _, err := tx.q.ExecContext(ctx, `UPDATE hyperv_commands SET status='failed',error='Hyper-V host did not finish the command',updated_at=? WHERE node_id=? AND status='running' AND updated_at<?`,
-			ts(now), nodeID, ts(now.Add(-5*time.Minute))); err != nil {
+		if err := expireStaleHyperVCommands(ctx, tx.q, nodeID, now); err != nil {
 			return err
 		}
 		var id, action, created string
@@ -192,4 +226,26 @@ func (s *Store) CompleteHyperVCommand(ctx context.Context, nodeID, commandID str
 	}
 	return affected(s.q.ExecContext(ctx, `UPDATE hyperv_commands SET status=?,error=?,updated_at=? WHERE id=? AND node_id=? AND status='running'`,
 		status, commandError, ts(time.Now()), commandID, nodeID))
+}
+
+// DeleteHyperVHost revokes the host credential and fails any command still queued or running.
+func (s *Store) DeleteHyperVHost(ctx context.Context, nodeID string) error {
+	return s.Tx(ctx, func(tx *Store) error {
+		now := ts(time.Now())
+		if _, err := tx.q.ExecContext(ctx, `UPDATE hyperv_commands SET status='failed', error='Hyper-V host was disconnected', updated_at=? WHERE node_id=? AND status IN ('queued','running')`, now, nodeID); err != nil {
+			return err
+		}
+		if _, err := tx.q.ExecContext(ctx, `DELETE FROM hyperv_pair_tokens WHERE node_id=?`, nodeID); err != nil {
+			return err
+		}
+		res, err := tx.q.ExecContext(ctx, `DELETE FROM node_hyperv_hosts WHERE node_id=?`, nodeID)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		if n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }

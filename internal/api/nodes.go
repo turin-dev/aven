@@ -80,9 +80,7 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		view := nodeView{Node: nodes[i], Mesh: s.Deploy.MeshStatus(r.Context(), nodes[i]), IPv6Status: s.Deploy.IPv6Status(r.Context(), nodes[i].ID)}
 		if host, ok := hypervHosts[nodes[i].ID]; ok {
-			online := host.LastSeenAt != nil && time.Since(*host.LastSeenAt) <= 45*time.Second
-			view.HyperV = &hyperVNodeView{VMName: host.VMName, HostName: host.HostName, HostOnline: online,
-				PowerState: host.PowerState, LastSeenAt: host.LastSeenAt, LastCommand: host.LastCommand}
+			view.HyperV = s.hyperVNodeJSON(r, host)
 		}
 		out = append(out, view)
 	}

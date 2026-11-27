@@ -2170,6 +2170,7 @@ export const api = {
   createJoinToken: (input: { name?: string; ttl_s?: number }) => request<JoinToken>("POST", "/nodes/join-tokens", input),
   createHyperVNodePairToken: (nid: ID, vm_name: string) => request<JoinToken>("POST", `/nodes/${enc(nid)}/hyperv/pair-token`, { vm_name }),
   requestHyperVNodePower: (nid: ID, action: "start" | "stop") => request<{ id: ID; node_id: ID; action: "start" | "stop"; status: string }>("POST", `/nodes/${enc(nid)}/hyperv/power`, { action }),
+  disconnectHyperVHost: (nid: ID) => request<void>("DELETE", `/nodes/${enc(nid)}/hyperv`),
   updateNode: (nid: ID, input: { name?: string; schedulable?: boolean; labels?: Record<string, string> } & NodeIngressInput) =>
     request<AvenNode>("PATCH", `/nodes/${enc(nid)}`, input),
   deleteNode: (nid: ID, force = false) => request<void>("DELETE", `/nodes/${enc(nid)}${force ? "?force=1" : ""}`),

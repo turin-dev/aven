@@ -250,6 +250,7 @@ func (s *Server) Handler() http.Handler {
 	h("POST /api/nodes/join-tokens", instanceAdmin, s.createJoinToken)
 	h("POST /api/nodes/{nid}/hyperv/pair-token", instanceAdmin, s.createHyperVPairToken)
 	h("POST /api/nodes/{nid}/hyperv/power", instanceAdmin, s.requestHyperVPower)
+	h("DELETE /api/nodes/{nid}/hyperv", instanceAdmin, s.deleteHyperVHost)
 	h("PATCH /api/nodes/{nid}", instanceAdmin, s.patchNode)
 	h("DELETE /api/nodes/{nid}", instanceAdmin, s.deleteNode)
 	h("GET /api/nodes/{nid}/metrics", anyUser(), s.nodeMetrics)

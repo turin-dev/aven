@@ -407,19 +407,21 @@ type Node = { id: ID; name: string; is_local: boolean;          // the node wher
   ipv6_status?: { pool: string; supported: boolean | null; reason?: string; iface?: string;   // GET /nodes only; null without a pool
                   desired: number; present: number; foreign?: string[]; last_error?: string; checked_at?: string } | null;
   hyperv?: { vm_name: string; host_name: string; host_online: boolean; power_state: "running"|"off"|"paused"|"unknown";
-             last_seen_at: string | null; last_command?: { id: ID; action: "start"|"stop"; status: "queued"|"running"|"done"|"failed"; error?: string } };
+             last_seen_at: string | null; last_command?: { id: ID; action: "start"|"stop"; status: "queued"|"running"|"done"|"failed"; error?: string } }; // non-admins: host_name is "" and last_command.error is omitted
   last_seen_at: string; created_at: string };
 ```
 - `GET    /nodes` → `Node[]`
 - `POST   /nodes/join-tokens` `{name?, ttl_s?: number}` → `{ token: string; expires_at: string; command: string }`
   The command is one line to run on the new server. Example: `curl -fsSL <AVEN_PUBLIC_URL>/install-agent.sh | sudo sh -s -- --server <url> --token <token>`.
   The token is single-use and expires after 1 hour by default.
-- `POST   /nodes/{nid}/hyperv/pair-token` `{vm_name}` → `{token, expires_at, command}`. Instance admin; the 15-minute, single-use token pairs one remote Linux node with a Windows Hyper-V host.
-- `POST   /nodes/{nid}/hyperv/power` `{action: "start"|"stop"}` → `202 HyperVCommand`. Instance admin; queues a VM power action for the paired host.
+- `POST   /nodes/{nid}/hyperv/pair-token` `{vm_name}` → `{token, expires_at, command}`. Instance admin; audited as `hyperv.pair_token`. The 15-minute, single-use token pairs one remote Linux node with a Windows Hyper-V host. `command` downloads `GET /downloads/aven-hyperv-host.ps1` from this server (the script embedded in this build; `GET /downloads/aven-hyperv-host.ps1.sha256` is its SHA-256), compares `Get-FileHash` before running it, and does not fetch `releases/latest`.
+- `POST   /nodes/{nid}/hyperv/power` `{action: "start"|"stop"}` → `202 HyperVCommand`. Instance admin; audited as `hyperv.power`. Queues a VM power action for the paired host. A node has at most one queued or running command. A queued command older than 120 seconds, or a running command that has not finished within 5 minutes, is marked failed when a command is enqueued, listed (`GET /nodes`), or claimed. Claim never runs a command whose `created_at` is already past the 120-second queue limit, so a stale stop cannot run after the host reconnects. A failed command no longer blocks the node.
+- `DELETE /nodes/{nid}/hyperv` → `204`. Instance admin; audited as `hyperv.disconnected`. Revokes the host credential, deletes an unused pairing token, and fails a command that is still queued or running. The Ubuntu VM is not deleted. The host controller stops itself after three `401` responses and unregisters its startup task; on the Windows host, also run `aven-hyperv-host.ps1 -Uninstall -NodeId <nid>` to delete the local credential directory.
 - `POST   /hyperv/enroll` `{token, host_name}` → `{node_id, vm_name, credential}` over TLS. Consumes the pairing token and returns a node-scoped host credential once.
-- `GET    /hyperv/commands/next` (host credential) → a pending command or `204`.
+- `GET    /hyperv/commands/next` (host credential) → a pending command or `204`. A queued command older than 120 seconds is failed instead of returned. A running command older than 5 minutes is failed.
 - `POST   /hyperv/status` `{power_state}` (host credential) → `204`; updates the host heartbeat and VM power state.
 - `POST   /hyperv/commands/{id}/result` `{ok, error?, power_state?}` (host credential) → `204`.
+- `GET    /downloads/aven-hyperv-host.ps1` and `GET /downloads/aven-hyperv-host.ps1.sha256` (no auth) → the host controller script bundled with this server, and its SHA-256.
 - `GET    /install-agent.sh` (no auth) → install script. It downloads the `aven-agent` binary from `GET /downloads/aven-agent-linux-{amd64,arm64}`, writes the compatible `keel-agent.service` unit and starts the agent.
 - `PATCH  /nodes/{nid}` `{name?, schedulable?, labels?, ingress_mode?, ingress_hostname?, tcp_hostname?, ipv6_pool?}` → `Node` (ingress fields: see "Networking" > "Node ingress"; `ipv6_pool`: "Per-domain IPv6")
 - `DELETE /nodes/{nid}` → `204`. Returns 409 if services are still placed on it. With `?force=1` it removes the node anyway, and its instances become `offline`.

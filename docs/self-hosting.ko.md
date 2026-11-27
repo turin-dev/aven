@@ -273,7 +273,7 @@ curl -fsSL https://aven.example.com/install-agent.sh | sudo sh -s -- --server ht
 
 서버 설치 스크립트로도 됩니다. 새 서버에서 `install-server.sh`를 실행하고 "What is this server?"에서 **Region server**를 고르면 메인 서버 URL, 참여 토큰, 사설 주소(선택)를 묻고, 원하면 Docker를 설치한 뒤 메인 서버의 `install-agent.sh`를 실행합니다. 무인 설치:
 
-Windows Server에서는 [Hyper-V 리전 안내](windows-hyperv-region.ko.md)에 따라 Linux VM을 만들 수 있습니다. Aven 서버 노드 화면에서 연결된 Hyper-V VM의 전원도 제어할 수 있습니다.
+Windows Server에서는 [Hyper-V 리전 안내](windows-hyperv-region.ko.md)에 따라 Linux VM을 만들 수 있습니다. Aven 서버 노드 화면에서 연결된 Hyper-V VM의 전원도 제어할 수 있습니다. 같은 안내에 인스턴스 관리자가 호스트 연결을 끊는 방법과 Windows에서 제어기를 제거하는 방법이 있습니다.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>

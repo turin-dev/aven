@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Power, Server, Tag, Trash2, Undo2 } from "lucide-react";
+import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Power, Server, Tag, Trash2, Undo2, Unplug } from "lucide-react";
 import { api, ApiError, type JoinToken, type AvenNode, type NodeIngressMode, type NodeIPv6Status } from "@/lib/api";
 import { qk, useMe, useNodeMetrics, useNodes } from "@/lib/queries";
 import { canvasHref } from "@/lib/nav";
@@ -843,6 +843,7 @@ function NodeRow({
   const [open, setOpen] = useState(false);
   const [pairHost, setPairHost] = useState(false);
   const [powerAction, setPowerAction] = useState<"start" | "stop" | null>(null);
+  const [disconnectHost, setDisconnectHost] = useState(false);
   const labels = Object.entries(n.labels);
   const draining = n.status === "draining";
   const vmCommandPending = n.hyperv?.last_command?.status === "queued" || n.hyperv?.last_command?.status === "running";
@@ -870,6 +871,20 @@ function NodeRow({
     try {
       await api.requestHyperVNodePower(n.id, powerAction);
       setPowerAction(null);
+      await qc.invalidateQueries({ queryKey: qk.nodes });
+    } catch (e) {
+      setError(nodeError(e));
+    } finally {
+      setVmBusy(false);
+    }
+  };
+  const disconnectHyperV = async () => {
+    if (vmBusy) return;
+    setVmBusy(true);
+    setError(null);
+    try {
+      await api.disconnectHyperVHost(n.id);
+      setDisconnectHost(false);
       await qc.invalidateQueries({ queryKey: qk.nodes });
     } catch (e) {
       setError(nodeError(e));
@@ -941,6 +956,9 @@ function NodeRow({
                         </MenuItem>
                         <MenuItem danger icon={<Power className="size-3.5" />} disabled={!admin || vmBusy || vmCommandPending || !n.hyperv.host_online} reason={!admin ? NO_PERM : !n.hyperv.host_online ? t("Hyper-V 호스트가 연결되지 않았습니다") : vmCommandPending ? t("Hyper-V 명령 처리 중") : undefined} onSelect={() => (close(), setPowerAction("stop"))}>
                           {t("VM 종료")}
+                        </MenuItem>
+                        <MenuItem danger icon={<Unplug className="size-3.5" />} disabled={!admin || vmBusy} reason={!admin ? NO_PERM : undefined} onSelect={() => (close(), setDisconnectHost(true))}>
+                          {t("Hyper-V 호스트 연결 끊기")}
                         </MenuItem>
                       </>
                     )}
@@ -1064,6 +1082,19 @@ function NodeRow({
       >
         <p>{powerAction === "start" ? t("Windows Server의 Hyper-V 호스트에 VM 시작 명령을 보냅니다.") : t("VM을 종료하면 이 리전에 배포된 앱이 중단됩니다. Ubuntu에 정상 종료를 요청하며 강제 전원 차단은 하지 않습니다.")}</p>
         {n.hyperv?.last_command?.status === "failed" && n.hyperv.last_command.error ? <p className="mt-3 text-sm text-danger">{n.hyperv.last_command.error}</p> : null}
+      </Dialog>
+      <Dialog
+        open={disconnectHost}
+        onClose={() => !vmBusy && setDisconnectHost(false)}
+        title={t("Hyper-V 호스트 연결 끊기")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDisconnectHost(false)} disabled={vmBusy}>{t("취소")}</Button>
+            <Button variant="danger" loading={vmBusy} onClick={() => void disconnectHyperV()}>{t("연결 끊기")}</Button>
+          </>
+        }
+      >
+        <p>{t("대시보드에서 이 VM의 전원을 더 이상 제어하지 않습니다. Ubuntu VM은 지워지지 않습니다. Windows에서는 관리자 PowerShell로 aven-hyperv-host.ps1 -Uninstall -NodeId 를 실행해 예약 작업과 자격 증명을 지우세요.")}</p>
       </Dialog>
     </li>
   );

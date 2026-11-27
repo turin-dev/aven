@@ -6,7 +6,8 @@ param(
     [string]$UbuntuIso = '',
     [int]$MemoryGB = 4,
     [int]$Processors = 2,
-    [int]$DiskGB = 80
+    [int]$DiskGB = 80,
+    [switch]$UseExisting
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,8 +117,14 @@ $VmName = Read-RequiredValue 'Ubuntu region VM name' $VmName
 if ($VmName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'VmName may only contain letters, digits, dots, hyphens and underscores.' }
 $createdVM = $false
 $existing = Get-VM -Name $VmName -ErrorAction SilentlyContinue
+if ($existing -and -not $UseExisting) {
+    throw "Hyper-V VM '$VmName' already exists. Re-run with -UseExisting to start that VM without changing its CPU, memory, disk, or automatic start settings, or choose another name."
+}
+if ($UseExisting -and -not $existing) {
+    throw "Hyper-V VM '$VmName' was not found. Omit -UseExisting to create it."
+}
 if ($existing) {
-    Write-Host "`nUsing the existing VM '$VmName'. Its CPU, memory and disk settings are not changed." -ForegroundColor Yellow
+    Write-Host "`nUsing the existing VM '$VmName'. Its CPU, memory, disk, and automatic start settings are not changed." -ForegroundColor Yellow
     if ($existing.State -ne 'Running') { Start-VM -Name $VmName | Out-Null }
 } else {
     $hostMemoryGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
@@ -140,31 +147,43 @@ if ($existing) {
     $isoPath = Get-UbuntuIso $UbuntuIso
     $diskPath = Join-Path $vmRoot "$VmName.vhdx"
 
+    $diskExisted = Test-Path -LiteralPath $diskPath
     Write-Host 'Creating the Ubuntu VM...'
-    New-VM -Name $VmName -Generation 2 -MemoryStartupBytes ([long]$MemoryGB * 1GB) `
-        -NewVHDPath $diskPath -NewVHDSizeBytes ([long]$DiskGB * 1GB) -SwitchName $selectedSwitch -Path $vmRoot | Out-Null
-    $createdVM = $true
-    Set-VMProcessor -VMName $VmName -Count $Processors
-    Set-VMMemory -VMName $VmName -DynamicMemoryEnabled $false
-    Set-VM -Name $VmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction Save
-    Set-VMFirmware -VMName $VmName -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority
-    $dvd = Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($dvd) {
-        Set-VMDvdDrive -VMName $VmName -ControllerNumber $dvd.ControllerNumber -ControllerLocation $dvd.ControllerLocation -Path $isoPath
-    } else {
-        Add-VMDvdDrive -VMName $VmName -Path $isoPath | Out-Null
-        $dvd = Get-VMDvdDrive -VMName $VmName | Select-Object -First 1
+    try {
+        New-VM -Name $VmName -Generation 2 -MemoryStartupBytes ([long]$MemoryGB * 1GB) `
+            -NewVHDPath $diskPath -NewVHDSizeBytes ([long]$DiskGB * 1GB) -SwitchName $selectedSwitch -Path $vmRoot | Out-Null
+        $createdVM = $true
+        Set-VMProcessor -VMName $VmName -Count $Processors
+        Set-VMMemory -VMName $VmName -DynamicMemoryEnabled $false
+        Set-VMFirmware -VMName $VmName -EnableSecureBoot On -SecureBootTemplate MicrosoftUEFICertificateAuthority
+        $dvd = Get-VMDvdDrive -VMName $VmName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($dvd) {
+            Set-VMDvdDrive -VMName $VmName -ControllerNumber $dvd.ControllerNumber -ControllerLocation $dvd.ControllerLocation -Path $isoPath
+        } else {
+            Add-VMDvdDrive -VMName $VmName -Path $isoPath | Out-Null
+            $dvd = Get-VMDvdDrive -VMName $VmName | Select-Object -First 1
+        }
+        Set-VMFirmware -VMName $VmName -FirstBootDevice $dvd
+        Start-VM -Name $VmName | Out-Null
+        # Automatic start is applied only after this run has created and started the VM.
+        Set-VM -Name $VmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction Save
+    } catch {
+        $failure = $_
+        if (Get-VM -Name $VmName -ErrorAction SilentlyContinue) {
+            Stop-VM -Name $VmName -TurnOff -Force -ErrorAction SilentlyContinue
+            Remove-VM -Name $VmName -Force -ErrorAction SilentlyContinue
+        }
+        if (-not $diskExisted -and (Test-Path -LiteralPath $diskPath)) {
+            Remove-Item -Force -LiteralPath $diskPath -ErrorAction SilentlyContinue
+        }
+        throw $failure
     }
-    Set-VMFirmware -VMName $VmName -FirstBootDevice $dvd
-    Start-VM -Name $VmName | Out-Null
 }
-
-Set-VM -Name $VmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction Save
 
 Write-Host "`nVM '$VmName' is running." -ForegroundColor Green
 Write-Host "  vmconnect.exe localhost `"$VmName`""
-Write-Host "`nThe VM starts automatically when Windows Server restarts."
 if ($createdVM) {
+    Write-Host "`nThe VM starts automatically when Windows Server restarts."
     Write-Host 'Finish the Ubuntu Server installation in the VM console, then run this in a terminal inside the VM:'
     Write-Host '  curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sh'
     Write-Host 'Choose Region server, then enter the main server URL, a join token, and whether to install Docker.'

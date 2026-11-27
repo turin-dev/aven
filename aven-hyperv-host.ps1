@@ -1,25 +1,64 @@
+# aven-hyperv-host.ps1
+# Pairs this Windows Server with one Aven region node and runs the Hyper-V controller as SYSTEM.
+# The copy you run is the one served by that Aven server (same build), checked with SHA-256 before it starts.
 [CmdletBinding()]
 param(
     [string]$Server = '',
     [string]$NodeId = '',
     [string]$Token = '',
     [string]$VmName = '',
-    [switch]$Run
+    [switch]$Run,
+    [switch]$Uninstall
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ProgressPreference = 'SilentlyContinue'
 
-$dataRoot = Join-Path $env:ProgramData 'Aven\HyperV'
+$avenRoot = Join-Path $env:ProgramData 'Aven'
+$dataRoot = Join-Path $avenRoot 'HyperV'
 $hostDataRoot = Join-Path $dataRoot $NodeId
 $configPath = Join-Path $hostDataRoot 'host.json'
 $taskName = if ($NodeId) { "Aven-HyperV-$NodeId" } else { 'Aven-HyperV' }
-$logPath = Join-Path (Join-Path $env:ProgramData 'Aven\logs') 'aven-hyperv-host.log'
+$logDir = Join-Path $avenRoot 'logs'
+$logPath = Join-Path $logDir 'aven-hyperv-host.log'
+$script:LastApiStatus = 0
+$script:logProtected = $false
+
+function Protect-AvenPath([string]$Path, [switch]$Directory) {
+    if ($Directory) {
+        New-Item -ItemType Directory -Force -Path $Path | Out-Null
+    }
+    # Owner must be Administrators or SYSTEM before credentials or logs are written.
+    & icacls.exe $Path /setowner '*S-1-5-32-544' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        & icacls.exe $Path /setowner '*S-1-5-18' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Could not set the owner of $Path to Administrators or SYSTEM." }
+    }
+    $rights = 'F'
+    if ($Directory) { $rights = '(OI)(CI)F' }
+    # Drop inherited ACEs and grant only SYSTEM and Administrators.
+    & icacls.exe $Path /inheritance:r /grant:r "*S-1-5-18:$rights" "*S-1-5-32-544:$rights" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not reset access control on $Path." }
+    # /grant:r does not remove other explicit ACEs. These well-known SIDs are the usual extras.
+    & icacls.exe $Path /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' '*S-1-5-32-546' | Out-Null
+}
+
+function Initialize-AvenDataRoot {
+    Protect-AvenPath $avenRoot -Directory
+    Protect-AvenPath $dataRoot -Directory
+    Protect-AvenPath $logDir -Directory
+}
 
 function Write-HostLog([string]$Message) {
-    $directory = Split-Path -Parent $logPath
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    if (-not $script:logProtected) {
+        Initialize-AvenDataRoot
+        if (-not (Test-Path -LiteralPath $logPath)) {
+            New-Item -ItemType File -Path $logPath | Out-Null
+        }
+        Protect-AvenPath $logPath
+        $script:logProtected = $true
+    }
     Add-Content -LiteralPath $logPath -Value ("{0:u} {1}" -f [DateTime]::UtcNow, $Message) -Encoding UTF8
 }
 
@@ -48,9 +87,12 @@ function Invoke-AvenApi($Config, [string]$Method, [string]$Path, $Body = $null) 
     } catch {
         $status = 0
         try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+        if ($status -eq 0 -and $_.Exception.Message -match '\(401\)') { $status = 401 }
+        $script:LastApiStatus = $status
         if ($status -eq 204) { return $null }
         throw
     }
+    $script:LastApiStatus = 0
     if ($response.StatusCode -eq 204 -or [string]::IsNullOrWhiteSpace($response.Content)) { return $null }
     return ($response.Content | ConvertFrom-Json)
 }
@@ -72,6 +114,12 @@ function Wait-VmState([string]$Name, [string]$Expected, [int]$Seconds) {
         Start-Sleep -Seconds 2
     } while ([DateTime]::UtcNow -lt $deadline)
     return ((Get-VmPowerState $Name) -eq $Expected)
+}
+
+function Stop-HyperVController([string]$Reason) {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    try { Write-HostLog $Reason } catch { }
+    exit 1
 }
 
 function Invoke-VmPowerAction($Config, $Command) {
@@ -108,6 +156,20 @@ function Invoke-VmPowerAction($Config, $Command) {
     try { Invoke-AvenApi $Config 'POST' '/api/hyperv/status' @{ power_state = $powerState } | Out-Null } catch { }
 }
 
+if ($Uninstall) {
+    Assert-Administrator
+    if ($NodeId -notmatch '^nod_[a-z2-7]+$') { throw 'NodeId is required. Example: -Uninstall -NodeId nod_...' }
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $hostDataRoot) {
+        Remove-Item -LiteralPath $hostDataRoot -Recurse -Force
+    }
+    Write-Host "Removed the Hyper-V host controller for node $NodeId." -ForegroundColor Green
+    Write-Host 'The scheduled task and this node''s credential directory are gone. The Ubuntu VM was not deleted.'
+    Write-Host 'In Aven, an instance admin should also disconnect the host (DELETE /api/nodes/<node id>/hyperv) if it is still paired.'
+    exit 0
+}
+
 if (-not $Run) {
     Assert-Administrator
     if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) {
@@ -118,7 +180,6 @@ if (-not $Run) {
     if ($Token -notmatch '^[a-fA-F0-9]{64}$') { throw 'Token must be a 64-character pairing token from Aven.' }
     if ($VmName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') { throw 'VmName is invalid.' }
     try { Get-VM -Name $VmName -ErrorAction Stop | Out-Null } catch { throw "Hyper-V VM '$VmName' was not found on this host." }
-    Set-VM -Name $VmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction Save
 
     $serverUri = $null
     if (-not [Uri]::TryCreate($Server, [UriKind]::Absolute, [ref]$serverUri) -or $serverUri.Scheme -ne 'https') { throw 'Server must be an absolute HTTPS URL.' }
@@ -130,16 +191,18 @@ if (-not $Run) {
         throw 'Aven returned a pairing response that does not match this node and VM.'
     }
 
+    Initialize-AvenDataRoot
     New-Item -ItemType Directory -Force -Path $hostDataRoot | Out-Null
-    icacls.exe $hostDataRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not restrict access to the Hyper-V host credential.' }
+    Protect-AvenPath $hostDataRoot -Directory
     Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
     $config = [ordered]@{ server = $Server; node_id = $NodeId; vm_name = $VmName; credential = $response.credential }
     $utf8 = [Text.UTF8Encoding]::new($false)
     [IO.File]::WriteAllText($configPath, (ConvertTo-Json -InputObject $config -Compress), $utf8)
-    icacls.exe $configPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Could not restrict access to the Hyper-V host credential file.' }
+    Protect-AvenPath $configPath
     $Token = ''
+
+    # Autostart changes only after enroll succeeded and the credential is stored.
+    Set-VM -Name $VmName -AutomaticStartAction Start -AutomaticStartDelay 30 -AutomaticStopAction Save
 
     $installRoot = Join-Path $env:ProgramFiles 'Aven'
     New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
@@ -157,6 +220,7 @@ if (-not $Run) {
     Start-ScheduledTask -TaskName $taskName
     Write-Host "Paired this Hyper-V host with Aven node $NodeId. Aven can now start and stop VM '$VmName'." -ForegroundColor Green
     Write-Host 'The controller runs at Windows startup and connects to the Aven server over HTTPS.'
+    Write-Host "To remove it, an instance admin disconnects the host in Aven, then this machine runs: powershell -File `"$installedScript`" -Uninstall -NodeId `"$NodeId`""
     Write-Host "Log: $logPath"
     exit 0
 }
@@ -165,11 +229,14 @@ if ($NodeId -notmatch '^nod_[a-z2-7]+$') { throw 'NodeId is required for the bac
 if (-not (Test-Path -LiteralPath $configPath)) { throw "Hyper-V host configuration is missing: $configPath" }
 $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
 if (-not (Get-Command Get-VM -ErrorAction SilentlyContinue)) { throw 'Hyper-V PowerShell tools are not installed.' }
+Initialize-AvenDataRoot
 Write-HostLog ("Controller started for node {0}, VM {1}" -f $config.node_id, $config.vm_name)
 $lastLoopError = ''
 $lastLoopErrorAt = [DateTime]::MinValue
+$unauthorized = 0
 
 while ($true) {
+    $script:LastApiStatus = 0
     try {
         $powerState = Get-VmPowerState $config.vm_name
         Invoke-AvenApi $config 'POST' '/api/hyperv/status' @{ power_state = $powerState } | Out-Null
@@ -178,11 +245,20 @@ while ($true) {
             Write-HostLog ("Running VM action {0} ({1})" -f $command.action, $command.id)
             Invoke-VmPowerAction $config $command
         }
+        $unauthorized = 0
         if ($lastLoopError) {
             Write-HostLog 'Controller connection recovered.'
             $lastLoopError = ''
         }
     } catch {
+        if ($script:LastApiStatus -eq 401) {
+            $unauthorized++
+            if ($unauthorized -ge 3) {
+                Stop-HyperVController 'The Aven server rejected this host credential three times. Stopping and removing the startup task. Pair the host again to reinstall, or run -Uninstall to delete the local credential.'
+            }
+        } else {
+            $unauthorized = 0
+        }
         $message = $_.Exception.Message
         if ($message -ne $lastLoopError -or ([DateTime]::UtcNow - $lastLoopErrorAt).TotalMinutes -ge 1) {
             Write-HostLog ("Controller loop: {0}" -f $message)

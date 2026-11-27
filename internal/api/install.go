@@ -190,6 +190,10 @@ var installCLIScriptBody []byte
 // downloadAgent: GET /downloads/{aven-agent-linux-{amd64,arm64}, aven-<os>-<arch>[.exe]}[.sha256] (인증 없음).
 func (s *Server) downloadAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("file")
+	if name == hyperVHostScriptName || name == hyperVHostScriptName+".sha256" {
+		s.serveHyperVHostScript(w, r, name != hyperVHostScriptName)
+		return
+	}
 	base, checksum := strings.CutSuffix(name, ".sha256")
 	var p string
 	if cliName, ok := canonicalCLIFile(base); ok {

@@ -91,6 +91,8 @@ const en: Record<string, string> = {
   "노드 제거": "Remove node",
   "Hyper-V 호스트 연결": "Connect Hyper-V host",
   "Hyper-V 호스트 다시 연결": "Reconnect Hyper-V host",
+  "Hyper-V 호스트 연결 끊기": "Disconnect Hyper-V host",
+  "대시보드에서 이 VM의 전원을 더 이상 제어하지 않습니다. Ubuntu VM은 지워지지 않습니다. Windows에서는 관리자 PowerShell로 aven-hyperv-host.ps1 -Uninstall -NodeId 를 실행해 예약 작업과 자격 증명을 지우세요.": "The dashboard will no longer control this VM. The Ubuntu VM is not deleted. On Windows, run aven-hyperv-host.ps1 -Uninstall -NodeId from an elevated PowerShell to remove the scheduled task and credential.",
   "Hyper-V VM 시작": "Start Hyper-V VM",
   "Hyper-V VM 종료": "Stop Hyper-V VM",
   "VM 시작": "Start VM",
