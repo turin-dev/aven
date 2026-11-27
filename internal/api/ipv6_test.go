@@ -79,9 +79,6 @@ func TestPatchNodeIPv6Pool(t *testing.T) {
 		`{"ipv6_pool":"2001:db8:6b:1943:d::/121"}`:  400, // 너무 작음
 		`{"ipv6_pool":"10.0.0.0/24"}`:               400,
 		`{"ipv6_pool":"fd00:1::/80"}`:               400, // ULA
-		`{"ipv6_pool":"2001:db8:6b:1943:d::9/80"}`:  400, // 네트워크 주소가 아님
-		`{"ipv6_pool":"2001:db8:6b:1943::/64"}`:     409, // ::2 포함
-		`{"ipv6_pool":"2001:db8:6b:1943::/120"}`:    409, // ::2 포함
 		`{"ipv6_pool":"2001:db8:6b:1943:66::/120"}`: 409, // wg0 주소
 		`{"ipv6_pool":"2001:db8:6b:1943:e:1::/96"}`: 409, // us 풀과 겹침
 	} {
@@ -100,6 +97,13 @@ func TestPatchNodeIPv6Pool(t *testing.T) {
 	// 실패한 요청은 저장 값을 바꾸지 않는다.
 	if n, _ := f.st.LocalNode(f.ctx); n.IPv6Pool != "2001:db8:6b:1943:d::/80" {
 		t.Fatalf("changed by a rejected request: %q", n.IPv6Pool)
+	}
+	// 호스트 비트는 잘라 저장한다. 기본 주소(::2)를 담는 공유 풀(/64 전체)도 된다.
+	if err := f.st.SetNodeIPv6Pool(f.ctx, us.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := call(store.LocalNodeID, `{"ipv6_pool":"2001:db8:6b:1943:d::/64"}`); code != 200 || out["ipv6_pool"] != "2001:db8:6b:1943::/64" {
+		t.Fatalf("shared /64: %d %v", code, out)
 	}
 	// 지우기.
 	if code, out := call(store.LocalNodeID, `{"ipv6_pool":""}`); code != 200 || out["ipv6_pool"] != "" {

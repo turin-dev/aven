@@ -529,7 +529,7 @@ function IngressNode({ node, onClose }: { node: AvenNode | null; onClose: () => 
         </Field>
         <Field
           label={t("IPv6 풀")}
-          hint={t("도메인마다 이 대역에서 전용 공개 IPv6(/128)를 하나씩 배정해 노드 인터페이스에 붙입니다. /64 ~ /120, 노드의 기본 IPv6와 겹치면 안 됩니다. 비우면 모든 도메인이 노드 기본 IPv6를 같이 씁니다.")}
+          hint={t("도메인마다 이 대역에서 전용 공개 IPv6(/128)를 하나씩 배정해 노드 인터페이스에 붙입니다. /64 ~ /120이고, 받은 /64 전체처럼 노드 기본 IPv6나 이미 쓰는 주소가 들어 있어도 됩니다(그 주소는 건너뜁니다). 비우면 모든 도메인이 노드 기본 IPv6를 같이 씁니다.")}
         >
           <Input mono value={pool} onChange={(e) => setPool(e.target.value)} placeholder="2001:db8:1:d::/80" aria-label={t("IPv6 풀")} />
         </Field>

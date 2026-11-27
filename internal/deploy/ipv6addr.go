@@ -112,7 +112,7 @@ func (m *Manager) NodeIPv6Pool(ctx context.Context, nodeID string) (netip.Prefix
 	return p, true
 }
 
-// nodeMainIPv6는 노드의 기본 공인 IPv6다(풀이 담으면 안 되는 주소).
+// nodeMainIPv6는 노드의 기본 공인 IPv6다(풀이 담아도 배정하거나 건드리지 않는 주소).
 func (m *Manager) nodeMainIPv6(ctx context.Context, nodeID string) []netip.Addr {
 	raw := ""
 	if isLocal(nodeID) {
@@ -176,11 +176,11 @@ func (m *Manager) AssignDomainIPv6(ctx context.Context) error {
 	if m.Store == nil {
 		return nil
 	}
-	want, _, err := m.domainIPv6Want(ctx)
+	want, home, err := m.domainIPv6Want(ctx)
 	if err != nil {
 		return err
 	}
-	ch, err := m.Store.ReconcileDomainIPv6(ctx, want)
+	ch, err := m.Store.ReconcileDomainIPv6(ctx, want, m.ipv6Reserve(ctx, want, home))
 	if err != nil {
 		return err
 	}
@@ -190,6 +190,43 @@ func (m *Manager) AssignDomainIPv6(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// ipv6Reserve는 배정에 쓰는 풀마다 건너뛸 주소다: 노드의 기본 IPv6와, 노드에 이미 있는 aven 것이 아닌 주소·서브넷.
+// 노드 주소를 읽지 못하면(오프라인 등) 풀이 기본 IPv6를 담는 공유 풀일 때만 새 배정을 멈춘다. 전용 풀은 그대로 배정한다.
+func (m *Manager) ipv6Reserve(ctx context.Context, want map[string]netip.Prefix, home map[string]string) map[netip.Prefix]*store.IPv6Reserve {
+	pools := map[string]netip.Prefix{}
+	for host, p := range want {
+		pools[home[host]] = p
+	}
+	if len(pools) == 0 {
+		return nil
+	}
+	managed := map[netip.Addr]bool{}
+	if all, err := m.Store.ManagedIPv6s(ctx); err == nil {
+		for a := range all {
+			managed[a] = true
+		}
+	}
+	out := map[netip.Prefix]*store.IPv6Reserve{}
+	for id, pool := range pools {
+		protect := m.nodeMainIPv6(ctx, id)
+		rs := &store.IPv6Reserve{Addrs: map[netip.Addr]bool{}}
+		hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		host, err := m.HostIPv6Addrs(hctx, id)
+		cancel()
+		if err != nil {
+			for _, p := range protect {
+				if pool.Contains(p) {
+					rs.NoNew = true
+				}
+			}
+			host = nil
+		}
+		rs.Addrs, rs.Prefixes = node.IPv6Reservation(pool, host, managed, protect)
+		out[pool] = rs
+	}
+	return out
 }
 
 // SyncDomainIPv6은 주소를 배정하고, 풀이 있는 연결된 모든 노드(로컬 포함)에 반영한다.
@@ -436,27 +473,15 @@ func goHostIPv6() ([]node.HostIPv6Addr, error) {
 	return out, nil
 }
 
-// CheckIPv6Pool은 노드에 pool을 써도 되는지 본다: 노드의 기본 IPv6를 담지 않고, 노드에 이미 있는 주소(aven이 배정한 주소 제외)를
-// 담지 않으며, /64보다 작은 노드 서브넷과 겹치지 않아야 한다. 노드에 물어볼 수 없으면(오프라인, 옛 agent) 오류다.
+// CheckIPv6Pool은 노드에 pool을 써도 되는지 본다. 풀은 노드의 기본 IPv6나 이미 쓰는 주소를 담아도 된다(배정에서 건너뛴다).
+// 풀 전체가 노드의 작은 서브넷 안에 들어가면 안 된다. 노드에 물어볼 수 없으면(오프라인, 옛 agent) 오류다.
 func (m *Manager) CheckIPv6Pool(ctx context.Context, nodeID string, pool netip.Prefix) error {
 	nodeID = nodeKey(nodeID)
-	protect := m.nodeMainIPv6(ctx, nodeID)
-	for _, p := range protect {
-		if pool.Contains(p) {
-			return fmt.Errorf("IPv6 풀 %s에 노드의 기본 IPv6 주소 %s가 들어 있습니다", pool, p)
-		}
-	}
 	host, err := m.HostIPv6Addrs(ctx, nodeID)
 	if err != nil {
 		return fmt.Errorf("노드의 IPv6 주소를 확인하지 못했습니다: %w", err)
 	}
-	managed := map[netip.Addr]bool{}
-	if all, err := m.Store.ManagedIPv6s(ctx); err == nil {
-		for a := range all {
-			managed[a] = true
-		}
-	}
-	return node.CheckIPv6PoolOnHost(pool, host, managed, protect)
+	return node.CheckIPv6PoolOnHost(pool, host)
 }
 
 // syncDomainIPv6Async는 도메인 추가·삭제·이동 뒤 루프를 바로 깨운다(요청과 배포 경로를 막지 않는다).

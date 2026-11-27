@@ -24,11 +24,16 @@ import (
 // preferred_lft 0(deprecated)이라 호스트가 밖으로 나가는 연결의 출발 주소로 쓰지 않는다(Mailu ::25와 같은 방식). keel-proxy는
 // [::]:80/443에 publish되어 있으므로 새 주소로 들어온 요청도 SNI로 그대로 라우팅된다(Caddy나 컨테이너는 바꾸지 않는다).
 //
+// aven이 붙인 주소에는 주소 protocol 표시(proto 0xaa, AddrProto)를 단다. 커널(6.3 미만)이나 iproute2가 이를 모르면 표시 없이 붙인다.
+//
+// 풀은 노드의 기본 공인 IPv6나 이미 쓰는 주소를 담아도 된다(공유 풀, 예: 호스팅이 준 /64 전체). 그런 주소와 노드 서브넷(예: wg0의
+// /112)은 배정에서 건너뛰고(IPv6Reservation) 건드리지 않는다.
+//
 // 안전 규칙:
 //   - 풀 밖의 주소는 절대 건드리지 않는다.
-//   - 풀 안에서도 aven이 붙인 모양(/128이고 deprecated)인 주소만 지운다. 다른 모양의 주소(예: 운영자가 직접 붙인 /64)는
-//     Foreign으로 알리기만 한다.
-//   - 노드의 기본 공인 IPv6(protect)를 담는 풀은 거부한다.
+//   - 풀 안에서는 aven 표시가 있는 /128만 지운다. 표시 없는 /128 deprecated 주소(옛 aven 주소, 표시를 모르는 커널)는 풀에 다른
+//     주소가 하나도 없을 때(전용 풀)만 지운다. 공유 풀에서는 Mailu ::25처럼 같은 모양의 다른 주소가 있을 수 있어서다.
+//   - 그 밖의 주소(예: 기본 /64 주소)는 Foreign으로 알리기만 한다. 원하는 주소가 기본 IPv6나 Foreign 주소·서브넷과 겹치면 붙이지 않는다.
 
 // IPv6PoolMinBits, IPv6PoolMaxBits는 허용하는 풀 크기다(/64 ~ /120).
 const (
@@ -46,7 +51,11 @@ func ValidIPv6Iface(s string) bool { return ifaceRe.MatchString(s) && !strings.H
 
 var ulaPrefix = netip.MustParsePrefix("fc00::/7")
 
-// ParseIPv6Pool은 풀 CIDR을 검증한다: IPv6, 전역 유니캐스트(ULA 제외), /64~/120, 네트워크 주소로 적은 값.
+// AddrProto는 aven이 붙인 주소의 protocol 표시다(ip addr ... proto 0xaa).
+const AddrProto = "0xaa"
+
+// ParseIPv6Pool은 풀 CIDR을 검증한다: IPv6, 전역 유니캐스트(ULA 제외), /64~/120. 호스트 비트는 잘라 네트워크 주소로 돌려준다
+// (2001:db8:1:d::/64 → 2001:db8:1::/64).
 func ParseIPv6Pool(s string) (netip.Prefix, error) {
 	p, err := netip.ParsePrefix(strings.TrimSpace(s))
 	if err != nil {
@@ -62,10 +71,7 @@ func ParseIPv6Pool(s string) (netip.Prefix, error) {
 	if p.Bits() < IPv6PoolMinBits || p.Bits() > IPv6PoolMaxBits {
 		return netip.Prefix{}, fmt.Errorf("IPv6 풀 %s의 크기는 /%d ~ /%d여야 합니다", p, IPv6PoolMinBits, IPv6PoolMaxBits)
 	}
-	if p.Masked() != p {
-		return netip.Prefix{}, fmt.Errorf("IPv6 풀은 네트워크 주소로 적어야 합니다(%s)", p.Masked())
-	}
-	return p, nil
+	return p.Masked(), nil
 }
 
 // ParseIPv6PoolAddresses는 풀과 주소 목록을 검증한다: 모든 주소가 풀 안의 IPv6여야 한다. 중복은 하나로 합치고 정렬한다.
@@ -137,7 +143,12 @@ type HostIPv6Addr struct {
 	Bits       int    `json:"bits"`
 	Scope      string `json:"scope"`
 	Deprecated bool   `json:"deprecated"`
+	// Aven은 aven이 붙였다는 protocol 표시(AddrProto)가 있는지다.
+	Aven bool `json:"aven,omitempty"`
 }
+
+// managedShape는 aven이 붙이는 모양(/128, deprecated)이다.
+func (h HostIPv6Addr) managedShape() bool { return h.Bits == 128 && h.Deprecated }
 
 // Prefix는 주소/길이다.
 func (h HostIPv6Addr) Prefix() (netip.Prefix, bool) {
@@ -158,6 +169,7 @@ type ipAddrJSON struct {
 		Scope        string `json:"scope"`
 		Deprecated   bool   `json:"deprecated"`
 		PreferredLft *int64 `json:"preferred_life_time"`
+		Protocol     string `json:"protocol"`
 	} `json:"addr_info"`
 }
 
@@ -194,7 +206,8 @@ func ListHostIPv6(ctx context.Context, r IPRunner, iface string) ([]HostIPv6Addr
 				continue
 			}
 			dep := ai.Deprecated || (ai.PreferredLft != nil && *ai.PreferredLft == 0)
-			res = append(res, HostIPv6Addr{Iface: l.IfName, Addr: a.String(), Bits: ai.PrefixLen, Scope: ai.Scope, Deprecated: dep})
+			aven := ai.Protocol == AddrProto || ai.Protocol == "170" || ai.Protocol == "aven"
+			res = append(res, HostIPv6Addr{Iface: l.IfName, Addr: a.String(), Bits: ai.PrefixLen, Scope: ai.Scope, Deprecated: dep, Aven: aven})
 		}
 	}
 	return res, nil
@@ -253,21 +266,26 @@ type IPv6EnsureResult struct {
 // ErrIPv6Unsupported는 붙일 주소가 있는데 이 노드에서 ip 명령을 쓸 수 없을 때다.
 var ErrIPv6Unsupported = errors.New("이 노드에서는 도메인별 IPv6 주소를 붙일 수 없습니다")
 
-// IPv6Ensure는 iface에 붙은 pool 안의 aven 주소(/128, deprecated)를 want에 맞춘다: 없는 주소는 붙이고, 원하지 않는 주소는 지운다.
-// pool 밖의 주소와 aven 모양이 아닌 주소는 건드리지 않는다. 이미 맞으면 아무 명령도 실행하지 않는다.
-// protect(노드의 기본 공인 IPv6 등)가 pool 안에 있으면 아무것도 하지 않고 오류다.
+// IPv6Ensure는 iface에 붙은 pool 안의 aven 주소를 want에 맞춘다: 없는 주소는 붙이고(표시 없는 원하는 주소는 표시를 단다), 원하지 않는
+// aven 주소는 지운다. 무엇을 지우는지는 파일 머리의 안전 규칙을 따른다. 이미 맞으면 아무 명령도 실행하지 않는다.
+// protect(노드의 기본 공인 IPv6 등)는 풀 안에 있어도 되지만 절대 건드리지 않는다.
 // r이 nil이면 want가 비었을 때 Supported=false로 끝나고, 아니면 ErrIPv6Unsupported다.
 func IPv6Ensure(ctx context.Context, r IPRunner, iface string, pool netip.Prefix, want []netip.Addr, protect []netip.Addr) (*IPv6EnsureResult, error) {
 	res := &IPv6EnsureResult{Iface: iface, Pool: pool.String(), Desired: len(want)}
 	if !pool.IsValid() {
 		return res, errors.New("invalid pool")
 	}
-	if _, err := ParseIPv6Pool(pool.String()); err != nil {
+	if p, err := ParseIPv6Pool(pool.String()); err != nil {
 		return res, err
+	} else if p != pool {
+		return res, fmt.Errorf("IPv6 풀 %s는 네트워크 주소가 아닙니다(%s)", pool, p)
 	}
+	protected := map[netip.Addr]bool{}
+	shared := false // 풀에 aven 것이 아닌 주소가 있다(기본 IPv6, 다른 서비스 주소, 서브넷)
 	for _, p := range protect {
 		if p.IsValid() && pool.Contains(p) {
-			return res, fmt.Errorf("IPv6 풀 %s에 노드의 기본 주소 %s가 들어 있습니다", pool, p)
+			protected[p] = true
+			shared = true
 		}
 	}
 	wantSet := map[netip.Addr]bool{}
@@ -290,32 +308,88 @@ func IPv6Ensure(ctx context.Context, r IPRunner, iface string, pool netip.Prefix
 		return res, errors.New(res.Reason)
 	}
 	res.Supported = true
-	cur, err := ListHostIPv6(ctx, r, iface)
+	// 원하는 주소를 막는 것(기본 IPv6, 다른 모양의 주소, 노드 서브넷)은 다른 인터페이스에 있어도 본다.
+	all, err := ListHostIPv6(ctx, r, "")
 	if err != nil {
 		return res, err
 	}
-	have := map[netip.Addr]bool{} // 풀 안의 aven 모양 주소
-	for _, h := range cur {
+	var errs []error
+	blocked := map[netip.Addr]bool{}
+	for a := range protected {
+		blocked[a] = true
+	}
+	for _, h := range all {
+		hp, ok := h.Prefix()
+		if !ok {
+			continue
+		}
+		a := hp.Addr()
+		if h.Iface != iface && pool.Contains(a) {
+			blocked[a] = true // 다른 인터페이스의 주소는 절대 건드리지 않는다
+			shared = true
+		}
+		if h.Bits > IPv6PoolMinBits && h.Bits < 128 && hp.Masked().Overlaps(pool) {
+			shared = true
+			for w := range wantSet {
+				if hp.Masked().Contains(w) {
+					blocked[w] = true
+				}
+			}
+		}
+	}
+
+	have := map[netip.Addr]bool{}   // 지워도 되는 aven 주소
+	legacy := map[netip.Addr]bool{} // 표시 없는 aven 모양 주소
+	mark := map[netip.Addr]bool{}   // 원하는 주소인데 표시가 없거나 preferred가 살아 있다: replace로 맞춘다
+	for _, h := range all {
+		if h.Iface != iface {
+			continue
+		}
 		a, err := netip.ParseAddr(h.Addr)
 		if err != nil || !pool.Contains(a) {
 			continue // 풀 밖: 절대 건드리지 않는다
 		}
-		if h.Bits == 128 && h.Deprecated {
+		switch {
+		case protected[a]:
+			res.Foreign = append(res.Foreign, fmt.Sprintf("%s/%d", a, h.Bits))
+		case h.Bits == 128 && h.Aven:
 			have[a] = true
-			continue
-		}
-		if h.Bits == 128 && wantSet[a] {
+			if !h.Deprecated && wantSet[a] {
+				mark[a] = true
+			}
+		case h.managedShape():
+			legacy[a] = true
+		case h.Bits == 128 && wantSet[a]:
 			// 원하는 주소인데 preferred가 살아 있다(운영자가 직접 붙인 것일 수 있다): 지우지 않고 replace로 deprecated로 맞춘다.
-			continue
+			have[a] = true
+			mark[a] = true
+		default:
+			blocked[a] = true
+			shared = true
+			res.Foreign = append(res.Foreign, fmt.Sprintf("%s/%d", a, h.Bits))
 		}
-		res.Foreign = append(res.Foreign, fmt.Sprintf("%s/%d", a, h.Bits))
+	}
+	for a := range legacy {
+		switch {
+		case wantSet[a] && !blocked[a]:
+			have[a] = true
+			mark[a] = true
+		case !shared && !wantSet[a]:
+			have[a] = true // 전용 풀의 옛 aven 주소
+		default:
+			res.Foreign = append(res.Foreign, a.String()+"/128")
+		}
 	}
 	sort.Strings(res.Foreign)
+	for a := range wantSet {
+		if blocked[a] {
+			errs = append(errs, fmt.Errorf("address %s is already used on this node; not attaching it", a))
+		}
+	}
 
-	var errs []error
 	var del []netip.Addr
 	for a := range have {
-		if !wantSet[a] {
+		if !wantSet[a] && !blocked[a] {
 			del = append(del, a)
 		}
 	}
@@ -330,38 +404,68 @@ func IPv6Ensure(ctx context.Context, r IPRunner, iface string, pool netip.Prefix
 	}
 	add := make([]netip.Addr, 0, len(wantSet))
 	for a := range wantSet {
-		if !have[a] {
+		if !blocked[a] && (!have[a] || mark[a]) {
 			add = append(add, a)
 		}
 	}
 	sort.Slice(add, func(i, j int) bool { return add[i].Less(add[j]) })
 	for _, a := range add {
-		if _, err := r.Run(ctx, IPv6AddArgs(a, iface)...); err != nil {
+		_, err := r.Run(ctx, IPv6AddArgs(a, iface)...)
+		if err != nil {
+			// 주소 protocol(proto)을 모르는 커널·iproute2: 표시 없이 붙인다.
+			if _, err2 := r.Run(ctx, ipv6AddArgsNoProto(a, iface)...); err2 == nil {
+				err = nil
+			}
+		}
+		if err != nil {
 			errs = append(errs, fmt.Errorf("add %s: %w", a, err))
 			continue
 		}
-		res.Added++
+		if !have[a] {
+			res.Added++
+		}
 		have[a] = true
 	}
 	for a := range wantSet {
-		if have[a] {
+		if have[a] && !blocked[a] {
 			res.Present++
 		}
 	}
 	return res, errors.Join(errs...)
 }
 
-// IPv6AddArgs는 주소 하나를 붙이는 ip 인자다(deprecated, DAD 없이, 만료 없음).
+// IPv6AddArgs는 주소 하나를 붙이는 ip 인자다(deprecated, DAD 없이, 만료 없음, aven 표시).
 func IPv6AddArgs(a netip.Addr, iface string) []string {
+	return append(ipv6AddArgsNoProto(a, iface), "proto", AddrProto)
+}
+
+func ipv6AddArgsNoProto(a netip.Addr, iface string) []string {
 	return []string{"-6", "addr", "replace", a.String() + "/128", "dev", iface, "preferred_lft", "0", "valid_lft", "forever", "nodad"}
 }
 
-// CheckIPv6PoolOnHost는 pool을 이 호스트에 써도 되는지 본다: 호스트의 주소(host) 가운데 pool 안에 있는 것은 managed(aven이 배정한
-// 주소)뿐이어야 하고, /64보다 작은 호스트 서브넷(예: wg0의 /112)과 겹치면 안 된다. protect(기본 공인 주소)를 담아도 안 된다.
-func CheckIPv6PoolOnHost(pool netip.Prefix, host []HostIPv6Addr, managed map[netip.Addr]bool, protect []netip.Addr) error {
+// CheckIPv6PoolOnHost는 pool을 이 호스트에 써도 되는지 본다. 풀은 기본 IPv6나 이미 쓰는 주소를 담아도 되지만(그 주소는 배정에서
+// 건너뛴다), 풀 전체가 /64보다 작은 호스트 서브넷(예: wg0의 /112) 안에 들어가면 안 된다.
+func CheckIPv6PoolOnHost(pool netip.Prefix, host []HostIPv6Addr) error {
+	for _, h := range host {
+		hp, ok := h.Prefix()
+		if !ok || h.Bits <= IPv6PoolMinBits || h.Bits >= 128 {
+			continue
+		}
+		if hp.Masked().Contains(pool.Addr()) && pool.Bits() >= h.Bits {
+			return fmt.Errorf("IPv6 풀 %s가 이 노드의 서브넷 %s(%s) 안에 있습니다", pool, hp.Masked(), h.Iface)
+		}
+	}
+	return nil
+}
+
+// IPv6Reservation은 pool에서 도메인에 배정하면 안 되는 주소다: protect(기본 IPv6), 호스트에 이미 있는 aven 것이 아닌 주소
+// (managed = 지금 도메인에 배정된 주소는 aven 것으로 본다), 풀과 겹치는 /64보다 작은 호스트 서브넷.
+func IPv6Reservation(pool netip.Prefix, host []HostIPv6Addr, managed map[netip.Addr]bool, protect []netip.Addr) (map[netip.Addr]bool, []netip.Prefix) {
+	addrs := map[netip.Addr]bool{}
+	var prefixes []netip.Prefix
 	for _, p := range protect {
 		if p.IsValid() && pool.Contains(p) {
-			return fmt.Errorf("IPv6 풀 %s에 노드의 기본 IPv6 주소 %s가 들어 있습니다", pool, p)
+			addrs[p] = true
 		}
 	}
 	for _, h := range host {
@@ -370,17 +474,15 @@ func CheckIPv6PoolOnHost(pool netip.Prefix, host []HostIPv6Addr, managed map[net
 			continue
 		}
 		a := hp.Addr()
-		if pool.Contains(a) {
-			if h.Bits == 128 && managed[a] {
-				continue
-			}
-			return fmt.Errorf("IPv6 풀 %s에 이 노드가 이미 쓰는 주소 %s/%d(%s)가 들어 있습니다", pool, a, h.Bits, h.Iface)
+		if h.Bits > IPv6PoolMinBits && h.Bits < 128 && hp.Masked().Overlaps(pool) {
+			prefixes = append(prefixes, hp.Masked())
 		}
-		if h.Bits > 64 && hp.Masked().Overlaps(pool) {
-			return fmt.Errorf("IPv6 풀 %s가 이 노드의 서브넷 %s(%s)와 겹칩니다", pool, hp.Masked(), h.Iface)
+		if !pool.Contains(a) || managed[a] || (h.Bits == 128 && h.Aven) {
+			continue
 		}
+		addrs[a] = true
 	}
-	return nil
+	return addrs, prefixes
 }
 
 func isRoot() bool { return os.Geteuid() == 0 }

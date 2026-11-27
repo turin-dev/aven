@@ -47,7 +47,7 @@ const en: Record<string, string> = {
   "TCP 프록시 호스트": "TCP proxy host",
   "TCP 프록시 접속 주소의 호스트입니다. 비우면 기존 방식으로 정합니다.": "The host of the TCP proxy connection address. If empty, it is determined the existing way.",
   "IPv6 풀": "IPv6 pool",
-  "도메인마다 이 대역에서 전용 공개 IPv6(/128)를 하나씩 배정해 노드 인터페이스에 붙입니다. /64 ~ /120, 노드의 기본 IPv6와 겹치면 안 됩니다. 비우면 모든 도메인이 노드 기본 IPv6를 같이 씁니다.": "Each domain gets its own dedicated public IPv6 (/128) from this range, attached to the node interface. /64 to /120, and it must not overlap the node's default IPv6. If empty, all domains share the node's default IPv6.",
+  "도메인마다 이 대역에서 전용 공개 IPv6(/128)를 하나씩 배정해 노드 인터페이스에 붙입니다. /64 ~ /120이고, 받은 /64 전체처럼 노드 기본 IPv6나 이미 쓰는 주소가 들어 있어도 됩니다(그 주소는 건너뜁니다). 비우면 모든 도메인이 노드 기본 IPv6를 같이 씁니다.": "Each domain gets its own dedicated public IPv6 (/128) from this range, attached to the node interface. /64 to /120; it may contain the node's default IPv6 or addresses already in use, such as the whole /64 you were given (those addresses are skipped). If empty, all domains share the node's default IPv6.",
   "로컬 노드는 서버 환경 변수(AVEN_INGRESS_MODE, AVEN_INGRESS_HOSTNAME, AVEN_TCP_PROXY_DOMAIN, AVEN_IPV6_POOL)가 있으면 그 값이 우선합니다.": "For the local node, the server environment variables (AVEN_INGRESS_MODE, AVEN_INGRESS_HOSTNAME, AVEN_TCP_PROXY_DOMAIN, AVEN_IPV6_POOL) take precedence when set.",
   "이 노드에서는 주소를 붙이지 못합니다: {reason}": "This node cannot attach addresses: {reason}",
   "지원하지 않음": "Not supported",

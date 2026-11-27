@@ -47,7 +47,7 @@ func TestIPv6EnsureOp(t *testing.T) {
 	if !res.Supported || res.Iface != "eth0" || res.Added != 1 {
 		t.Fatalf("%+v", res)
 	}
-	if len(ip.writes) != 1 || ip.writes[0] != "-6 addr replace 2001:db8:2:1::2/128 dev eth0 preferred_lft 0 valid_lft forever nodad" {
+	if len(ip.writes) != 1 || ip.writes[0] != "-6 addr replace 2001:db8:2:1::2/128 dev eth0 preferred_lft 0 valid_lft forever nodad proto 0xaa" {
 		t.Fatalf("writes: %v", ip.writes)
 	}
 
@@ -59,14 +59,14 @@ func TestIPv6EnsureOp(t *testing.T) {
 		t.Fatalf("iface override: %+v %v", out, err)
 	}
 
-	// 다시 검사: 풀 밖 주소, 틀린 풀, 노드 공인 주소를 담는 풀, 모르는 필드, 틀린 인터페이스.
+	// 다시 검사: 풀 밖 주소, 틀린 풀, 노드 공인 주소, 모르는 필드, 틀린 인터페이스.
 	ip.writes = nil
 	h.IPv6Iface = ""
 	for _, bad := range []string{
 		`{"pool":"2001:db8:2:1::/112","addresses":["2001:db8:2::9"]}`,
 		`{"pool":"2001:db8:2:1::/48","addresses":[]}`,
 		`{"pool":"fd00::/80","addresses":[]}`,
-		`{"pool":"2001:db8:2::/64","addresses":[]}`,
+		`{"pool":"2001:db8:2::/64","addresses":["2001:db8:2::"]}`,
 		`{"pool":"2001:db8:2:1::/112","addresses":[],"cmd":"rm -rf /"}`,
 		`{"iface":"eth0; reboot","pool":"2001:db8:2:1::/112","addresses":[]}`,
 	} {

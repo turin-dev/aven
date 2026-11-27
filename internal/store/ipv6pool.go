@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"net/netip"
-	"sort"
 	"strings"
 )
 
@@ -57,6 +56,30 @@ func (s *Store) ManagedIPv6s(ctx context.Context) (map[netip.Addr]string, error)
 	return out, rows.Err()
 }
 
+// IPv6Reserve는 풀 하나에서 배정하면 안 되는 주소다(노드의 기본 IPv6, 이미 쓰는 주소, 노드 서브넷).
+type IPv6Reserve struct {
+	Addrs    map[netip.Addr]bool
+	Prefixes []netip.Prefix
+	// NoNew면 새 주소를 배정하지 않는다(노드 주소를 확인하지 못해 무엇이 비었는지 모른다). 이미 배정된 주소는 그대로 둔다.
+	NoNew bool
+}
+
+// Has는 a가 예약된 주소인지다.
+func (r *IPv6Reserve) Has(a netip.Addr) bool {
+	if r == nil {
+		return false
+	}
+	if r.Addrs[a] {
+		return true
+	}
+	for _, p := range r.Prefixes {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // IPv6Assignment은 ReconcileDomainIPv6의 변경 하나다.
 type IPv6Assignment struct {
 	Host string
@@ -67,10 +90,11 @@ type IPv6Assignment struct {
 // ReconcileDomainIPv6은 한 트랜잭션에서 domain_states의 ipv6를 want(호스트 → 그 호스트를 서비스하는 노드의 풀)에 맞춘다.
 //   - want에 없는 호스트(풀이 없는 노드)와 주소가 풀 밖인 호스트(다른 노드로 옮겨 감, 풀이 바뀜)는 주소를 푼다.
 //   - 주소가 없는 호스트는 풀에서 가장 낮은 빈 주소(네트워크 주소와 ::1 제외)를 받는다. 순서는 created_at, host 순이다.
-//   - 이미 풀 안의 주소를 가진 호스트는 그대로 둔다(주소가 바뀌지 않는다).
+//   - 이미 풀 안의 주소를 가진 호스트는 그대로 둔다(주소가 바뀌지 않는다). 그 주소가 예약(reserve)되었으면 다시 배정한다.
+//   - reserve는 풀마다 건너뛸 주소다(nil이면 없음).
 //
 // 풀이 가득 차면 그 호스트는 주소 없이 남는다(다음 호출에서 다시 시도한다). 바뀐 항목을 돌려준다.
-func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.Prefix) ([]IPv6Assignment, error) {
+func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.Prefix, reserve map[netip.Prefix]*IPv6Reserve) ([]IPv6Assignment, error) {
 	var changes []IPv6Assignment
 	err := s.Tx(ctx, func(tx *Store) error {
 		changes = nil
@@ -98,7 +122,7 @@ func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.P
 		for _, r := range all {
 			pool, ok := want[r.host]
 			cur, perr := netip.ParseAddr(r.ipv6)
-			keep := r.ipv6 != "" && perr == nil && ok && pool.Contains(cur) && cur != pool.Addr() && !used[cur]
+			keep := r.ipv6 != "" && perr == nil && ok && pool.Contains(cur) && cur != pool.Addr() && !used[cur] && !reserve[pool].Has(cur)
 			if keep {
 				used[cur] = true
 				continue
@@ -117,7 +141,11 @@ func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.P
 		}
 		for _, r := range need {
 			pool := want[r.host]
-			a, ok := nextFreeIPv6(pool, used)
+			var a netip.Addr
+			ok := false
+			if rs := reserve[pool]; rs == nil || !rs.NoNew {
+				a, ok = nextFreeIPv6(pool, used, rs)
+			}
 			if !ok {
 				if r.ipv6 != "" {
 					changes = append(changes, IPv6Assignment{Host: r.host, Old: r.ipv6})
@@ -135,30 +163,36 @@ func (s *Store) ReconcileDomainIPv6(ctx context.Context, want map[string]netip.P
 	return changes, err
 }
 
-// nextFreeIPv6은 pool에서 used에 없는 가장 낮은 주소다(네트워크 주소와 ::1은 건너뛴다).
-func nextFreeIPv6(pool netip.Prefix, used map[netip.Addr]bool) (netip.Addr, bool) {
-	// 풀 안의 사용 중 주소만 정렬해서 훑는다(풀이 커도 배정된 수만큼만 돈다).
-	var in []netip.Addr
-	for a := range used {
-		if pool.Contains(a) {
-			in = append(in, a)
-		}
-	}
-	sort.Slice(in, func(i, j int) bool { return in[i].Less(in[j]) })
+// nextFreeIPv6은 pool에서 used와 rs(예약)에 없는 가장 낮은 주소다(네트워크 주소와 ::1은 건너뛴다).
+func nextFreeIPv6(pool netip.Prefix, used map[netip.Addr]bool, rs *IPv6Reserve) (netip.Addr, bool) {
 	cand := pool.Addr().Next().Next() // 네트워크 주소, ::1 건너뛰기
-	for _, a := range in {
-		if a.Less(cand) {
-			continue
+	for cand.IsValid() && pool.Contains(cand) {
+		if !used[cand] && !rs.Has(cand) {
+			return cand, true
 		}
-		if a != cand {
-			break
+		// 예약 서브넷 안이면 그 끝 다음으로 건너뛴다.
+		next := cand.Next()
+		if rs != nil {
+			for _, p := range rs.Prefixes {
+				if p.Contains(cand) {
+					if end := lastAddr(p).Next(); end.IsValid() && next.Less(end) {
+						next = end
+					}
+				}
+			}
 		}
-		cand = cand.Next()
+		cand = next
 	}
-	if !cand.IsValid() || !pool.Contains(cand) {
-		return netip.Addr{}, false
+	return netip.Addr{}, false
+}
+
+// lastAddr는 p의 마지막 주소다.
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().As16()
+	for i := p.Bits(); i < 128; i++ {
+		b[i/8] |= 1 << (7 - uint(i%8))
 	}
-	return cand, true
+	return netip.AddrFrom16(b)
 }
 
 // DomainIPv6는 호스트에 배정된 주소다(없으면 "").

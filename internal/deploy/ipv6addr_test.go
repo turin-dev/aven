@@ -66,7 +66,7 @@ func (l *localIP) Run(_ context.Context, args ...string) (string, error) {
 	case strings.HasPrefix(line, "-j -6 addr show"):
 		ai := []string{`{"family":"inet6","local":"2001:db8:6b:1943::2","prefixlen":64,"scope":"global","preferred_life_time":4294967295}`}
 		for _, a := range l.extra {
-			ai = append(ai, fmt.Sprintf(`{"family":"inet6","local":%q,"prefixlen":128,"scope":"global","deprecated":true,"preferred_life_time":0}`, a))
+			ai = append(ai, fmt.Sprintf(`{"family":"inet6","local":%q,"prefixlen":128,"scope":"global","deprecated":true,"preferred_life_time":0,"protocol":"0xaa"}`, a))
 		}
 		return `[{"ifname":"eth0","addr_info":[` + strings.Join(ai, ",") + `]}]`, nil
 	case line == "-j -6 route show default":
@@ -213,19 +213,23 @@ func TestSyncDomainIPv6(t *testing.T) {
 		t.Fatal("node without a pool got ipv6.ensure")
 	}
 
-	// 풀 검증: 다른 노드 풀이나 기본 주소, 이미 쓰는 주소.
-	main, _ := node.ParseIPv6Pool("2001:db8:6b:1943::/120")
-	if err := m.CheckIPv6Pool(ctx, store.LocalNodeID, main); err == nil {
-		t.Fatal("pool containing ::2 accepted")
+	// 풀 검증: 기본 주소나 이미 쓰는 주소를 담는 공유 풀은 허용하고, 작은 서브넷 안의 풀은 거부한다.
+	main, _ := node.ParseIPv6Pool("2001:db8:6b:1943::/64")
+	if err := m.CheckIPv6Pool(ctx, store.LocalNodeID, main); err != nil {
+		t.Fatalf("shared pool containing ::2 rejected: %v", err)
 	}
 	cur, _ := node.ParseIPv6Pool("2001:db8:6b:1943:d::/80")
 	if err := m.CheckIPv6Pool(ctx, store.LocalNodeID, cur); err != nil {
 		t.Fatalf("pool with only aven addresses rejected: %v", err)
 	}
-	h.addrs = []node.HostIPv6Addr{{Iface: "eth0", Addr: "2001:db8:2:2::5", Bits: 128}}
+	h.addrs = []node.HostIPv6Addr{{Iface: "eth0", Addr: "2001:db8:2:2::5", Bits: 128}, {Iface: "wg0", Addr: "2001:db8:2:3::1", Bits: 112}}
 	other, _ := node.ParseIPv6Pool("2001:db8:2:2::/112")
-	if err := m.CheckIPv6Pool(ctx, us.ID, other); err == nil || !strings.Contains(err.Error(), "이미 쓰는 주소") {
+	if err := m.CheckIPv6Pool(ctx, us.ID, other); err != nil {
 		t.Fatalf("foreign address on remote: %v", err)
+	}
+	inner, _ := node.ParseIPv6Pool("2001:db8:2:3::/120")
+	if err := m.CheckIPv6Pool(ctx, us.ID, inner); err == nil || !strings.Contains(err.Error(), "서브넷") {
+		t.Fatalf("pool inside a remote subnet: %v", err)
 	}
 
 	// 예전 풀 거두기: 로컬 풀을 지운 뒤 남은 aven 주소를 모두 지운다(풀 밖 주소는 그대로).

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestDomainIPv6AllocationOrderAndStability(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	ipv6Instance(t, st, p, env, "b", "b.example.com", "c.example.com")
 	pool := "2001:db8:6b:1943:d::/80"
-	ch, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"))
+	ch, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +54,7 @@ func TestDomainIPv6AllocationOrderAndStability(t *testing.T) {
 		}
 	}
 	// 다시 맞춰도 바뀌지 않는다.
-	ch, err = st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"))
+	ch, err = st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"), nil)
 	if err != nil || len(ch) != 0 {
 		t.Fatalf("second reconcile changed: %+v %v", ch, err)
 	}
@@ -70,7 +71,7 @@ func TestDomainIPv6ReleaseAndReuseLowest(t *testing.T) {
 	ipv6Instance(t, st, p, env, "b", "b.example.com")
 	pool := "2a01:db8:1::/120"
 	hosts := []string{"a.example.com", "x.example.com", "b.example.com"}
-	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, hosts...)); err != nil {
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, hosts...), nil); err != nil {
 		t.Fatal(err)
 	}
 	x := st.DomainIPv6(ctx, "x.example.com")
@@ -88,7 +89,7 @@ func TestDomainIPv6ReleaseAndReuseLowest(t *testing.T) {
 	}
 	// 새 도메인은 비어 있는 가장 낮은 주소(풀린 ::3)를 받는다.
 	ipv6Instance(t, st, p, env, "c", "c.example.com")
-	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com")); err != nil {
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := st.DomainIPv6(ctx, "c.example.com"); got != "2a01:db8:1::3" {
@@ -102,11 +103,11 @@ func TestDomainIPv6MoveAndPoolRemoval(t *testing.T) {
 	ipv6Instance(t, st, p, env, "a", "a.example.com")
 	ipv6Instance(t, st, p, env, "b", "b.example.com")
 	main, us := netip.MustParsePrefix("2001:db8:6b:1943:d::/80"), netip.MustParsePrefix("2001:db8:2:1::/112")
-	if _, err := st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main, "b.example.com": main}); err != nil {
+	if _, err := st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main, "b.example.com": main}, nil); err != nil {
 		t.Fatal(err)
 	}
 	// b가 us 노드로 옮겨 가면 us 풀에서 다시 받는다. a는 그대로다.
-	ch, err := st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main, "b.example.com": us})
+	ch, err := st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main, "b.example.com": us}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestDomainIPv6MoveAndPoolRemoval(t *testing.T) {
 		t.Fatal("a changed")
 	}
 	// 풀이 없는 노드(want에 없음)면 주소를 푼다.
-	ch, err = st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main})
+	ch, err = st.ReconcileDomainIPv6(ctx, map[string]netip.Prefix{"a.example.com": main}, nil)
 	if err != nil || len(ch) != 1 || ch[0].New != "" {
 		t.Fatalf("removal: %+v %v", ch, err)
 	}
@@ -134,7 +135,7 @@ func TestDomainIPv6RenameKeepsAddressAndPoolFull(t *testing.T) {
 	ipv6Instance(t, st, p, env, "c", "c.example.com")
 	// /126: 주소 4개 중 네트워크 주소, ::1을 빼면 두 개만 배정할 수 있다.
 	pool := "2a01:db8:2::/126"
-	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com")); err != nil {
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, "a.example.com", "b.example.com", "c.example.com"), nil); err != nil {
 		t.Fatal(err)
 	}
 	if st.DomainIPv6(ctx, "c.example.com") != "" {
@@ -166,7 +167,7 @@ func TestDomainIPv6ConcurrentUnique(t *testing.T) {
 		go func(g int) {
 			defer wg.Done()
 			// 도메인 추가, 백그라운드 루프, agent 재연결이 동시에 맞춰도 주소가 겹치지 않아야 한다.
-			if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, hosts...)); err != nil {
+			if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool, hosts...), nil); err != nil {
 				errs <- err
 			}
 		}(g)
@@ -211,8 +212,45 @@ func TestNodeIPv6PoolColumn(t *testing.T) {
 func TestNextFreeIPv6(t *testing.T) {
 	p := netip.MustParsePrefix("2a01:db8::/120")
 	used := map[netip.Addr]bool{netip.MustParseAddr("2a01:db8::2"): true, netip.MustParseAddr("2a01:db8::4"): true, netip.MustParseAddr("2a01:db9::3"): true}
-	a, ok := nextFreeIPv6(p, used)
+	a, ok := nextFreeIPv6(p, used, nil)
 	if !ok || a.String() != "2a01:db8::3" {
 		t.Fatalf("got %v %v", a, ok)
+	}
+}
+
+// 공유 풀: 예약된 주소(기본 IPv6, 다른 서비스 주소)와 서브넷은 건너뛰고, 예약된 주소를 가진 도메인은 다시 배정한다.
+func TestDomainIPv6Reserve(t *testing.T) {
+	ctx := context.Background()
+	st, _, p, env := domainTestStore(t)
+	ipv6Instance(t, st, p, env, "a", "a.example.com")
+	time.Sleep(2 * time.Millisecond)
+	ipv6Instance(t, st, p, env, "b", "b.example.com", "c.example.com")
+	pool := netip.MustParsePrefix("2a01:db8::/64")
+	rs := &IPv6Reserve{
+		Addrs:    map[netip.Addr]bool{netip.MustParseAddr("2a01:db8::2"): true, netip.MustParseAddr("2a01:db8::4"): true},
+		Prefixes: []netip.Prefix{netip.MustParsePrefix("2a01:db8::6/127")},
+	}
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool.String(), "a.example.com", "b.example.com", "c.example.com"), map[netip.Prefix]*IPv6Reserve{pool: rs}); err != nil {
+		t.Fatal(err)
+	}
+	got := []string{st.DomainIPv6(ctx, "a.example.com"), st.DomainIPv6(ctx, "b.example.com"), st.DomainIPv6(ctx, "c.example.com")}
+	if strings.Join(got, " ") != "2a01:db8::3 2a01:db8::5 2a01:db8::8" {
+		t.Fatalf("got %v", got)
+	}
+	// ::3이 예약되면 a는 새 주소를 받는다. NoNew면 새 배정을 하지 않지만 예약되지 않은 주소는 그대로 둔다.
+	rs.Addrs[netip.MustParseAddr("2a01:db8::3")] = true
+	rs.NoNew = true
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool.String(), "a.example.com", "b.example.com", "c.example.com"), map[netip.Prefix]*IPv6Reserve{pool: rs}); err != nil {
+		t.Fatal(err)
+	}
+	if a, b := st.DomainIPv6(ctx, "a.example.com"), st.DomainIPv6(ctx, "b.example.com"); a != "" || b != "2a01:db8::5" {
+		t.Fatalf("no-new: %q %q", a, b)
+	}
+	rs.NoNew = false
+	if _, err := st.ReconcileDomainIPv6(ctx, wantAll(pool.String(), "a.example.com", "b.example.com", "c.example.com"), map[netip.Prefix]*IPv6Reserve{pool: rs}); err != nil {
+		t.Fatal(err)
+	}
+	if a := st.DomainIPv6(ctx, "a.example.com"); a != "2a01:db8::9" {
+		t.Fatalf("reassigned: %q", a)
 	}
 }

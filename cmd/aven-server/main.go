@@ -360,10 +360,10 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 	}
 	// 도메인별 공개 IPv6: AVEN_IPV6_POOL(CIDR, /64~/120)이 있으면 로컬 노드 풀로 쓴다(PATCH /api/nodes/node_local 값보다 우선).
 	if v := strings.TrimSpace(compat.Env("IPV6_POOL")); v != "" {
-		if _, err := node.ParseIPv6Pool(v); err != nil {
+		if p, err := node.ParseIPv6Pool(v); err != nil {
 			log.Warn(compat.Describe("IPV6_POOL")+" ignored", "err", err)
 		} else {
-			cfg.IPv6Pool = v
+			cfg.IPv6Pool = p.String()
 		}
 	}
 	// aven-server 자신의 공개 호스트: Windows는 비밀 헤더를 검사하는 전용 TCP listener, Linux는 Caddy 공유 볼륨의 unix socket으로 받는다.
