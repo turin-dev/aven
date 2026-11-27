@@ -64,6 +64,7 @@ export const qk = {
   ownerSessions: ["owner", "sessions"] as const,
   ownerTokens: ["owner", "tokens"] as const,
   avenBackups: ["owner", "backups"] as const,
+  cloudflare: ["owner", "cloudflare"] as const,
   workspaceResources: (wsid: ID) => ["workspace-resources", wsid] as const,
   members: (pid: ID) => ["members", pid] as const,
   audit: ["audit"] as const,

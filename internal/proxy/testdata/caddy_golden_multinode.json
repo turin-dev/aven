@@ -1,0 +1,745 @@
+{
+  "admin": {
+    "listen": "unix//run/aven/caddy-admin.sock|0600"
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "aven": {
+          "automatic_https": {
+            "skip_certificates": [
+              "*.pr.apps.example.com"
+            ]
+          },
+          "client_ip_headers": [
+            "X-Forwarded-For"
+          ],
+          "listen": [
+            ":443"
+          ],
+          "logs": {
+            "default_logger_name": "aven"
+          },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "aven-domain-check=6bfd88b2b8cdbce8a8a5abbf250241b3\nkeel-domain-check=6bfd88b2b8cdbce8a8a5abbf250241b3",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/aven/domain-check",
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-intra-eeee5555-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "intra.apps.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "aven-domain-check=ba8697614fcca5a7760e268c2086fd54\nkeel-domain-check=ba8697614fcca5a7760e268c2086fd54",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/aven/domain-check",
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-solo-dddd4444-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "solo.apps.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "aven-domain-check=d34f3f712eae2e159b1471924695e413\nkeel-domain-check=d34f3f712eae2e159b1471924695e413",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/aven/domain-check",
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-api-bbbb2222-1:8080"
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/api",
+                            "/api/*"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    },
+                    {
+                      "handle": [
+                        {
+                          "handler": "reverse_proxy",
+                          "stream_close_delay": "30m",
+                          "upstreams": [
+                            {
+                              "dial": "keel-web-aaaa1111-2:3000"
+                            }
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.apps.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "handle": [
+                        {
+                          "body": "aven-domain-check=6cbf0d7bbe30620c6b76ddb949b9d90a\nkeel-domain-check=6cbf0d7bbe30620c6b76ddb949b9d90a",
+                          "handler": "static_response",
+                          "headers": {
+                            "Cache-Control": [
+                              "no-store"
+                            ],
+                            "Content-Type": [
+                              "text/plain; charset=utf-8"
+                            ]
+                          },
+                          "status_code": 200
+                        }
+                      ],
+                      "match": [
+                        {
+                          "path": [
+                            "/.well-known/aven/domain-check",
+                            "/.well-known/keel/domain-check"
+                          ]
+                        }
+                      ],
+                      "terminal": true
+                    }
+                  ]
+                },
+                {
+                  "handler": "reverse_proxy",
+                  "stream_close_delay": "30m",
+                  "upstreams": [
+                    {
+                      "dial": "keel-pr-cccc3333-1:3000"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "*.pr.apps.example.com"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "not found",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ],
+              "terminal": true
+            }
+          ],
+          "trusted_proxies": {
+            "ranges": [
+              "173.245.48.0/20",
+              "103.21.244.0/22",
+              "103.22.200.0/22",
+              "103.31.4.0/22",
+              "141.101.64.0/18",
+              "108.162.192.0/18",
+              "190.93.240.0/20",
+              "188.114.96.0/20",
+              "197.234.240.0/22",
+              "198.41.128.0/17",
+              "162.158.0.0/15",
+              "104.16.0.0/13",
+              "104.24.0.0/14",
+              "172.64.0.0/13",
+              "131.0.72.0/22",
+              "2400:cb00::/32",
+              "2606:4700::/32",
+              "2803:f800::/32",
+              "2405:b500::/32",
+              "2405:8100::/32",
+              "2a06:98c0::/29",
+              "2c0f:f248::/32"
+            ],
+            "source": "static"
+          },
+          "trusted_proxies_strict": 1
+        },
+        "aven-http": {
+          "automatic_https": {
+            "disable": true
+          },
+          "client_ip_headers": [
+            "X-Forwarded-For"
+          ],
+          "listen": [
+            ":80"
+          ],
+          "logs": {
+            "default_logger_name": "aven"
+          },
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Aven-Acme-Via": [
+                          ",nod_seoul,"
+                        ]
+                      }
+                    }
+                  },
+                  "load_balancing": {
+                    "selection_policy": {
+                      "policy": "first"
+                    },
+                    "try_duration": "4s"
+                  },
+                  "transport": {
+                    "dial_timeout": "3s",
+                    "protocol": "http",
+                    "response_header_timeout": "20s"
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "198.51.100.3:80"
+                    },
+                    {
+                      "dial": "[2001:db8::3]:80"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "header": {
+                    "X-Aven-Acme-Via": null
+                  },
+                  "host": [
+                    "web.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Aven-Acme-Via": [
+                          "{http.request.header.X-Aven-Acme-Via}nod_seoul,"
+                        ]
+                      }
+                    }
+                  },
+                  "load_balancing": {
+                    "selection_policy": {
+                      "policy": "first"
+                    },
+                    "try_duration": "4s"
+                  },
+                  "transport": {
+                    "dial_timeout": "3s",
+                    "protocol": "http",
+                    "response_header_timeout": "20s"
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "198.51.100.3:80"
+                    },
+                    {
+                      "dial": "[2001:db8::3]:80"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "not": [
+                    {
+                      "header": {
+                        "X-Aven-Acme-Via": [
+                          "*,nod_tokyo,*"
+                        ]
+                      }
+                    },
+                    {
+                      "header": {
+                        "X-Aven-Acme-Via": [
+                          "*,nod_seoul,*"
+                        ]
+                      }
+                    }
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "not found",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "web.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Aven-Acme-Via": [
+                          ",nod_seoul,"
+                        ]
+                      }
+                    }
+                  },
+                  "load_balancing": {
+                    "selection_policy": {
+                      "policy": "first"
+                    },
+                    "try_duration": "4s"
+                  },
+                  "transport": {
+                    "dial_timeout": "3s",
+                    "protocol": "http",
+                    "response_header_timeout": "20s"
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "198.51.100.3:80"
+                    },
+                    {
+                      "dial": "[2001:db8::3]:80"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "header": {
+                    "X-Aven-Acme-Via": null
+                  },
+                  "host": [
+                    "*.pr.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "X-Aven-Acme-Via": [
+                          "{http.request.header.X-Aven-Acme-Via}nod_seoul,"
+                        ]
+                      }
+                    }
+                  },
+                  "load_balancing": {
+                    "selection_policy": {
+                      "policy": "first"
+                    },
+                    "try_duration": "4s"
+                  },
+                  "transport": {
+                    "dial_timeout": "3s",
+                    "protocol": "http",
+                    "response_header_timeout": "20s"
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "198.51.100.3:80"
+                    },
+                    {
+                      "dial": "[2001:db8::3]:80"
+                    }
+                  ]
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "*.pr.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "not": [
+                    {
+                      "header": {
+                        "X-Aven-Acme-Via": [
+                          "*,nod_tokyo,*"
+                        ]
+                      }
+                    },
+                    {
+                      "header": {
+                        "X-Aven-Acme-Via": [
+                          "*,nod_seoul,*"
+                        ]
+                      }
+                    }
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            },
+            {
+              "handle": [
+                {
+                  "body": "not found",
+                  "handler": "static_response",
+                  "status_code": 404
+                }
+              ],
+              "match": [
+                {
+                  "host": [
+                    "*.pr.apps.example.com"
+                  ],
+                  "method": [
+                    "GET"
+                  ],
+                  "path": [
+                    "/.well-known/acme-challenge/*"
+                  ]
+                }
+              ],
+              "terminal": true
+            }
+          ],
+          "trusted_proxies": {
+            "ranges": [
+              "173.245.48.0/20",
+              "103.21.244.0/22",
+              "103.22.200.0/22",
+              "103.31.4.0/22",
+              "141.101.64.0/18",
+              "108.162.192.0/18",
+              "190.93.240.0/20",
+              "188.114.96.0/20",
+              "197.234.240.0/22",
+              "198.41.128.0/17",
+              "162.158.0.0/15",
+              "104.16.0.0/13",
+              "104.24.0.0/14",
+              "172.64.0.0/13",
+              "131.0.72.0/22",
+              "2400:cb00::/32",
+              "2606:4700::/32",
+              "2803:f800::/32",
+              "2405:b500::/32",
+              "2405:8100::/32",
+              "2a06:98c0::/29",
+              "2c0f:f248::/32"
+            ],
+            "source": "static"
+          },
+          "trusted_proxies_strict": 1
+        },
+        "aven-tls-ask": {
+          "automatic_https": {
+            "disable": true
+          },
+          "listen": [
+            "127.0.0.1:5380"
+          ],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "headers": {
+                    "request": {
+                      "set": {
+                        "Host": [
+                          "aven-tls-ask.invalid"
+                        ]
+                      }
+                    }
+                  },
+                  "upstreams": [
+                    {
+                      "dial": "unix//run/aven/wake.sock"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "on_demand": {
+          "permission": {
+            "endpoint": "http://127.0.0.1:5380/api/internal/tls-ask",
+            "module": "http"
+          }
+        },
+        "policies": [
+          {
+            "issuers": [
+              {
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "solo.apps.example.com"
+            ]
+          },
+          {
+            "issuers": [
+              {
+                "challenges": {
+                  "tls-alpn": {
+                    "disabled": true
+                  }
+                },
+                "module": "acme"
+              }
+            ],
+            "subjects": [
+              "web.apps.example.com"
+            ]
+          },
+          {
+            "issuers": [
+              {
+                "module": "internal"
+              }
+            ],
+            "subjects": [
+              "intra.apps.example.com"
+            ]
+          },
+          {
+            "issuers": [
+              {
+                "challenges": {
+                  "tls-alpn": {
+                    "disabled": true
+                  }
+                },
+                "module": "acme"
+              }
+            ],
+            "on_demand": true,
+            "subjects": [
+              "*.pr.apps.example.com"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "logging": {
+    "logs": {
+      "access": {
+        "encoder": {
+          "format": "json"
+        },
+        "include": [
+          "http.log.access.aven"
+        ],
+        "writer": {
+          "output": "stdout"
+        }
+      },
+      "default": {
+        "exclude": [
+          "http.log.access.aven"
+        ]
+      }
+    }
+  }
+}

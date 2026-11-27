@@ -90,6 +90,8 @@ type Config struct {
 	SelfServiceID string
 	// SelfEnvFile은 aven-server 컨테이너에 넘길 env 파일(AVEN_SELF_ENV_FILE, 기본 compat.DefaultEnvFile: 예전 설치는 /etc/keel)이다.
 	SelfEnvFile string
+	// CloudflareAPI는 Cloudflare API 주소다(AVEN_CLOUDFLARE_API_URL, 비우면 https://api.cloudflare.com/client/v4).
+	CloudflareAPI string
 }
 
 type Manager struct {
@@ -154,6 +156,7 @@ type Manager struct {
 	meshKick    coalescer         // syncMeshAsync: 전체 mesh 동기화를 몰아서 한 번씩
 	egressKick  coalescer         // syncEgressAsync: 전체 egress 동기화를 몰아서 한 번씩
 	ipv6St      ipv6State         // 도메인별 공개 IPv6 반영 상태(ipv6addr.go)
+	cfSt        cloudflareState   // Cloudflare 연동(cloudflare.go)
 
 	// 테스트용: localDrv가 있으면 로컬 노드 드라이버 대신 쓰고, localProxy가 있으면 로컬 keel-proxy 대신 라우트를 넘긴다.
 	localDrv   Driver

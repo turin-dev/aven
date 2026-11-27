@@ -353,6 +353,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		IPv6Iface:          strings.TrimSpace(compat.Env("IPV6_IFACE")),
 		SelfServiceID:      strings.TrimSpace(compat.Env("SELF_SERVICE")),
 		SelfEnvFile:        env("SELF_ENV_FILE", compat.DefaultEnvFile()),
+		CloudflareAPI:      strings.TrimSpace(compat.Env("CLOUDFLARE_API_URL")),
 	}
 	if runtime.GOOS == "windows" {
 		cfg.Mesh = "off"
@@ -412,6 +413,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 		}
 		_ = mgr.SyncEgressNode(rctx, nodeID) // 아웃바운드 IPv6 차단 규칙(재부팅이나 agent 교체 뒤 다시 맞춘다, 오류는 egress가 기록)
 		mgr.SyncDomainIPv6Async()            // 도메인별 IPv6 주소(재부팅이나 agent 교체 뒤 다시 붙인다)
+		mgr.SyncCloudflareAsync()            // 다시 연결된 노드를 Cloudflare 레코드·pool에 되돌린다
 	}
 	if err := mgr.Init(ctx); err != nil {
 		return fmt.Errorf("initialize deployments: %w", err)
@@ -425,6 +427,7 @@ func runWithContext(sigCtx context.Context, stopSignals context.CancelFunc, log 
 	goLoop(&bg, ctx, log, "reconcile", func() { mgr.ReconcileLoop(ctx, 30*time.Second) })
 	goLoop(&bg, ctx, log, "egress", func() { mgr.EgressLoop(ctx, 30*time.Second) })       // 아웃바운드 IPv6 차단 규칙(outbound_ipv6=false)을 컨테이너 주소에 맞춘다
 	goLoop(&bg, ctx, log, "domain-ipv6", func() { mgr.DomainIPv6Loop(ctx, time.Minute) }) // 도메인별 공개 IPv6(노드 풀이 있을 때만): 시작할 때, 도메인 변경 때, 60초마다
+	goLoop(&bg, ctx, log, "cloudflare", func() { mgr.CloudflareLoop(ctx, time.Minute) })  // Cloudflare 연동(어드민 → Owner · Cloudflare): 노드 상태 변화도 따라간다
 	// DNS 조회/연결(flow) 로그: 환경 bridge의 패킷 헤더를 관찰한다(CAP_NET_RAW 필요, AVEN_NETWORK_LOGS=off로 끈다).
 	if runtime.GOOS != "windows" && !strings.EqualFold(strings.TrimSpace(env("NETWORK_LOGS", "on")), "off") {
 		mgr.StartLocalNetworkLogs(ctx)

@@ -356,6 +356,7 @@ function LabelsNode({ node, onClose }: { node: AvenNode | null; onClose: () => v
     >
       <div className="space-y-3 pt-1">
         <p>{t("한 줄에 하나씩 키=값으로 적으세요. 노드를 구분하는 메모로 쓰입니다.")}</p>
+        <p className="text-xs text-gray-500">{tr("{key}는 Cloudflare Load Balancing이 가까운 노드를 고를 때 쓰는 위치입니다(위도,경도, 예: 37.57,126.98).", { key: <code className="font-mono">geo</code> })}</p>
         <Textarea mono rows={5} value={text} onChange={(e) => setText(e.target.value)} placeholder={"region=example-region\ndisk=nvme"} aria-label={t("라벨")} />
         {error ? <ErrorBox error={error} /> : null}
       </div>

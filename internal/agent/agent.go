@@ -886,6 +886,9 @@ func ValidateRoutesWith(routes []proxy.Route, external []string) error {
 		if r.CheckToken != "" && !checkTokenRe.MatchString(r.CheckToken) {
 			return errors.New("route domain check token is not allowed")
 		}
+		if r.ACMERelay != nil && !proxy.ValidACMERelay(r.ACMERelay) {
+			return errors.New("route ACME relay is not allowed (node IDs and public IP:80 addresses only)")
+		}
 	}
 	return nil
 }

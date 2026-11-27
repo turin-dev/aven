@@ -168,6 +168,7 @@ func (m *Manager) syncProxy(ctx context.Context) map[string]error {
 		}
 	}
 	m.decorateDomainRoutes(ctx, routes, kinds)
+	m.decorateACMERelay(ctx, routes) // 여러 노드가 서비스하는 호스트: 모르는 ACME HTTP-01 확인을 다음 노드로 넘긴다
 	m.HTTPLogs.SetHosts(hosts)
 	if m.localProxy != nil {
 		errs[store.LocalNodeID] = m.localProxy(ctx, routes[store.LocalNodeID])
@@ -183,6 +184,7 @@ func (m *Manager) syncProxy(ctx context.Context) map[string]error {
 		errs[n.ID] = m.applyRemoteProxy(rctx, n.ID, routes[n.ID])
 		cancel()
 	}
+	m.cloudflareRoutes(routes) // Cloudflare 연동: 바뀐 호스트·노드를 백그라운드로 반영한다
 	return errs
 }
 

@@ -25,5 +25,6 @@ import ui_auth from "./ov-ui-auth";
 import ui_settings from "./ov-ui-settings";
 import ui_admin from "./ov-ui-admin";
 import ui_pages from "./ov-ui-pages";
+import ui_cloudflare from "./ov-ui-cloudflare";
 
-export const EN: Record<string, string> = { ...common, ...g01, ...g02, ...g03, ...g04, ...g05, ...g06, ...g07, ...g08, ...g09, ...g10, ...g11, ...g12, ...g13, ...g14, ...ui_system, ...ui_canvas, ...ui_deployments, ...ui_vars_settings, ...ui_data, ...ui_networking, ...ui_shell, ...ui_auth, ...ui_settings, ...ui_admin, ...ui_pages };
+export const EN: Record<string, string> = { ...common, ...g01, ...g02, ...g03, ...g04, ...g05, ...g06, ...g07, ...g08, ...g09, ...g10, ...g11, ...g12, ...g13, ...g14, ...ui_system, ...ui_canvas, ...ui_deployments, ...ui_vars_settings, ...ui_data, ...ui_networking, ...ui_shell, ...ui_auth, ...ui_settings, ...ui_admin, ...ui_pages, ...ui_cloudflare };

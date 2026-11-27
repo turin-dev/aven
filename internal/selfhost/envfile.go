@@ -91,6 +91,7 @@ var ConfigKeys = []ConfigKey{
 	{Name: "AVEN_SELF_BRANCH", Group: "advanced"},
 	{Name: "AVEN_SELF_PROJECT", Group: "advanced"},
 	{Name: "AVEN_SELF_UPDATE_INTERVAL", Group: "advanced"},
+	{Name: "AVEN_CLOUDFLARE_API_URL", Group: "advanced"},
 
 	{Name: "AVEN_DATA", Group: "fixed", Fixed: true},
 	{Name: "AVEN_GATEWAY_SECRET_FILE", Group: "fixed", Fixed: true},
