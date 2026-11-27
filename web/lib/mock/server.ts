@@ -4760,15 +4760,15 @@ route("POST", "/projects/{pid}/environments/{eid}/compose/preview", (_, r) => {
 });
 
 // ── Cloudflare (owner) ───────────────────────────────────────────────
-const CF: { enabled: boolean; token: string; mode: CloudflareMode; proxied: boolean; zones: string[]; last: string | null } = {
-  enabled: false, token: "", mode: "auto", proxied: true, zones: [], last: null,
+const CF: { enabled: boolean; token: string; mode: CloudflareMode; proxied: boolean; wildcards: boolean; zones: string[]; last: string | null } = {
+  enabled: false, token: "", mode: "auto", proxied: false, wildcards: false, zones: [], last: null,
 };
 const CF_TOKEN_OK = /^[A-Za-z0-9_-]{20,}$/;
 function cfStatus(): CloudflareStatus {
   if (!CF.enabled) return { enabled: false, syncing: false, last_sync: null, load_balancing: "", changes: 0, zones: [], hosts: [], pools: [] };
   const lbOK = !CF.token.startsWith("free");
   const pub = (id: string) => { const n = NODES.find((x) => x.id === id); return !!n && !!(n.address.ipv4 || n.address.ipv6); };
-  const plan: [string, string[]][] = [["web.example.com", ["node_database", "node_local"]], ["api.example.com", ["node_local"]], ["*.pr.example.com", ["node_local"]], ["docs.example.com", ["node_local"]], ["files.example.com", ["node_remote"]]];
+  const plan: [string, string[]][] = [["web.example.com", ["node_database", "node_local"]], ["api.example.com", ["node_local"]], ["*.pr.example.com", ["node_local"]], ["docs.example.com", ["node_local"]], ["files.example.com", ["node_remote"]]].filter(([host]) => CF.wildcards || !host.startsWith("*."));
   const hosts: CloudflareHost[] = plan.map(([host, ids]) => {
     const nodes = ids.filter(pub);
     if (!nodes.length) return { host, zone: "example.com", mode: "skipped", nodes, reason: "no_public_node" };
@@ -4789,21 +4789,25 @@ function cfStatus(): CloudflareStatus {
   };
 }
 function cfView(): CloudflareSettingsT {
-  return { enabled: CF.enabled, has_token: !!CF.token, token_hint: CF.token ? "…" + CF.token.slice(-4) : "", mode: CF.mode, proxied: CF.proxied, zones: CF.zones, status: cfStatus() };
+  return { enabled: CF.enabled, has_token: !!CF.token, token_hint: CF.token ? "…" + CF.token.slice(-4) : "", mode: CF.mode, proxied: CF.proxied, wildcards: CF.wildcards, zones: CF.zones, status: cfStatus() };
 }
 route("GET", "/owner/cloudflare", () => { requireOwner(); return cfView(); });
 route("PUT", "/owner/cloudflare", (_p, r) => {
   requireOwner();
-  const b = (r.body ?? {}) as { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; zones?: string[] };
+  const b = (r.body ?? {}) as { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; wildcards?: boolean; zones?: string[] };
+  const next = { ...CF, zones: [...CF.zones] };
   if (b.token !== undefined) {
     if (b.token && !CF_TOKEN_OK.test(b.token)) throw new HttpError(400, "Cloudflare rejected the token: cloudflare: GET /user/tokens/verify: HTTP 401: Invalid API Token (1000)");
-    CF.token = b.token;
+    next.token = b.token;
   }
-  if (b.mode !== undefined) CF.mode = b.mode;
-  if (b.proxied !== undefined) CF.proxied = b.proxied;
-  if (b.zones !== undefined) CF.zones = b.zones.map((z) => z.toLowerCase().replace(/\.$/, ""));
-  if (b.enabled !== undefined) CF.enabled = b.enabled;
-  if (CF.enabled && !CF.token) throw new HttpError(400, "save an API token before turning the integration on");
+  if (b.mode !== undefined) next.mode = b.mode;
+  if (b.proxied !== undefined) next.proxied = b.proxied;
+  if (b.wildcards !== undefined) next.wildcards = b.wildcards;
+  if (b.zones !== undefined) next.zones = b.zones.map((z) => z.toLowerCase().replace(/\.$/, ""));
+  if (b.enabled !== undefined) next.enabled = b.enabled;
+  if (next.enabled && !next.token) throw new HttpError(400, "save an API token before turning the integration on");
+  if (next.enabled && next.zones.length === 0) throw new HttpError(400, "choose at least one zone to manage");
+  Object.assign(CF, next);
   CF.last = iso(now());
   return cfView();
 });

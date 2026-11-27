@@ -13,17 +13,20 @@ type CloudflareSettings struct {
 	Token string `json:"token"`
 	// Mode: auto(여러 노드 호스트는 Load Balancing, 쓸 수 없으면 DNS 레코드) | load_balancer | dns.
 	Mode string `json:"mode"`
-	// Proxied는 레코드·로드밸런서의 Cloudflare 프록시(주황 구름)다.
+	// Proxied는 레코드·로드밸런서의 Cloudflare 프록시(주황 구름)다. 기본은 꺼짐.
 	Proxied bool `json:"proxied"`
-	// Zones가 있으면 그 존(이름)만 관리한다. 비면 토큰이 볼 수 있는 모든 존.
+	// Wildcards는 소유가 확인된 와일드카드 호스트도 동기화할지다. 기본은 꺼짐.
+	Wildcards bool `json:"wildcards"`
+	// Zones는 관리할 존 이름이다. 비어 있으면 연동을 켜거나 동기화할 수 없다.
 	Zones []string `json:"zones"`
 }
 
 const cloudflareSettingKey = "cloudflare"
 
-// DefaultCloudflareSettings는 저장된 설정이 없을 때의 값이다(꺼짐, auto, 프록시 켬).
+// DefaultCloudflareSettings는 저장된 설정이 없을 때의 값이다(꺼짐, auto, 프록시 끔, 와일드카드 끔).
+// 존 목록이 비어 있으면 연동을 켜거나 동기화할 수 없다.
 func DefaultCloudflareSettings() CloudflareSettings {
-	return CloudflareSettings{Mode: "auto", Proxied: true, Zones: []string{}}
+	return CloudflareSettings{Mode: "auto", Proxied: false, Zones: []string{}}
 }
 
 func (s *Store) CloudflareSettings(ctx context.Context) (CloudflareSettings, error) {

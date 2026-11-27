@@ -26,6 +26,12 @@ import (
 //   - 와일드카드 호스트는 레코드로만 둔다.
 // Aven이 만든 것(comment/description이 "aven:managed <설치 ID>")만 바꾸고 지운다. 같은 이름의 다른 레코드나 로드밸런서가 있으면
 // 그 호스트는 건드리지 않고 상태에 conflict로 보인다. Cloudflare 터널 노드와 공인 주소가 없는 노드는 넣지 않는다.
+//
+// 동기화하는 호스트는 생성 도메인, 서버 자신의 공개 호스트, 또는 TXT·Cloudflare 토큰·legacy로 소유가 확인된 이름뿐이다.
+// DNS·HTTP 확인은 Aven이 만드는 A/AAAA(프록시를 켠 경우의 HTTP 프로브 포함)로도 통과하므로 쓰지 않는다.
+// 와일드카드는 설정에서 켠 뒤에, 그 소유 조건을 만족할 때만. 존 목록이 비어 있으면 동기화하지 않는다.
+// syncProxy가 한 번도 끝나지 않아 원하는 호스트를 모르면(hosts == nil) 아무것도 지우지 않는다.
+// 한 동기화가 관리 항목의 절반 이상이면서 5개 이상, 또는 10개를 넘게 지워야 하면 삭제를 건너뛰고 상태에 경고를 남긴다. 정리는 그대로 전부 지운다.
 
 // CloudflareHost는 호스트 하나의 동기화 결과다.
 type CloudflareHost struct {
@@ -64,17 +70,19 @@ type CloudflareStatus struct {
 	LastSync *time.Time `json:"last_sync"`
 	Error    string     `json:"error,omitempty"`
 	// LoadBalancing: "" (확인 전·쓰지 않음) | available | unavailable(구독이나 권한 없음, LoadBalancingError가 이유).
-	LoadBalancing      string           `json:"load_balancing"`
-	LoadBalancingError string           `json:"load_balancing_error,omitempty"`
-	Changes            int              `json:"changes"` // 마지막 동기화에서 만들고 바꾸고 지운 수
-	Zones              []CloudflareZone `json:"zones"`
-	Hosts              []CloudflareHost `json:"hosts"`
-	Pools              []CloudflarePool `json:"pools"`
+	LoadBalancing      string `json:"load_balancing"`
+	LoadBalancingError string `json:"load_balancing_error,omitempty"`
+	Changes            int    `json:"changes"` // 마지막 동기화에서 만들고 바꾸고 지운 수
+	// Warning은 동기화가 삭제를 안전 한도로 건너뛰었을 때의 안내다.
+	Warning string           `json:"warning,omitempty"`
+	Zones   []CloudflareZone `json:"zones"`
+	Hosts   []CloudflareHost `json:"hosts"`
+	Pools   []CloudflarePool `json:"pools"`
 }
 
 type cloudflareState struct {
 	mu     sync.Mutex
-	hosts  map[string][]string // 마지막 syncProxy의 호스트 → 라우트가 있는 노드
+	hosts  map[string][]string // nil이면 syncProxy가 아직 끝나지 않았다. 빈 맵은 라우트가 없는 성공한 결과다.
 	status CloudflareStatus
 	kick   coalescer
 	syncMu sync.Mutex
@@ -244,6 +252,11 @@ func (m *Manager) SyncCloudflare(ctx context.Context) error {
 	}
 	m.setCloudflareStatus(func(s *CloudflareStatus) { s.Enabled, s.Syncing = true, true })
 	res, err := m.syncCloudflare(ctx, cfg)
+	if errors.Is(err, errCloudflareRoutesUnknown) {
+		// 원하는 호스트를 아직 모른다. 상태를 성공한 빈 동기화로 바꾸지 않고, 지우지도 않는다.
+		m.setCloudflareStatus(func(s *CloudflareStatus) { s.Enabled, s.Syncing = true, false })
+		return nil
+	}
 	now := time.Now().UTC()
 	m.setCloudflareStatus(func(s *CloudflareStatus) {
 		*s = res
@@ -255,8 +268,46 @@ func (m *Manager) SyncCloudflare(ctx context.Context) error {
 	return err
 }
 
+// errCloudflareRoutesUnknown는 syncProxy가 아직 라우트를 만들지 않았다는 뜻이다. 삭제를 하면 안 된다.
+var errCloudflareRoutesUnknown = errors.New("cloudflare: proxy routes are not known yet")
+
+// 한 동기화가 지울 수 있는 관리 항목(레코드, 로드밸런서, pool, monitor)의 한도.
+// 호스트 하나의 로드밸런서와 pool은 그대로 지우고, 갑자기 비는 원하는 목록은 막는다.
+const (
+	cfMaxSyncDeletes  = 10
+	cfRatioMinDeletes = 5
+)
+
+func cfDeletionCapped(deleting, managed int) bool {
+	if deleting <= 0 {
+		return false
+	}
+	if deleting > cfMaxSyncDeletes {
+		return true
+	}
+	return managed > 0 && deleting >= cfRatioMinDeletes && deleting*2 > managed
+}
+
+// cfDelete는 이번 동기화에서 지울 관리 항목 하나다. zoneID는 레코드·로드밸런서, account는 pool·monitor.
+type cfDelete struct {
+	kind, id, name, zoneID, account string
+}
+
 func (m *Manager) syncCloudflare(ctx context.Context, cfg store.CloudflareSettings) (CloudflareStatus, error) {
 	out := CloudflareStatus{Zones: []CloudflareZone{}, Hosts: []CloudflareHost{}, Pools: []CloudflarePool{}}
+	m.cfSt.mu.Lock()
+	hostNodes := m.cfSt.hosts
+	m.cfSt.mu.Unlock()
+	if hostNodes == nil {
+		return out, errCloudflareRoutesUnknown
+	}
+	if len(cfg.Zones) == 0 {
+		return out, errors.New("choose at least one zone to manage")
+	}
+	kinds, states, err := m.cloudflareDomainIndex(ctx)
+	if err != nil {
+		return out, err
+	}
 	marker, inst, err := m.cloudflareMarker(ctx)
 	if err != nil {
 		return out, err
@@ -272,7 +323,7 @@ func (m *Manager) syncCloudflare(ctx context.Context, cfg store.CloudflareSettin
 		if z.Status != "" && z.Status != "active" {
 			continue
 		}
-		if len(cfg.Zones) > 0 && !slices.ContainsFunc(cfg.Zones, func(n string) bool { return strings.EqualFold(strings.TrimSuffix(n, "."), z.Name) }) {
+		if !slices.ContainsFunc(cfg.Zones, func(n string) bool { return strings.EqualFold(strings.TrimSuffix(n, "."), z.Name) }) {
 			continue
 		}
 		zones = append(zones, z)
@@ -284,9 +335,6 @@ func (m *Manager) syncCloudflare(ctx context.Context, cfg store.CloudflareSettin
 	for _, n := range m.publicNodes(ctx) {
 		nodes[n.ID] = n
 	}
-	m.cfSt.mu.Lock()
-	hostNodes := m.cfSt.hosts
-	m.cfSt.mu.Unlock()
 
 	// 계정별 Load Balancing 사용 가능 여부(pool 목록을 읽을 수 있는지)
 	accounts := map[string][]cloudflare.Pool{}
@@ -318,6 +366,9 @@ func (m *Manager) syncCloudflare(ctx context.Context, cfg store.CloudflareSettin
 	}
 	sort.Strings(names)
 	for _, h := range names {
+		if !cloudflareHostAllowed(h, kinds[h], m.Cfg.SelfHost, states[h], cfg.Wildcards) {
+			continue
+		}
 		z, ok := zoneFor(h, zones)
 		if !ok {
 			continue
@@ -379,18 +430,32 @@ func (m *Manager) syncCloudflare(ctx context.Context, cfg store.CloudflareSettin
 		}
 	}
 
-	// 존별 레코드와 로드밸런서
+	// 존별 레코드와 로드밸런서. 고아 항목은 모았다가 한도 안에서만 지운다.
+	var pending []cfDelete
+	managed := 0
 	for _, z := range zones {
 		zs := CloudflareZone{ID: z.ID, Name: z.Name, Account: z.Account.Name, Plan: z.Plan.Name}
-		ch, err := m.cfSyncZone(ctx, c, cfg, z, marker, plans, poolID[z.Account.ID], lbOK[z.Account.ID] == nil, &zs)
+		ch, extra, n, err := m.cfSyncZone(ctx, c, cfg, z, marker, plans, poolID[z.Account.ID], lbOK[z.Account.ID] == nil, &zs)
 		changes += ch
+		pending = append(pending, extra...)
+		managed += n
 		note(err)
 		out.Zones = append(out.Zones, zs)
 	}
 
-	// 쓰지 않게 된 pool과 monitor(로드밸런서를 지운 뒤에)
+	// 쓰지 않게 된 pool과 monitor(로드밸런서를 지운 뒤에 적용한다)
 	for a, pools := range accounts {
-		ch, err := m.cfCleanupPools(ctx, c, a, marker, inst, pools, poolID[a])
+		extra, n := m.cfPlanPoolCleanup(ctx, c, a, marker, pools, poolID[a])
+		pending = append(pending, extra...)
+		managed += n
+	}
+	if cfDeletionCapped(len(pending), managed) {
+		out.Warning = fmt.Sprintf("skipped deleting %d of %d managed Cloudflare items (safety cap: more than %d, or more than half of at least %d); use cleanup to remove them on purpose", len(pending), managed, cfMaxSyncDeletes, cfRatioMinDeletes)
+		if m.Log != nil {
+			m.Log.Warn("cloudflare sync skipped deletions", "deleting", len(pending), "managed", managed)
+		}
+	} else {
+		ch, err := m.cfApplyDeletes(ctx, c, pending)
 		changes += ch
 		note(err)
 	}
@@ -492,44 +557,130 @@ func samePool(a, b cloudflare.Pool) bool {
 }
 
 // cfCleanupPools는 이 설치가 만든 pool 중 지금 쓰지 않는 것과(pool이 남지 않으면) monitor를 지운다.
+// 명시적 정리가 부른다. 동기화는 cfPlanPoolCleanup으로 모아 한도를 본 뒤에 지운다.
 func (m *Manager) cfCleanupPools(ctx context.Context, c *cloudflare.Client, account, marker, inst string, pools []cloudflare.Pool, keep map[string]string) (int, error) {
-	changes := 0
-	var errs []error
+	pending, _ := m.cfPlanPoolCleanup(ctx, c, account, marker, pools, keep)
+	return m.cfApplyDeletes(ctx, c, pending)
+}
+
+// cfPlanPoolCleanup은 지울 pool·monitor와, 이 계정의 관리 항목 수를 돌려준다. API로 지우지는 않는다.
+func (m *Manager) cfPlanPoolCleanup(ctx context.Context, c *cloudflare.Client, account, marker string, pools []cloudflare.Pool, keep map[string]string) ([]cfDelete, int) {
 	kept := map[string]bool{}
 	for _, id := range keep {
 		kept[id] = true
 	}
+	var pending []cfDelete
+	managed := 0
 	for _, p := range pools {
-		if !strings.HasPrefix(p.Description, marker+" ") || kept[p.ID] {
+		if !strings.HasPrefix(p.Description, marker+" ") {
 			continue
 		}
-		if err := c.DeletePool(ctx, account, p.ID); err != nil {
-			errs = append(errs, fmt.Errorf("cloudflare pool %s: %w", p.Name, err))
+		managed++
+		if kept[p.ID] {
 			continue
 		}
-		changes++
+		pending = append(pending, cfDelete{kind: "pool", id: p.ID, name: p.Name, account: account})
 	}
 	if len(keep) == 0 {
 		monitors, err := c.Monitors(ctx, account)
 		if err == nil {
 			for _, mo := range monitors {
-				if mo.Description == marker {
-					if err := c.DeleteMonitor(ctx, account, mo.ID); err != nil {
-						errs = append(errs, fmt.Errorf("cloudflare monitor: %w", err))
-					} else {
-						changes++
-					}
+				if mo.Description != marker {
+					continue
 				}
+				managed++
+				pending = append(pending, cfDelete{kind: "monitor", id: mo.ID, name: "monitor", account: account})
 			}
 		}
 	}
+	return pending, managed
+}
+
+func (m *Manager) cfApplyDeletes(ctx context.Context, c *cloudflare.Client, pending []cfDelete) (int, error) {
+	changes := 0
+	var errs []error
+	for _, d := range pending {
+		var err error
+		switch d.kind {
+		case "record":
+			err = c.DeleteDNSRecord(ctx, d.zoneID, d.id)
+		case "lb":
+			err = c.DeleteLoadBalancer(ctx, d.zoneID, d.id)
+		case "pool":
+			err = c.DeletePool(ctx, d.account, d.id)
+		case "monitor":
+			err = c.DeleteMonitor(ctx, d.account, d.id)
+		default:
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("cloudflare delete %s %s: %w", d.kind, d.name, err))
+			continue
+		}
+		changes++
+	}
 	return changes, errors.Join(errs...)
+}
+
+// cloudflareDomainIndex는 호스트 → 도메인 종류와 소유 확인 상태다. 둘 중 하나를 못 읽으면 동기화를 멈추게 오류를 돌려준다.
+func (m *Manager) cloudflareDomainIndex(ctx context.Context) (map[string]string, map[string]*store.DomainState, error) {
+	kinds := map[string]string{}
+	insts, err := m.Store.ListInstances(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, in := range insts {
+		for _, d := range in.Domains {
+			h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d.Host), "."))
+			if h != "" {
+				kinds[h] = d.Kind
+			}
+		}
+	}
+	list, err := m.Store.ListDomainStates(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	states := map[string]*store.DomainState{}
+	for _, st := range list {
+		states[st.Host] = st
+	}
+	return kinds, states, nil
+}
+
+// cloudflareHostAllowed는 이 호스트의 DNS를 Cloudflare에 만들어도 되는지다.
+// 생성 도메인과 서버 자신의 공개 호스트, TXT·Cloudflare 토큰·legacy로 확인된 이름만 허용한다.
+// DNS·HTTP 확인은 Aven이 쓰는 A/AAAA로도 만족되므로 제외한다. 와일드카드는 설정을 켠 경우에만.
+func cloudflareHostAllowed(host, kind, self string, st *store.DomainState, wildcards bool) bool {
+	if strings.HasPrefix(host, "*.") && !wildcards {
+		return false
+	}
+	if kind == "generated" {
+		return true
+	}
+	if self != "" && strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(self), "."), host) {
+		return true
+	}
+	return independentDomainOwner(st)
+}
+
+// independentDomainOwner는 확인 방법이 Aven이 만드는 주소 레코드와 무관한지다.
+func independentDomainOwner(st *store.DomainState) bool {
+	if st == nil || !st.Verified() {
+		return false
+	}
+	switch st.VerifyMethod {
+	case store.VerifyTXT, store.VerifyCloudflare, store.VerifyLegacy:
+		return true
+	default:
+		return false
+	}
 }
 
 func isAddrRecord(t string) bool { return t == "A" || t == "AAAA" || t == "CNAME" }
 
 // cfSyncZone은 존 하나의 레코드와 로드밸런서를 계획에 맞춘다.
-func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg store.CloudflareSettings, z cloudflare.Zone, marker string, plans []*cfPlan, pools map[string]string, lbAvailable bool, zs *CloudflareZone) (int, error) {
+func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg store.CloudflareSettings, z cloudflare.Zone, marker string, plans []*cfPlan, pools map[string]string, lbAvailable bool, zs *CloudflareZone) (changes int, pending []cfDelete, managed int, err error) {
 	records, err := c.DNSRecords(ctx, z.ID)
 	if err != nil {
 		for _, p := range plans {
@@ -537,7 +688,7 @@ func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg stor
 				p.mode, p.res.Error = "skipped", err.Error()
 			}
 		}
-		return 0, fmt.Errorf("cloudflare %s records: %w", z.Name, err)
+		return 0, nil, 0, fmt.Errorf("cloudflare %s records: %w", z.Name, err)
 	}
 	var lbs []cloudflare.LoadBalancer
 	if lbAvailable {
@@ -554,7 +705,6 @@ func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg stor
 	for _, lb := range lbs {
 		lbByName[strings.ToLower(lb.Name)] = lb
 	}
-	changes := 0
 	var errs []error
 	desired := map[string]bool{}
 	ttl := 60
@@ -600,26 +750,24 @@ func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg stor
 		}
 	}
 	for _, r := range records {
+		if r.Comment == marker {
+			managed++
+		}
 		n := strings.ToLower(r.Name)
 		if r.Comment != marker || desired[n] || skipped[n] {
 			continue
 		}
-		if err := c.DeleteDNSRecord(ctx, z.ID, r.ID); err != nil {
-			errs = append(errs, fmt.Errorf("cloudflare %s: delete %s %s: %w", z.Name, r.Type, r.Name, err))
-		} else {
-			changes++
-		}
+		pending = append(pending, cfDelete{kind: "record", id: r.ID, name: r.Type + " " + r.Name, zoneID: z.ID})
 	}
 	for _, lb := range lbs {
+		if lb.Description == marker {
+			managed++
+		}
 		n := strings.ToLower(lb.Name)
 		if lb.Description != marker || desired[n] || skipped[n] {
 			continue
 		}
-		if err := c.DeleteLoadBalancer(ctx, z.ID, lb.ID); err != nil {
-			errs = append(errs, fmt.Errorf("cloudflare %s: delete load balancer %s: %w", z.Name, lb.Name, err))
-		} else {
-			changes++
-		}
+		pending = append(pending, cfDelete{kind: "lb", id: lb.ID, name: lb.Name, zoneID: z.ID})
 	}
 	// 존 요약(동기화 뒤 우리 것)
 	for _, p := range plans {
@@ -631,7 +779,7 @@ func (m *Manager) cfSyncZone(ctx context.Context, c *cloudflare.Client, cfg stor
 			}
 		}
 	}
-	return changes, errors.Join(errs...)
+	return changes, pending, managed, errors.Join(errs...)
 }
 
 // cfWantRecords는 레코드 모드 호스트의 A/AAAA다: 연결된 노드(없으면 전부)의 주소.

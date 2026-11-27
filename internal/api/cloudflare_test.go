@@ -29,11 +29,14 @@ func TestCloudflareSettingsAPI(t *testing.T) {
 		}
 	}
 	v := decodeBody[map[string]any](t, req(h, "GET", "/api/owner/cloudflare", "", ownerC))
-	if v["enabled"] != false || v["has_token"] != false || v["mode"] != "auto" || v["proxied"] != true {
+	if v["enabled"] != false || v["has_token"] != false || v["mode"] != "auto" || v["proxied"] != false || v["wildcards"] != false {
 		t.Fatalf("defaults %v", v)
 	}
 	if w := req(h, "PUT", "/api/owner/cloudflare", `{"enabled":true}`, ownerC); w.Code != 400 {
 		t.Fatalf("enable without token: %d", w.Code)
+	}
+	if w := req(h, "PUT", "/api/owner/cloudflare", `{"token":"good-token-1234567890","enabled":true}`, ownerC); w.Code != 400 || !strings.Contains(w.Body.String(), "zone") {
+		t.Fatalf("enable without zones: %d %s", w.Code, w.Body)
 	}
 	if w := req(h, "PUT", "/api/owner/cloudflare", `{"token":"wrong-token-xxxxxxxx"}`, ownerC); w.Code != 400 || !strings.Contains(w.Body.String(), "rejected") {
 		t.Fatalf("bad token: %d %s", w.Code, w.Body)

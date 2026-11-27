@@ -10,11 +10,12 @@ import (
 )
 
 // decorateACMERelay는 여러 노드가 서비스하는 호스트의 라우트에 ACME relay(다음 노드)를 채운다(proxy/acmerelay.go).
-// 고리는 그 호스트를 서비스하고, 연결돼 있고, 공인 주소가 있는 노드를 ID 순서로 놓은 것이다. 노드가 하나뿐이면 relay가 없다.
+// 고리는 그 호스트를 서비스하고, 연결돼 있고, 공인 주소가 있고, ACMERelay 필드를 받는 노드를 ID 순서로 놓은 것이다.
+// 옛 agent(noRelay)는 고리에서 빼서, 남은 노드끼리만 넘긴다. 노드가 하나뿐이면 relay가 없다.
 func (m *Manager) decorateACMERelay(ctx context.Context, routes map[string][]proxy.Route) {
 	byID := map[string]publicNode{}
 	for _, n := range m.publicNodes(ctx) {
-		if n.Up && n.Public() {
+		if n.Up && n.Public() && !m.acmeRelayBlocked(n.ID) {
 			byID[n.ID] = n
 		}
 	}
@@ -92,4 +93,12 @@ func relayAddrs(self, next publicNode) []string {
 		return nil // 사설 주소 등: 넘길 수 없다
 	}
 	return out
+}
+
+// acmeRelayBlocked는 이 노드의 agent가 ACMERelay 필드를 거부한 뒤인지다(noDomainCheckRetry 안).
+func (m *Manager) acmeRelayBlocked(nodeID string) bool {
+	pc := &m.proxyCompat
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return recent(pc.noRelay, nodeID)
 }

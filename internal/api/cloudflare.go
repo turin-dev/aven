@@ -19,6 +19,7 @@ type cloudflareView struct {
 	TokenHint string                  `json:"token_hint"` // 토큰 끝 4자
 	Mode      string                  `json:"mode"`
 	Proxied   bool                    `json:"proxied"`
+	Wildcards bool                    `json:"wildcards"`
 	Zones     []string                `json:"zones"`
 	Status    deploy.CloudflareStatus `json:"status"`
 }
@@ -35,7 +36,7 @@ func (s *Server) cloudflareView(ctx context.Context) (cloudflareView, error) {
 	if err != nil {
 		return cloudflareView{}, err
 	}
-	v := cloudflareView{Enabled: cfg.Enabled, HasToken: cfg.Token != "", TokenHint: tokenHint(cfg.Token), Mode: cfg.Mode, Proxied: cfg.Proxied, Zones: cfg.Zones}
+	v := cloudflareView{Enabled: cfg.Enabled, HasToken: cfg.Token != "", TokenHint: tokenHint(cfg.Token), Mode: cfg.Mode, Proxied: cfg.Proxied, Wildcards: cfg.Wildcards, Zones: cfg.Zones}
 	if s.Deploy != nil {
 		v.Status = s.Deploy.CloudflareStatus()
 	}
@@ -74,11 +75,12 @@ func cleanZones(in []string) ([]string, bool) {
 
 func (s *Server) putCloudflare(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled *bool     `json:"enabled"`
-		Token   *string   `json:"token"` // 없으면 저장된 토큰을 유지, ""이면 지운다
-		Mode    *string   `json:"mode"`
-		Proxied *bool     `json:"proxied"`
-		Zones   *[]string `json:"zones"`
+		Enabled   *bool     `json:"enabled"`
+		Token     *string   `json:"token"` // 없으면 저장된 토큰을 유지, ""이면 지운다
+		Mode      *string   `json:"mode"`
+		Proxied   *bool     `json:"proxied"`
+		Wildcards *bool     `json:"wildcards"`
+		Zones     *[]string `json:"zones"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -119,6 +121,10 @@ func (s *Server) putCloudflare(w http.ResponseWriter, r *http.Request) {
 		cfg.Proxied = *body.Proxied
 		changes = append(changes, "proxied="+yesNo(cfg.Proxied))
 	}
+	if body.Wildcards != nil {
+		cfg.Wildcards = *body.Wildcards
+		changes = append(changes, "wildcards="+yesNo(cfg.Wildcards))
+	}
 	if body.Zones != nil {
 		z, ok := cleanZones(*body.Zones)
 		if !ok {
@@ -134,6 +140,10 @@ func (s *Server) putCloudflare(w http.ResponseWriter, r *http.Request) {
 	}
 	if cfg.Enabled && cfg.Token == "" {
 		writeErr(w, 400, "save an API token before turning the integration on")
+		return
+	}
+	if cfg.Enabled && len(cfg.Zones) == 0 {
+		writeErr(w, 400, "choose at least one zone to manage")
 		return
 	}
 	if err := s.Store.SetCloudflareSettings(ctx, cfg); err != nil {

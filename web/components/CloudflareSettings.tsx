@@ -102,6 +102,7 @@ function Connection({ s }: { s: Settings }) {
         {test && <TestResult r={test} />}
         <ErrorBox error={error} />
         {!s.has_token && <p className="text-xs text-gray-500">{t("토큰을 저장한 뒤 연동을 켤 수 있습니다.")}</p>}
+        {s.has_token && s.zones.length === 0 && <p className="text-xs text-warn">{t("연동을 켜려면 관리할 존을 하나 이상 저장하세요.")}</p>}
       </div>
     </Card>
   );
@@ -121,7 +122,7 @@ function Options({ s }: { s: Settings }) {
     <Card title={t("동작")}>
       <div className="space-y-5">
         <Field label={t("방식")} hint={
-          s.mode === "auto" ? t("여러 노드 호스트는 Load Balancing, 쓸 수 없으면 DNS 레코드. 노드 하나뿐인 호스트와 와일드카드는 언제나 DNS 레코드입니다.")
+          s.mode === "auto" ? t("여러 노드 호스트는 Load Balancing, 쓸 수 없으면 DNS 레코드입니다. 노드 하나뿐인 호스트는 DNS 레코드이고, 와일드카드는 아래에서 켠 경우에만 다룹니다.")
             : s.mode === "load_balancer" ? t("여러 노드 호스트는 Load Balancing만 씁니다. 쓸 수 없으면 그 호스트를 건너뛰고 오류로 보입니다.")
             : t("모든 호스트를 서비스하는 노드의 A/AAAA 레코드로 만듭니다(round-robin, 무료).")}>
           <Segmented<CloudflareMode> label={t("방식")} value={s.mode}
@@ -135,7 +136,14 @@ function Options({ s }: { s: Settings }) {
           </div>
           <Toggle label={t("Cloudflare 프록시")} checked={s.proxied} disabled={busy !== null} onChange={(v) => run("proxied", () => api.setCloudflare({ proxied: v }))} />
         </div>
-        <Field label={t("관리할 존")} hint={t("한 줄에 하나씩 적습니다. 비우면 토큰으로 볼 수 있는 모든 존입니다. 존 밖의 도메인은 건드리지 않습니다.")}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-sm font-medium">{t("와일드카드 도메인")}</div>
+            <p className="mt-1 text-xs text-gray-600">{t("꺼 두면 *.example.com 같은 이름은 만들지 않습니다. 켜도 소유가 확인된 와일드카드만 동기화합니다.")}</p>
+          </div>
+          <Toggle label={t("와일드카드 도메인")} checked={s.wildcards} disabled={busy !== null} onChange={(v) => run("wildcards", () => api.setCloudflare({ wildcards: v }))} />
+        </div>
+        <Field label={t("관리할 존")} hint={t("한 줄에 하나씩 적습니다. 연동을 켜려면 존이 하나 이상 있어야 합니다. 존 밖의 도메인은 건드리지 않습니다.")}>
           <Textarea mono rows={3} value={zones} onChange={(e) => setZones(e.target.value)} placeholder="example.com" />
         </Field>
         {dirty && <Button size="sm" variant="primary" loading={busy === "zones"} onClick={() => run("zones", () => api.setCloudflare({ zones: list }), t("존 목록을 저장했습니다"))}>{t("존 목록 저장")}</Button>}
@@ -176,6 +184,7 @@ function SyncStatus({ s }: { s: Settings }) {
       action={<Button size="sm" loading={busy === "sync" || st.syncing} onClick={() => run("sync", api.syncCloudflare, t("동기화했습니다"))}><RefreshCw className="size-3.5" />{t("지금 동기화")}</Button>}>
       <div className="space-y-4">
         <ErrorBox error={error ?? st.error} />
+        {st.warning && <p className="text-xs text-warn">{st.warning}</p>}
         {st.load_balancing === "unavailable" && s.mode !== "dns" && (
           <p className="text-xs text-warn">{t("Load Balancing을 쓸 수 없어 여러 노드 호스트도 DNS 레코드로 만들었습니다: {error}", { error: st.load_balancing_error ?? "" })}</p>
         )}

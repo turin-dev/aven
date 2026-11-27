@@ -1335,6 +1335,8 @@ export type CloudflareStatus = {
   load_balancing: "" | "available" | "unavailable";
   load_balancing_error?: string;
   changes: number;
+  /** Set when a sync refused to delete managed items because too many would have been removed. */
+  warning?: string;
   zones: CloudflareZone[];
   hosts: CloudflareHost[];
   pools: CloudflarePool[];
@@ -1345,6 +1347,8 @@ export type CloudflareSettings = {
   token_hint: string;
   mode: CloudflareMode;
   proxied: boolean;
+  /** When true, verified wildcard hosts are synced. Off by default. */
+  wildcards: boolean;
   zones: string[];
   status: CloudflareStatus;
 };
@@ -1839,7 +1843,7 @@ export const api = {
   transferOwnership: (input: { user_id: ID; stay_owner: boolean }) => request<{ owner: ID; still_owner: boolean }>("POST", "/owner/transfer", input),
   lockdown: (message: string) => request<{ sessions_revoked: number; tokens_revoked: number }>("POST", "/owner/lockdown", { message }),
   cloudflare: () => request<CloudflareSettings>("GET", "/owner/cloudflare"),
-  setCloudflare: (input: { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; zones?: string[] }) =>
+  setCloudflare: (input: { enabled?: boolean; token?: string; mode?: CloudflareMode; proxied?: boolean; wildcards?: boolean; zones?: string[] }) =>
     request<CloudflareSettings>("PUT", "/owner/cloudflare", input),
   testCloudflare: (token?: string) => request<CloudflareTest>("POST", "/owner/cloudflare/test", token ? { token } : {}),
   syncCloudflare: () => request<CloudflareSettings>("POST", "/owner/cloudflare/sync"),

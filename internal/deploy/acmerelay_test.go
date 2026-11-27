@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/turin-dev/aven/internal/agentprotocol"
 	"github.com/turin-dev/aven/internal/proxy"
@@ -42,6 +43,42 @@ func TestDecorateACMERelay(t *testing.T) {
 	}
 	if !proxy.ValidACMERelay(r) {
 		t.Fatal("invalid relay produced")
+	}
+}
+
+func TestDecorateACMERelaySkipsNoRelayNode(t *testing.T) {
+	ctx := context.Background()
+	f := newScaleFixture(t)
+	f.m.Cfg.PublicIPv4 = "203.0.113.1"
+	v4a := "198.51.100.7"
+	if err := f.st.SetNodeInfo(ctx, f.rid, store.NodeAddress{IPv4: &v4a}, store.NodeInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.CreateJoinToken(ctx, "h-r2", "edge", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	n2, err := f.st.ConsumeJoinToken(ctx, "h-r2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v4b := "198.51.100.8"
+	if err := f.st.SetNodeInfo(ctx, n2.ID, store.NodeAddress{IPv4: &v4b}, store.NodeInfo{}); err != nil {
+		t.Fatal(err)
+	}
+	f.m.Agents.(*nodesHub).nodes[n2.ID] = newFakeNode("edge", f.log)
+	f.m.proxyCompat.noRelay = map[string]time.Time{f.rid: time.Now()}
+	routes := map[string][]proxy.Route{
+		store.LocalNodeID: {{Hosts: []string{"web.example.com"}}},
+		f.rid:             {{Hosts: []string{"web.example.com"}}},
+		n2.ID:             {{Hosts: []string{"web.example.com"}}},
+	}
+	f.m.decorateACMERelay(ctx, routes)
+	if routes[f.rid][0].ACMERelay != nil {
+		t.Fatalf("old agent stayed in the ring: %+v", routes[f.rid][0].ACMERelay)
+	}
+	local, other := routes[store.LocalNodeID][0].ACMERelay, routes[n2.ID][0].ACMERelay
+	if local == nil || local.Next != n2.ID || other == nil || other.Next != store.LocalNodeID {
+		t.Fatalf("ring local=%+v other=%+v", local, other)
 	}
 }
 

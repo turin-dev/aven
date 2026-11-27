@@ -318,10 +318,10 @@ agent가 띄운 그 노드의 `aven-proxy`는 별도 컨테이너입니다. `doc
 도메인이 Cloudflare에 있다면 Aven이 각 서비스가 도는 노드로 DNS를 맞춰 둡니다. *어드민 → Owner · Cloudflare*에서 API 토큰을 넣고 **연결 확인**을 누른 뒤 저장하고 연동을 켭니다.
 
 - **토큰**: Cloudflare *My Profile → API Tokens*에서 *Zone · DNS · Edit* 권한으로 만듭니다. Load Balancing을 쓰려면 *Zone · Load Balancers · Edit*, *Account · Load Balancing: Monitors and Pools · Edit*도 넣습니다. 토큰은 서버 마스터 키로 암호화해 저장하고 다시 보여 주지 않습니다.
-- **관리 대상**: 연동한 존(토큰으로 보이는 모든 존 또는 입력한 목록) 안의 서비스 도메인. 노드 하나에서 도는 호스트는 그 노드의 A/AAAA 레코드를 만듭니다. replica가 여러 노드에 있는 호스트는 노드마다 pool과 TCP 443 health monitor를 둔 Cloudflare 로드밸런서를 만듭니다. 모든 pool에 위치가 있으면 proximity steering(가까운 노드), 아니면 dynamic latency입니다. Load Balancing 구독이 없으면(방식 *자동*) 이런 호스트도 서비스하는 노드 전부의 A/AAAA 레코드로 만듭니다(round-robin). 와일드카드는 언제나 레코드입니다. 연결이 끊긴 노드는 1분 안팎으로 레코드에서 빠지고, 로드밸런서는 monitor가 pool을 뺍니다.
+- **관리 대상**: 입력한 존 안의 서비스 도메인. 존이 하나 이상 있어야 연동을 켜고 동기화할 수 있으며, 빈 목록은 동기화하지 않습니다. 생성 도메인(서비스 기본 도메인 아래), 서버 자신의 공개 호스트, 또는 TXT 레코드·Cloudflare API 토큰·예전 legacy 확인으로 소유가 확인된 커스텀 도메인만 만듭니다. DNS나 HTTP 확인은 쓰지 않습니다. Aven이 만드는 A/AAAA 레코드만으로도 그 확인이 통과하기 때문입니다. 노드 하나에서 도는 호스트는 그 노드의 A/AAAA 레코드를 만듭니다. replica가 여러 노드에 있는 호스트는 노드마다 pool과 TCP 443 health monitor를 둔 Cloudflare 로드밸런서를 만듭니다. 모든 pool에 위치가 있으면 proximity steering(가까운 노드), 아니면 dynamic latency입니다. Load Balancing 구독이 없으면(방식 *자동*) 이런 호스트도 서비스하는 노드 전부의 A/AAAA 레코드로 만듭니다(round-robin). 와일드카드는 설정을 켜야 다루며, 그때도 위의 소유 조건을 만족하는 이름만 만듭니다. 연결이 끊긴 노드는 1분 안팎으로 레코드에서 빠지고, 로드밸런서는 monitor가 pool을 뺍니다.
 - **노드 위치**: 노드 라벨 `geo=<위도>,<경도>`(예: `geo=37.57,126.98`)를 *어드민 → 서버 노드 → 라벨*에서 정합니다. pool 좌표로 쓰입니다.
-- **프록시**: 기본으로 켭니다(주황 구름). 노드는 지금처럼 Let's Encrypt 인증서를 따로 받습니다. 끄면 DNS만 쓰고 TTL은 레코드 60초, 로드밸런서 30초입니다.
-- **안전장치**: Aven은 자기가 만든 레코드, 로드밸런서, pool, monitor(comment나 description이 `aven:managed <id>`)만 바꿉니다. 이름에 Aven이 만들지 않은 A, AAAA, CNAME 레코드나 로드밸런서가 있으면 그 호스트는 건너뛰고 충돌로 보여 줍니다. Cloudflare 터널 노드와 공인 주소가 없는 노드는 넣지 않습니다.
+- **프록시**: 기본으로 꺼집니다(주황 구름). 프록시할 존에서만 켜세요. 노드는 지금처럼 Let's Encrypt 인증서를 따로 받습니다. 끄면 DNS만 쓰고 TTL은 레코드 60초, 로드밸런서 30초입니다.
+- **안전장치**: Aven은 자기가 만든 레코드, 로드밸런서, pool, monitor(comment나 description이 `aven:managed <id>`)만 바꿉니다. 이름에 Aven이 만들지 않은 A, AAAA, CNAME 레코드나 로드밸런서가 있으면 그 호스트는 건너뛰고 충돌로 보여 줍니다. Cloudflare 터널 노드와 공인 주소가 없는 노드는 넣지 않습니다. 프록시 라우트를 한 번이라도 만들기 전에는 동기화하지 않으므로, 시작에 실패해도 레코드를 지우지 않습니다. 한 동기화가 관리 항목을 10개보다 많이, 또는 5개 이상이면서 절반보다 많이 지워야 하면 그 삭제를 건너뛰고 경고를 로그와 동기화 상태에 남깁니다. *Aven이 만든 Cloudflare 항목 지우기*는 그대로 전부 지웁니다.
 - **끄면** 동기화만 멈추고 Cloudflare의 내용은 그대로 둡니다. *Aven이 만든 Cloudflare 항목 지우기*로 Aven이 만든 것을 지웁니다.
 
 여러 노드가 서비스하는 호스트는 노드끼리 80번 포트가 열려 있어야 합니다. 각 노드가 자기가 시작하지 않은 Let's Encrypt HTTP-01 확인 요청을 그 호스트를 서비스하는 다음 노드로 넘겨서, 노드마다 인증서를 받기 때문입니다.
