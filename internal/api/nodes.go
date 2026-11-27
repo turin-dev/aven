@@ -66,6 +66,11 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		s.storeErr(w, err)
 		return
 	}
+	hypervHosts, err := s.Store.ListHyperVHosts(r.Context())
+	if err != nil {
+		s.storeErr(w, err)
+		return
+	}
 	out := make([]nodeView, 0, len(nodes))
 	for i, n := range nodes {
 		if n.IsLocal {
@@ -73,7 +78,11 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 		} else {
 			n.Status = s.nodeStatus(n)
 		}
-		out = append(out, nodeView{Node: nodes[i], Mesh: s.Deploy.MeshStatus(r.Context(), nodes[i]), IPv6Status: s.Deploy.IPv6Status(r.Context(), nodes[i].ID)})
+		view := nodeView{Node: nodes[i], Mesh: s.Deploy.MeshStatus(r.Context(), nodes[i]), IPv6Status: s.Deploy.IPv6Status(r.Context(), nodes[i].ID)}
+		if host, ok := hypervHosts[nodes[i].ID]; ok {
+			view.HyperV = s.hyperVNodeJSON(r, host)
+		}
+		out = append(out, view)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -81,7 +90,8 @@ func (s *Server) listNodes(w http.ResponseWriter, r *http.Request) {
 // nodeView는 GET /api/nodes의 항목이다: 노드와 노드 간 사설 네트워킹(mesh) 상태.
 type nodeView struct {
 	*store.Node
-	Mesh mesh.Status `json:"mesh"`
+	Mesh   mesh.Status     `json:"mesh"`
+	HyperV *hyperVNodeView `json:"hyperv,omitempty"`
 	// IPv6Status는 도메인별 IPv6 반영 상태다(풀이 없으면 null).
 	IPv6Status *deploy.IPv6NodeStatus `json:"ipv6_status"`
 }

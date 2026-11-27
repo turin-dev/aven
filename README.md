@@ -32,6 +32,8 @@ The Linux installer is [`install-server.sh`](install-server.sh). One command sta
 
 A native Windows service on Windows 10/11 is a different path: [Windows host guide](docs/windows-native.md). Windows Server editions are not supported by Docker Desktop. The steps below are the Linux path.
 
+To use Windows Server as a region host, run an Ubuntu VM under Hyper-V and follow the [Windows Server region guide](docs/windows-hyperv-region.md).
+
 ### What you need
 
 The installer checks the first list. It does not measure memory, disk, or a Docker version.

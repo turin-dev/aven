@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Server, Tag, Trash2, Undo2 } from "lucide-react";
+import { ArrowRightLeft, Box, CheckCircle2, ChevronDown, Cpu, Globe, HardDrive, Loader2, MemoryStick, MoreVertical, Network, Pencil, Plus, Power, Server, Tag, Trash2, Undo2, Unplug } from "lucide-react";
 import { api, ApiError, type JoinToken, type AvenNode, type NodeIngressMode, type NodeIPv6Status } from "@/lib/api";
 import { qk, useMe, useNodeMetrics, useNodes } from "@/lib/queries";
 import { canvasHref } from "@/lib/nav";
@@ -29,6 +29,9 @@ export function nodeError(e: unknown): unknown {
     [/no other schedulable online node/i, t("서비스를 옮길 다른 노드가 없습니다. 배포를 받는 온라인 노드가 하나 이상 더 있어야 합니다.")],
     [/target node .* is not available/i, t("고른 노드로 옮길 수 없습니다. 연결되어 있고 새 배포를 받는 노드여야 합니다.")],
     [/target must be a different node/i, t("비우는 노드와 다른 노드를 고르세요.")],
+    [/node has no paired Hyper-V host/i, t("이 노드에 Hyper-V 호스트가 연결되어 있지 않습니다.")],
+    [/Hyper-V host is offline/i, t("Hyper-V 호스트가 Aven 서버에 연결되지 않았습니다.")],
+    [/Hyper-V command is already pending/i, t("이 VM의 전원 명령을 처리 중입니다.")],
     [/local node cannot be (drained|deleted)/i, t("이 서버(로컬 노드)는 비우거나 제거할 수 없습니다.")],
     [/node not found/i, t("노드를 찾을 수 없습니다. 이미 제거되었을 수 있습니다.")],
   ];
@@ -247,6 +250,76 @@ function StepTitle({ n, children }: { n: number; children: ReactNode }) {
       <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-gray-100 text-xs text-gray-600">{n}</span>
       {children}
     </div>
+  );
+}
+
+function PairHyperVHostDialog({ node, onClose }: { node: AvenNode | null; onClose: () => void }) {
+  const [vmName, setVmName] = useState("AvenRegion");
+  const [token, setToken] = useState<JoinToken | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const left = useCountdown(token?.expires_at ?? null);
+  const close = () => {
+    if (busy) return;
+    setVmName("AvenRegion");
+    setToken(null);
+    setError(null);
+    onClose();
+  };
+  const generate = async () => {
+    if (!node || busy) return;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(vmName.trim())) return setError(new Error(t("VM 이름은 영문자, 숫자, 점, 하이픈, 밑줄만 쓸 수 있습니다.")));
+    setBusy(true);
+    setError(null);
+    try {
+      setToken(await api.createHyperVNodePairToken(node.id, vmName.trim()));
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const expired = left !== null && left.s === 0;
+  return (
+    <Dialog
+      open={!!node}
+      onClose={close}
+      title={t("Hyper-V 호스트 연결")}
+      wide
+      footer={
+        token ? (
+          <Button variant="ghost" onClick={close}>{t("닫기")}</Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={close} disabled={busy}>{t("취소")}</Button>
+            <Button variant="primary" loading={busy} onClick={generate}>{t("연결 명령 만들기")}</Button>
+          </>
+        )
+      }
+    >
+      <div className="space-y-4">
+        {!token ? (
+          <>
+            <p>{t("Windows Server에서 이 노드의 Ubuntu VM 전원을 제어할 Hyper-V 호스트를 연결합니다. 토큰은 한 번만 쓸 수 있고 15분 후 만료됩니다.")}</p>
+            <Field label={t("Hyper-V VM 이름")}>
+              <Input mono autoFocus value={vmName} onChange={(e) => setVmName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void generate()} />
+            </Field>
+            {error ? <ErrorBox error={error} /> : null}
+          </>
+        ) : (
+          <>
+            <p>{t("Windows Server의 관리자 PowerShell에서 이 명령을 실행하세요. 토큰은 한 번만 쓸 수 있으므로 다른 사람과 공유하지 마세요.")}</p>
+            <div className="relative rounded-md border border-gray-200 bg-background">
+              <pre className="max-h-[180px] overflow-auto whitespace-pre-wrap break-all px-3.5 py-3 pr-12 font-mono text-xs leading-relaxed text-foreground">{token.command}</pre>
+              <CopyButton value={token.command} label={t("연결 명령 복사")} className="absolute right-1.5 top-1.5" />
+            </div>
+            <p className={cx("text-xs", expired ? "text-danger" : "text-gray-500")}>
+              {expired ? t("토큰이 만료되었습니다. 창을 닫고 새 연결 명령을 만드세요.") : t("{left} 후 만료", { left: left?.text ?? "15:00" })}
+            </p>
+          </>
+        )}
+      </div>
+    </Dialog>
   );
 }
 
@@ -765,10 +838,20 @@ function NodeRow({
   const usage = n.status === "offline" ? null : nodeUsage(pts, n.memory_bytes);
   const st = NODE_STATUS[n.status];
   const [busy, setBusy] = useState(false);
+  const [vmBusy, setVmBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [open, setOpen] = useState(false);
+  const [pairHost, setPairHost] = useState(false);
+  const [powerAction, setPowerAction] = useState<"start" | "stop" | null>(null);
+  const [disconnectHost, setDisconnectHost] = useState(false);
   const labels = Object.entries(n.labels);
   const draining = n.status === "draining";
+  const vmCommandPending = n.hyperv?.last_command?.status === "queued" || n.hyperv?.last_command?.status === "running";
+  useEffect(() => {
+    if (!vmCommandPending) return;
+    const timer = setInterval(() => void qc.invalidateQueries({ queryKey: qk.nodes }), 2500);
+    return () => clearInterval(timer);
+  }, [qc, vmCommandPending]);
   const setSchedulable = async (v: boolean) => {
     setBusy(true);
     setError(null);
@@ -779,6 +862,34 @@ function NodeRow({
       setError(nodeError(e));
     } finally {
       setBusy(false);
+    }
+  };
+  const requestVmPower = async () => {
+    if (!powerAction || vmBusy) return;
+    setVmBusy(true);
+    setError(null);
+    try {
+      await api.requestHyperVNodePower(n.id, powerAction);
+      setPowerAction(null);
+      await qc.invalidateQueries({ queryKey: qk.nodes });
+    } catch (e) {
+      setError(nodeError(e));
+    } finally {
+      setVmBusy(false);
+    }
+  };
+  const disconnectHyperV = async () => {
+    if (vmBusy) return;
+    setVmBusy(true);
+    setError(null);
+    try {
+      await api.disconnectHyperVHost(n.id);
+      setDisconnectHost(false);
+      await qc.invalidateQueries({ queryKey: qk.nodes });
+    } catch (e) {
+      setError(nodeError(e));
+    } finally {
+      setVmBusy(false);
     }
   };
   const diskFree = usage?.diskFree ?? n.disk_free_bytes;
@@ -799,6 +910,7 @@ function NodeRow({
               <span aria-hidden className={cx("size-1.5 rounded-full", st.dot)} />
               {st.label}
             </span>
+            {n.hyperv && <span className="rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-600">Hyper-V · {!n.hyperv.host_online ? t("호스트 연결 끊김") : n.hyperv.power_state === "running" ? t("실행 중") : n.hyperv.power_state === "off" ? t("꺼짐") : n.hyperv.power_state === "paused" ? t("일시 중지") : t("상태 확인 중")}</span>}
             {!n.schedulable && !draining && <span className="rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">{t("새 배포 안 받음")}</span>}
             {n.ingress_mode === "cloudflare_tunnel" && <span className="rounded-md bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500">{t("Cloudflare 터널")}</span>}
           </div>
@@ -834,6 +946,22 @@ function NodeRow({
                 {!n.is_local && (
                   <>
                     <div className="my-2 h-px w-full bg-gray-100" />
+                    <MenuItem icon={<Power className="size-3.5" />} disabled={!admin} reason={NO_PERM} onSelect={() => (close(), setPairHost(true))}>
+                      {n.hyperv ? t("Hyper-V 호스트 다시 연결") : t("Hyper-V 호스트 연결")}
+                    </MenuItem>
+                    {n.hyperv && (
+                      <>
+                        <MenuItem icon={<Power className="size-3.5" />} disabled={!admin || vmBusy || vmCommandPending || !n.hyperv.host_online} reason={!admin ? NO_PERM : !n.hyperv.host_online ? t("Hyper-V 호스트가 연결되지 않았습니다") : vmCommandPending ? t("Hyper-V 명령 처리 중") : undefined} onSelect={() => (close(), setPowerAction("start"))}>
+                          {t("VM 시작")}
+                        </MenuItem>
+                        <MenuItem danger icon={<Power className="size-3.5" />} disabled={!admin || vmBusy || vmCommandPending || !n.hyperv.host_online} reason={!admin ? NO_PERM : !n.hyperv.host_online ? t("Hyper-V 호스트가 연결되지 않았습니다") : vmCommandPending ? t("Hyper-V 명령 처리 중") : undefined} onSelect={() => (close(), setPowerAction("stop"))}>
+                          {t("VM 종료")}
+                        </MenuItem>
+                        <MenuItem danger icon={<Unplug className="size-3.5" />} disabled={!admin || vmBusy} reason={!admin ? NO_PERM : undefined} onSelect={() => (close(), setDisconnectHost(true))}>
+                          {t("Hyper-V 호스트 연결 끊기")}
+                        </MenuItem>
+                      </>
+                    )}
                     {draining ? (
                       <MenuItem icon={<Undo2 className="size-3.5" />} disabled={!admin || busy} reason={NO_PERM} onSelect={() => (close(), void setSchedulable(true))}>
                         {t("비우기 취소")}
@@ -936,9 +1064,38 @@ function NodeRow({
           </span>
         </div>
         <MeshLine n={n} />
+        {n.hyperv?.last_command?.status === "failed" && n.hyperv.last_command.error ? <p className="text-xs text-danger">{t("Hyper-V 명령 실패: {error}", { error: n.hyperv.last_command.error })}</p> : null}
         {error ? <ErrorBox error={error} /> : null}
         {m.error ? <p className="text-xs text-warn">{t("노드 지표를 가져오지 못했습니다: {error}", { error: errorMessage(m.error) })}</p> : null}
       </div>
+      <PairHyperVHostDialog node={pairHost ? n : null} onClose={() => setPairHost(false)} />
+      <Dialog
+        open={powerAction !== null}
+        onClose={() => !vmBusy && setPowerAction(null)}
+        title={powerAction === "start" ? t("Hyper-V VM 시작") : t("Hyper-V VM 종료")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setPowerAction(null)} disabled={vmBusy}>{t("취소")}</Button>
+            <Button variant={powerAction === "stop" ? "danger" : "primary"} loading={vmBusy} onClick={() => void requestVmPower()}>{powerAction === "start" ? t("VM 시작") : t("VM 종료")}</Button>
+          </>
+        }
+      >
+        <p>{powerAction === "start" ? t("Windows Server의 Hyper-V 호스트에 VM 시작 명령을 보냅니다.") : t("VM을 종료하면 이 리전에 배포된 앱이 중단됩니다. Ubuntu에 정상 종료를 요청하며 강제 전원 차단은 하지 않습니다.")}</p>
+        {n.hyperv?.last_command?.status === "failed" && n.hyperv.last_command.error ? <p className="mt-3 text-sm text-danger">{n.hyperv.last_command.error}</p> : null}
+      </Dialog>
+      <Dialog
+        open={disconnectHost}
+        onClose={() => !vmBusy && setDisconnectHost(false)}
+        title={t("Hyper-V 호스트 연결 끊기")}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDisconnectHost(false)} disabled={vmBusy}>{t("취소")}</Button>
+            <Button variant="danger" loading={vmBusy} onClick={() => void disconnectHyperV()}>{t("연결 끊기")}</Button>
+          </>
+        }
+      >
+        <p>{t("대시보드에서 이 VM의 전원을 더 이상 제어하지 않습니다. Ubuntu VM은 지워지지 않습니다. Windows에서는 관리자 PowerShell로 aven-hyperv-host.ps1 -Uninstall -NodeId 를 실행해 예약 작업과 자격 증명을 지우세요.")}</p>
+      </Dialog>
     </li>
   );
 }

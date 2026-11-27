@@ -2,6 +2,8 @@
 
 [한국어](windows-native.ko.md) · [Linux self-hosting](self-hosting.md)
 
+For a Hyper-V Ubuntu region node on Windows Server, see the [Windows Server Hyper-V region guide](windows-hyperv-region.md).
+
 Aven can run as a native Windows executable and Windows service. The supported setup is x64 Windows 10 22H2 (build 19045) or Windows 11 23H2 (build 22631) and later, with Docker Desktop switched to **Linux containers**. Aven itself runs on Windows; Docker Desktop runs the Linux container engine in its configured VM backend.
 
 > Windows Server editions are not supported by this installer. Docker Desktop is not supported on Windows Server, and Aven needs a Linux Docker engine for its proxy and app containers.

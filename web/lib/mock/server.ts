@@ -163,6 +163,7 @@ const NODES: AvenNode[] = [
     labels: { region: "region-a", disk: "nvme" },
     last_seen_at: new Date().toISOString(),
     created_at: new Date(Date.now() - 9 * 864e5).toISOString(),
+    hyperv: { vm_name: "AvenRegion", host_name: "win-region-01", host_online: true, power_state: "running", last_seen_at: new Date().toISOString() },
   },
   {
     id: "node_edge",
@@ -3432,6 +3433,42 @@ route("PATCH", "/nodes/{nid}", ([nid], r) => {
   Object.assign(n, b);
   if (b.schedulable && n.status === "draining") n.status = "online";
   return n;
+});
+const hyperVScriptHash = "AB".repeat(32);
+route("POST", "/nodes/{nid}/hyperv/pair-token", ([nid], r) => {
+  requireInstanceAdmin();
+  const n = NODES.find((x) => x.id === nid);
+  if (!n || n.is_local) throw new HttpError(404, "node not found");
+  const vmName = ((r.body ?? {}) as { vm_name?: string }).vm_name || "AvenRegion";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(vmName)) throw new HttpError(400, "invalid vm name");
+  const token = secret(32);
+  n.hyperv = { vm_name: vmName, host_name: "win-region-01", host_online: true, power_state: "running", last_seen_at: iso(now()) };
+  audit("hyperv.pair_token", nid, "Hyper-V 호스트 연결 토큰을 발급했습니다");
+  const command = `$p='.\\aven-hyperv-host.ps1'; Invoke-WebRequest 'https://aven.example.com/downloads/aven-hyperv-host.ps1' -OutFile $p -UseBasicParsing -ErrorAction Stop; if ((Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash -ne '${hyperVScriptHash}') { Remove-Item -Force -LiteralPath $p; throw 'aven-hyperv-host.ps1 failed its SHA-256 check' }; powershell -ExecutionPolicy Bypass -File $p -Server 'https://aven.example.com' -NodeId '${nid}' -Token '${token}' -VmName '${vmName}'`;
+  return [201, { token, expires_at: iso(now() + 15 * 60_000), command }];
+});
+route("POST", "/nodes/{nid}/hyperv/power", ([nid], r) => {
+  requireInstanceAdmin();
+  const n = NODES.find((x) => x.id === nid);
+  if (!n?.hyperv) throw new HttpError(409, "node has no paired Hyper-V host");
+  const action = (r.body as { action?: string } | undefined)?.action;
+  if (action !== "start" && action !== "stop") throw new HttpError(400, "action must be start or stop");
+  const state = action === "start" ? "running" : "off";
+  const command: NonNullable<NonNullable<AvenNode["hyperv"]>["last_command"]> = { id: rid("hvc"), node_id: nid, action, status: "done", created_at: iso(now()), updated_at: iso(now()) };
+  n.hyperv.power_state = state;
+  n.hyperv.last_seen_at = iso(now());
+  n.hyperv.last_command = command;
+  n.status = action === "start" ? "online" : "offline";
+  audit("hyperv.power", nid, `Hyper-V VM ${action} 명령을 큐에 넣었습니다`);
+  return [202, command];
+});
+route("DELETE", "/nodes/{nid}/hyperv", ([nid]) => {
+  requireInstanceAdmin();
+  const n = NODES.find((x) => x.id === nid);
+  if (!n?.hyperv) throw new HttpError(404, "node has no paired Hyper-V host");
+  delete n.hyperv;
+  audit("hyperv.disconnected", nid, "Hyper-V 호스트 연결을 끊었습니다");
+  return 204;
 });
 route("DELETE", "/nodes/{nid}", ([nid], r) => {
   const n = NODES.find((x) => x.id === nid);

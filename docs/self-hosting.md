@@ -267,6 +267,8 @@ Read `https://aven.example.com/install-agent.sh` in a browser or with `curl` bef
 
 The server installer can do the same. Run `install-server.sh` on the new server and answer **Region server** to "What is this server?". It asks for the main server URL, the join token, and an optional private address, installs Docker if you want, and then runs the main server's `install-agent.sh`. Unattended:
 
+For Windows Server, create the Linux region VM with the [Hyper-V region guide](windows-hyperv-region.md); the Aven node page can control the paired VM's power. The same guide explains how an instance admin disconnects the host and how to uninstall the controller on Windows.
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/turin-dev/aven/main/install-server.sh | sudo sh -s -- --yes --server https://aven.example.com --token <TOKEN>
 ```
