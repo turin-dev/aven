@@ -4768,7 +4768,7 @@ function cfStatus(): CloudflareStatus {
   if (!CF.enabled) return { enabled: false, syncing: false, last_sync: null, load_balancing: "", changes: 0, zones: [], hosts: [], pools: [] };
   const lbOK = !CF.token.startsWith("free");
   const pub = (id: string) => { const n = NODES.find((x) => x.id === id); return !!n && !!(n.address.ipv4 || n.address.ipv6); };
-  const plan: [string, string[]][] = [["web.example.com", ["node_database", "node_local"]], ["api.example.com", ["node_local"]], ["*.pr.example.com", ["node_local"]], ["docs.example.com", ["node_local"]], ["files.example.com", ["node_remote"]]].filter(([host]) => CF.wildcards || !host.startsWith("*."));
+  const plan = ([["web.example.com", ["node_database", "node_local"]], ["api.example.com", ["node_local"]], ["*.pr.example.com", ["node_local"]], ["docs.example.com", ["node_local"]], ["files.example.com", ["node_remote"]]] as [string, string[]][]).filter(([host]) => CF.wildcards || !host.startsWith("*."));
   const hosts: CloudflareHost[] = plan.map(([host, ids]) => {
     const nodes = ids.filter(pub);
     if (!nodes.length) return { host, zone: "example.com", mode: "skipped", nodes, reason: "no_public_node" };
